@@ -62,6 +62,14 @@ namespace game {
 				T* const end() {
 					return m_Data ? &m_Data[m_Size] : nullptr;
 				}
+
+				T* operator[](size_t index) {
+					if (index >= m_Size) {
+						printf("index out of bounds (game::Renderer::Stack::Array::operator[])!");
+						return nullptr;
+					}
+					return &m_Data[index];
+				}
 			};
 
 			uint8_t* m_Data;
@@ -95,7 +103,7 @@ namespace game {
 				T* ret = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T) * count) > m_MaxSize) {
 					printf("stack out of memory (function game::Renderer::Stack::Allocate)!");
-					false;
+					return false;
 				}
 				T* iter = ret;
 				T* end = &ret[count];
@@ -124,6 +132,7 @@ namespace game {
 		enum class CriticalErrorOrigin {
 			Vulkan = 1,
 			StackOutOfMemory = 2,
+			NullDereference = 3,
 		};
 
 		const size_t c_SingleThreadStackSize = 65536;
@@ -175,10 +184,18 @@ namespace game {
 			return true;
 		}
 
+		template<typename T>
+		T* PtrAssert(T* ptr, const char* err) {
+			if (!ptr) {
+				m_CriticalErrorCallback(this, CriticalErrorOrigin::NullDereference, err, VK_SUCCESS);
+			}
+			return ptr;
+		}
+
 		Renderer(const char* appName, uint32_t appVersion, GLFWwindow* window, void(*criticalErrorCallback)(Renderer*, CriticalErrorOrigin, const char*, VkResult)) 
-		: m_SingleThreadStack((uint8_t*)malloc(c_SingleThreadStackSize), c_SingleThreadStackSize), 
-			m_InFlightRenderStack(m_InFlightRenderStackData, cexpr_in_flight_render_stack_size), m_Window(window),
-			m_CriticalErrorCallback(criticalErrorCallback) {
+			: m_SingleThreadStack((uint8_t*)malloc(c_SingleThreadStackSize), c_SingleThreadStackSize), 
+				m_InFlightRenderStack(m_InFlightRenderStackData, cexpr_in_flight_render_stack_size), m_Window(window),
+				m_CriticalErrorCallback(criticalErrorCallback) {
 
 			uint32_t instanceExtensionCount;
 			const char** instanceExtensions = glfwGetRequiredInstanceExtensions(&instanceExtensionCount);
@@ -201,7 +218,7 @@ namespace game {
 			}
 
 			if (instanceExtensionsNotFoundCount) {
-				m_CriticalErrorCallback(this, CriticalErrorOrigin::Vulkan, "couldn't find all the required vulkan instance extensions!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, CriticalErrorOrigin::Vulkan, "couldn't find all the required vulkan instance extensions (in constructor)!", VK_SUCCESS);
 			}
 
 			bool includeGpuValidationLayer = false;
@@ -217,7 +234,7 @@ namespace game {
 					}
 				}
 				if (!includeGpuValidationLayer) {
-					printf("Vulkan Khronos validation not supported (game::Renderer constructor)!");
+					printf("Vulkan Khronos validation not supported (in constructor)!");
 				}
 			}
 
@@ -243,12 +260,12 @@ namespace game {
 			};
 
 			if (!VkAssert(vkCreateInstance(&instanceCreateInfo, m_GpuAllocationCallbacks, &m_GpuInstance), 
-				"failed to create vulkan instance (function vkCreateInstance)!")) {
+					"failed to create vulkan instance (function vkCreateInstance)!")) {
 				return;
 			}
 
 			if (!VkAssert(glfwCreateWindowSurface(m_GpuInstance, m_Window, m_GpuAllocationCallbacks, &m_GpuSurface), 
-				"failed to create window surface (function glfwCreateWindowSurface)!")) {
+					"failed to create window surface (function glfwCreateWindowSurface)!")) {
 				return;
 			}
 
@@ -340,7 +357,7 @@ namespace game {
 			}
 
 			if (bestGpu != VK_NULL_HANDLE) {
-				m_CriticalErrorCallback(this, CriticalErrorOrigin::Vulkan, "failed to find suitable gpu!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, CriticalErrorOrigin::Vulkan, "failed to find suitable gpu (in constructor)!", VK_SUCCESS);
 			}
 
 			m_Gpu = bestGpu;
@@ -383,7 +400,7 @@ namespace game {
 				.pEnabledFeatures = &gpuFeatures,
 			};
 
-			if (!VkAssert(vkCreateDevice(m_Gpu, &deviceInfo, m_GpuAllocationCallbacks, &m_GpuDevice), "failed to create vulkan device (function vkCreateDevice)!")) {
+			if (!VkAssert(vkCreateDevice(m_Gpu, &deviceInfo, m_GpuAllocationCallbacks, &m_GpuDevice), "failed to create vulkan device (function vkCreateDevice in constructor)!")) {
 				return;
 			}
 
@@ -401,7 +418,7 @@ namespace game {
 			};
 
 			if (!VkAssert(vkCreateCommandPool(m_GpuDevice, &renderCommandPoolInfo, m_GpuAllocationCallbacks, &m_GpuRenderCommandPool), 
-				"failed to create render command pool (function vkCreateCommandPool)!")) {
+					"failed to create render command pool (function vkCreateCommandPool in constructor)!")) {
 				return;
 			}
 		}
@@ -421,7 +438,12 @@ namespace game {
 			Stack::Array<VkSurfaceFormatKHR> surfaceFormats = m_SingleThreadStack.Allocate<VkSurfaceFormatKHR>(surfaceFormatCount);
 			vkGetPhysicalDeviceSurfaceFormatsKHR(m_Gpu, m_GpuSurface, &surfaceFormatCount, surfaceFormats.m_Data);
 
-			m_GpuSwapchainSurfaceFormat = surfaceFormats.m_Data[0];
+			if (!surfaceFormatCount) {
+				m_CriticalErrorCallback(this, CriticalErrorOrigin::Vulkan, "vulkan surface format count was 0 (in function CreateSwapchain)!", VK_SUCCESS);
+				return;
+			}
+
+			m_GpuSwapchainSurfaceFormat = *surfaceFormats[0];
 			for (VkSurfaceFormatKHR format : surfaceFormats) {
 				if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLORSPACE_SRGB_NONLINEAR_KHR) {
 					m_GpuSwapchainSurfaceFormat = format;
@@ -451,8 +473,8 @@ namespace game {
 				int width, height;
 				glfwGetFramebufferSize(m_Window, &width, &height);
 				VkExtent2D actualExtent {
-					width,
-					height
+					(uint32_t)width,
+					(uint32_t)height
 				};
 				actualExtent.width = clamp(
 					actualExtent.width, 
@@ -494,46 +516,46 @@ namespace game {
 			};
 
 			if (!VkAssert(vkCreateSwapchainKHR(m_GpuDevice, &swapchainInfo, m_GpuAllocationCallbacks, &m_GpuSwapchain), 
-				"failed to create vulkan swapchain (function vkCreateSwapchainKHR)!")) {
+					"failed to create vulkan swapchain (function vkCreateSwapchainKHR)!")) {
 				return;
 			}
 
 			size_t oldFramesInFlight = m_GpuSwapchainImageViews.m_Size;
 
 			for (size_t i = 0; i < oldFramesInFlight; i++) {
-				vkDestroyImageView(m_GpuDevice, m_GpuSwapchainImageViews.m_Data[i], m_GpuAllocationCallbacks);
-				vkDestroySemaphore(m_GpuDevice, m_GpuRenderFinishedSemaphores.m_Data[i], m_GpuAllocationCallbacks);
-				vkDestroySemaphore(m_GpuDevice, m_GpuRenderWaitSemaphores.m_Data[i], m_GpuAllocationCallbacks);
-				vkDestroyFence(m_GpuDevice, m_GpuInFlightFences.m_Data[i], m_GpuAllocationCallbacks);
+				vkDestroyImageView(m_GpuDevice, *m_GpuSwapchainImageViews[i], m_GpuAllocationCallbacks);
+				vkDestroySemaphore(m_GpuDevice, *m_GpuRenderFinishedSemaphores[i], m_GpuAllocationCallbacks);
+				vkDestroySemaphore(m_GpuDevice, *m_GpuRenderWaitSemaphores[i], m_GpuAllocationCallbacks);
+				vkDestroyFence(m_GpuDevice, *m_GpuInFlightFences[i], m_GpuAllocationCallbacks);
 			}
 
 			m_InFlightRenderStack.Clear();
 
 			vkGetSwapchainImagesKHR(m_GpuDevice, m_GpuSwapchain, &m_FramesInFlight, nullptr);
 			if (!m_InFlightRenderStack.Allocate<VkImage>(m_FramesInFlight, &m_GpuSwapchainImages)) {
-				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
 				return;
 			}
 			vkGetSwapchainImagesKHR(m_GpuDevice, m_GpuSwapchain, &m_FramesInFlight, m_GpuSwapchainImages.m_Data);
 
 			if (!m_InFlightRenderStack.Allocate<VkImageView>(m_FramesInFlight, &m_GpuSwapchainImageViews)) {
-				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
 				return;
 			}
 			if (!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_GpuRenderFinishedSemaphores)) {
-				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
 				return;
 			}
 			if (!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_GpuRenderWaitSemaphores)) {
-				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
 				return;
 			}
 			if (!m_InFlightRenderStack.Allocate<VkFence>(m_FramesInFlight, &m_GpuInFlightFences)) {
-				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
 				return;
 			}
-			if (!m_InFlightRenderStack.Allocate<VkCommandBuffer>(m_FramesInFlight, &m_GpuRenderCommandBuffers))) {
-				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory!", VK_SUCCESS);
+			if (!m_InFlightRenderStack.Allocate<VkCommandBuffer>(m_FramesInFlight, &m_GpuRenderCommandBuffers)) {
+				m_CriticalErrorCallback(this, CriticalErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
 				return;
 			}
 
@@ -546,16 +568,28 @@ namespace game {
 			};
 
 			if(!VkAssert(vkAllocateCommandBuffers(m_GpuDevice, &renderCommandBufferAllocInfo, m_GpuRenderCommandBuffers.m_Data), 
-				"failed to allocate render command buffers (function vkAllocateCommandBuffers!)")) {
+					"failed to allocate render command buffers (function vkAllocateCommandBuffers in function CreateSwapchain!)")) {
 				return;
 			}
+
+			VkSemaphoreCreateInfo semaphoreInfo {
+				.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+			};
+
+			VkFenceCreateInfo fenceInfo {
+				.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+			};
 
 			for (size_t i = 0; i < m_FramesInFlight; i++) {
 				VkImageViewCreateInfo imageViewInfo {
 					.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
 					.pNext = nullptr,
 					.flags = 0,
-					.image = m_GpuSwapchainImages[i],
+					.image = *m_GpuSwapchainImages[i],
 					.viewType = VK_IMAGE_VIEW_TYPE_2D,
 					.format = m_GpuSwapchainSurfaceFormat.format,
 					.components {
@@ -572,12 +606,35 @@ namespace game {
 						.layerCount = 1,
 					},
 				};
-				assert(GpuSucceeded(vkCreateImageView(m_GpuDevice, &imageViewInfo, m_GpuAllocationCallbacks, &m_GpuSwapchainImages.m_Data[i])) 
-					&& "failed to create swapchain image view!");
+				if (!VkAssert(vkCreateImageView(m_GpuDevice, &imageViewInfo, m_GpuAllocationCallbacks, m_GpuSwapchainImageViews[i]), 
+						"failed to create swapchain image view (function vkCreateImageView in function CreateSwapchain)!")) {
+					return;
+				}
+				if (!VkAssert(vkCreateSemaphore(m_GpuDevice, &semaphoreInfo, m_GpuAllocationCallbacks, m_GpuRenderFinishedSemaphores[i]), 
+						"failed to create render finished semaphore (function vkCreateSemaphore in function CreateSwapchain)")) {
+					return;
+				}
+				if (!VkAssert(vkCreateSemaphore(m_GpuDevice, &semaphoreInfo, m_GpuAllocationCallbacks, m_GpuRenderWaitSemaphores[i]), 
+						"failed to create render finished semaphore (function vkCreateSemaphore in function CreateSwapchain)")) {
+					return;
+				}
+				if (!VkAssert(vkCreateFence(m_GpuDevice, &fenceInfo, m_GpuAllocationCallbacks, m_GpuInFlightFences[i]), 
+						"failed to create in flight fences (function vkCreateFence in function CreateSwapchain)")) {
+					return;
+				}
 			}
 		}
 
-		void BeginFrame() {
+		struct DrawData {
+			VkCommandBuffer commandBuffer;
+			VkImageView swapchainImageView;
+		};
+
+		bool BeginFrame(DrawData& outDrawData) {
+			if (m_GpuSwapchainExtent.width == 0 || m_GpuSwapchainExtent.height == 0) {
+				return false;
+			}
+			return true;
 		}
 
 		void EndFrame() {
