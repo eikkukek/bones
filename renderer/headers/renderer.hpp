@@ -20,23 +20,26 @@ namespace game {
 #endif
 
 #ifndef REND_PRINT_ERR
-#define REND_PRINT_ERR(err, origin) printf(err)
+#define REND_PRINT_ERR(err) printf(err)
 #endif
 
 #ifndef REND_PRINT_WARN
 #define REND_PRINT_WARN(warn) printf(warn);
 #endif
 
-
 	class Renderer {
 
 		enum class ErrorOrigin {
 			Uncategorized = 0,
-			Vulkan = 1,
-			StackOutOfMemory = 2,
-			NullDereference = 3,
-			IndexOutOfBounds = 4,
+			InitializationFailed = 1,
+			Vulkan = 2,
+			StackOutOfMemory = 3,
+			NullDereference = 4,
+			IndexOutOfBounds = 5,
 		};
+
+		typedef void (*ErrorCallback)(Renderer* renderer, ErrorOrigin origin, const char* err, VkFlags vkErr);
+		typedef void (*SwapchainCreateCallback)(Renderer* renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews);
 
 		struct Stack {
 
@@ -80,8 +83,7 @@ namespace game {
 
 				T* operator[](size_t index) {
 					if (index >= m_Size) {
-						REND_PRINT_ERR("index out of bounds (game::Renderer::Stack::Array::operator[])!", 
-							ErrorOrigin::IndexOutOfBounds);
+						REND_PRINT_ERR("index out of bounds (game::Renderer::Stack::Array::operator[])!");
 						return nullptr;
 					}
 					return &m_Data[index];
@@ -95,8 +97,7 @@ namespace game {
 			Stack(uint8_t* data, size_t maxSize)
 				: m_Data(data), m_MaxSize(maxSize), m_UsedSize(0) {
 				if (!m_Data) {
-					REND_PRINT_WARN("data was null (game::Renderer::Stack constructor)!", 
-						ErrorOrigin::Uncategorized);
+					REND_PRINT_WARN("data was null (game::Renderer::Stack constructor)!");
 				}
 			}
 
@@ -104,8 +105,7 @@ namespace game {
 			Array<T> Allocate(size_t count) {
 				T* ret = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T) * count) > m_MaxSize) {
-					REND_PRINT_ERR("stack out of memory (function game::Renderer::Stack::Allocate)!"
-						ErrorOrigin::StackOutOfMemory);
+					REND_PRINT_ERR("stack out of memory (function game::Renderer::Stack::Allocate)!");
 					return Array<T>(nullptr, 0);
 				}
 				T* iter = ret;
@@ -120,8 +120,7 @@ namespace game {
 			bool Allocate(size_t count, Array<T>* out) {
 				T* ret = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T) * count) > m_MaxSize) {
-					REND_PRINT_ERR("stack out of memory (function game::Renderer::Stack::Allocate)!"
-						ErrorOrigin::StackOutOfMemory);
+					REND_PRINT_ERR("stack out of memory (function game::Renderer::Stack::Allocate)!");
 					return false;
 				}
 				T* iter = ret;
@@ -189,14 +188,24 @@ namespace game {
 		Stack::Array<VkImage> m_GpuSwapchainImages { 0, 0 };
 		VkSurfaceFormatKHR m_GpuSwapchainSurfaceFormat{};
 		VkPresentModeKHR m_GpuPresentMode{};
+		SwapchainCreateCallback m_SwapchainCreateCallback;
 
 		VkInstance m_GpuInstance = VK_NULL_HANDLE;
 
-		void (*m_CriticalErrorCallback)(Renderer* rend, ErrorOrigin origin, const char* err, VkResult vkErr) = nullptr;
+		ErrorCallback m_ErrorCallback;
+		ErrorCallback m_CriticalErrorCallback;
 
-		bool VkAssert(VkResult res, const char* err) {
-			if (res != VK_SUCCESS) {
-				m_CriticalErrorCallback(this, ErrorOrigin::Vulkan, err, res);
+		bool VkAssert(VkResult result, const char* err) {
+			if (result != VK_SUCCESS) {
+				m_CriticalErrorCallback(this, ErrorOrigin::Vulkan, err, result);
+				return false;
+			}
+			return true;
+		}
+
+		bool VkCheck(VkResult result, const char* err) {
+			if (result != VK_SUCCESS) {
+				m_ErrorCallback(this, ErrorOrigin::Vulkan, err, result);
 				return false;
 			}
 			return true;
@@ -210,10 +219,15 @@ namespace game {
 			return ptr;
 		}
 
-		Renderer(const char* appName, uint32_t appVersion, GLFWwindow* window, void(*criticalErrorCallback)(Renderer*, ErrorOrigin, const char*, VkResult)) 
+		template<ErrorCallback T_critical_error_callback, ErrorCallback T_error_callback, SwapchainCreateCallback T_swapchain_create_callback>
+		Renderer(const char* appName, uint32_t appVersion, GLFWwindow* window)
 			: m_SingleThreadStack((uint8_t*)malloc(c_SingleThreadStackSize), c_SingleThreadStackSize), 
-				m_InFlightRenderStack(m_InFlightRenderStackData, cexpr_in_flight_render_stack_size), m_Window(window),
-				m_CriticalErrorCallback(criticalErrorCallback) {
+				m_InFlightRenderStack(m_InFlightRenderStackData, cexpr_in_flight_render_stack_size), m_Window(window), 
+				m_CriticalErrorCallback(T_critical_error_callback), m_ErrorCallback(T_error_callback), m_SwapchainCreateCallback(T_swapchain_create_callback) {
+
+			static_assert(T_critical_error_callback, "critical error callback was null!");
+			static_assert(T_error_callback, "error callback was null!");
+			static_assert(T_gpu_swapchain_create_callback, "error callback was null!");
 
 			uint32_t instanceExtensionCount;
 			const char** instanceExtensions = glfwGetRequiredInstanceExtensions(&instanceExtensionCount);
@@ -439,9 +453,19 @@ namespace game {
 					"failed to create render command pool (function vkCreateCommandPool in constructor)!")) {
 				return;
 			}
+
+			CreateSwapchain();
 		}
 
 		void CreateSwapchain() {
+
+			int framebufferWidth, framebufferHeight;
+			glfwGetFramebufferSize(m_Window, &framebufferWidth, &framebufferHeight);
+
+			if (framebufferWidth == 0 || framebufferHeight == 0) {
+				m_GpuSwapchainExtent = { 0, 0 };
+				return;
+			}
 
 			static constexpr auto clamp = [](uint32_t val, uint32_t min, uint32_t max) -> uint32_t { 
 				val = val > min ? val : min;
@@ -488,11 +512,9 @@ namespace game {
 				m_GpuSwapchainExtent = surfaceCapabilities.currentExtent;
 			}
 			else {
-				int width, height;
-				glfwGetFramebufferSize(m_Window, &width, &height);
 				VkExtent2D actualExtent {
-					(uint32_t)width,
-					(uint32_t)height
+					(uint32_t)framebufferWidth,
+					(uint32_t)framebufferHeight,
 				};
 				actualExtent.width = clamp(
 					actualExtent.width, 
@@ -521,6 +543,7 @@ namespace game {
 				.imageFormat = m_GpuSwapchainSurfaceFormat.format,
 				.imageColorSpace = m_GpuSwapchainSurfaceFormat.colorSpace,
 				.imageExtent = m_GpuSwapchainExtent,
+
 				.imageArrayLayers = 1,
 				.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
 				.imageSharingMode = VK_SHARING_MODE_CONCURRENT,
@@ -551,29 +574,29 @@ namespace game {
 
 			vkGetSwapchainImagesKHR(m_GpuDevice, m_GpuSwapchain, &m_FramesInFlight, nullptr);
 			if (!m_InFlightRenderStack.Allocate<VkImage>(m_FramesInFlight, &m_GpuSwapchainImages)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", 0);
 				return;
 			}
 			vkGetSwapchainImagesKHR(m_GpuDevice, m_GpuSwapchain, &m_FramesInFlight, m_GpuSwapchainImages.m_Data);
 
 			if (!m_InFlightRenderStack.Allocate<VkImageView>(m_FramesInFlight, &m_GpuSwapchainImageViews)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", 0);
 				return;
 			}
 			if (!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_GpuRenderFinishedSemaphores)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", 0);
 				return;
 			}
 			if (!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_GpuRenderWaitSemaphores)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", 0);
 				return;
 			}
 			if (!m_InFlightRenderStack.Allocate<VkFence>(m_FramesInFlight, &m_GpuInFlightFences)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", 0);
 				return;
 			}
 			if (!m_InFlightRenderStack.Allocate<VkCommandBuffer>(m_FramesInFlight, &m_GpuRenderCommandBuffers)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", 0);
 				return;
 			}
 
@@ -642,6 +665,12 @@ namespace game {
 				}
 			}
 			m_CurrentFrame = 0;
+			m_SwapchainCreateCallback(this, m_GpuSwapchainExtent, m_FramesInFlight, m_GpuSwapchainImageViews.m_Data);
+		}
+
+		void RecreateSwapchain() {
+			vkDestroySwapchainKHR(m_GpuDevice, m_GpuSwapchain, m_GpuAllocationCallbacks);
+			CreateSwapchain();
 		}
 
 		struct DrawData {
@@ -659,22 +688,78 @@ namespace game {
 					"current frame was larger than frames in flights (in function BeginFrame)", VK_SUCCESS);
 				return false;
 			}
-			if (!GpuSucceeded(vkWaitForFences(m_GpuDevice, 1, m_GpuInFlightFences[m_CurrentFrame], VK_TRUE, frame_timeout))) {
-				REND_PRINT_ERR("failed to wait for in flight fence (in function BeginFrame)!");
+			if (!VkCheck(vkWaitForFences(m_GpuDevice, 1, m_GpuInFlightFences[m_CurrentFrame], VK_TRUE, frame_timeout), "failed to wait for in flight fence (in function BeginFrame)!")) {
 				return false;
 			}
 			uint32_t imageIndex;
 			VkResult result = vkAcquireNextImageKHR(m_GpuDevice, m_GpuSwapchain, frame_timeout, 
 					*m_GpuRenderWaitSemaphores[m_CurrentFrame], nullptr, &imageIndex);
 			if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-				// recreate swapchain
-			}
-			else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-				REND_PRINT_ERR("failed to acquire next swapchain image (in function BeginFrame)!", ErrorOrigin::Vulkan);
+				RecreateSwapchain();
 				return false;
 			}
+			else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+				m_ErrorCallback(this, ErrorOrigin::Vulkan, "failed to acquire next swapchain image (in function BeginFrame)!", result);
+				return false;
+			}
+			if (imageIndex != m_CurrentFrame) {
+				m_CriticalErrorCallback(this, ErrorOrigin::Vulkan, "image index didn't match current frame (in function BeginFrame)!", VK_SUCCESS);
+				return false;
+			}
+			outDrawData.swapchainImageView = *m_GpuSwapchainImageViews[m_CurrentFrame];
+			vkResetFences(m_GpuDevice, 1, m_GpuInFlightFences[m_CurrentFrame]);
 			outDrawData.commandBuffer = *m_GpuRenderCommandBuffers[m_CurrentFrame];
+			vkResetCommandBuffer(outDrawData.commandBuffer, 0);
+			VkCommandBufferBeginInfo commandBufferBeginInfo {
+				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.pInheritanceInfo = nullptr,
+			};
+			if (!VkCheck(vkBeginCommandBuffer(outDrawData.commandBuffer, &commandBufferBeginInfo), 
+				"failed to begin render command buffer (function vkBeginCommandBuffer in function BeginFrame)")) {
+				return false;
+			}
 			return true;
+		}
+
+		void EndFrame() {
+
+			VkPipelineStageFlags waitStages[1] { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+			VkSubmitInfo submitInfo {
+				.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+				.waitSemaphoreCount = 1,
+				.pWaitSemaphores = m_GpuRenderWaitSemaphores[m_CurrentFrame],
+				.pWaitDstStageMask = waitStages,
+				.commandBufferCount = 1,
+				.pCommandBuffers = m_GpuRenderCommandBuffers[m_CurrentFrame],
+				.signalSemaphoreCount = 1,
+				.pSignalSemaphores = m_GpuRenderFinishedSemaphores[m_CurrentFrame],
+			};
+			if (!VkCheck(vkQueueSubmit(m_GpuGraphicsQueue, 1, &submitInfo, *m_GpuInFlightFences[m_CurrentFrame]), 
+				"failed to submit render to queue (function vkQueueSubmit in function EndFrame)!")) {
+				return;
+			}
+			VkPresentInfoKHR presentInfo {
+				.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+				.waitSemaphoreCount = 1,
+				.pWaitSemaphores = m_GpuRenderFinishedSemaphores[m_CurrentFrame],
+				.swapchainCount = 1,
+				.pSwapchains = &m_GpuSwapchain,
+				.pImageIndices = &m_CurrentFrame,
+				.pResults = nullptr,
+			};
+
+			VkResult result = vkQueuePresentKHR(m_GpuGraphicsQueue, &presentInfo);
+
+			m_CurrentFrame = (m_CurrentFrame + 1) % m_FramesInFlight;
+
+			if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+				RecreateSwapchain();
+			}
+			else if (result != VK_SUCCESS) {
+				m_ErrorCallback(this, ErrorOrigin::Vulkan, "failed to present image (function vkQueuePresentKHR in function EndFrame)!", result);
+			}
 		}
 
 		void Terminate() {
