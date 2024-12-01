@@ -147,12 +147,12 @@ namespace game {
 		static constexpr const char* cexpr_gpu_validation_layer_name = "VK_LAYER_KHRONOS_validation";
 		static constexpr const char* cexpr_gpu_dynamic_rendering_extension_name = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
 		static constexpr size_t cexpr_in_flight_render_stack_size = 512;
+		static constexpr size_t cexpr_SingleThreadStackSize = 65536;
 
 		static bool GpuSucceeded(VkResult result) {
 			return result == VK_SUCCESS;
 		}
 
-		const size_t c_SingleThreadStackSize = 65536;
 		uint8_t* m_SingleThreadStackData;
 		Stack m_SingleThreadStack;
 
@@ -221,13 +221,13 @@ namespace game {
 
 		template<ErrorCallback T_critical_error_callback, ErrorCallback T_error_callback, SwapchainCreateCallback T_swapchain_create_callback>
 		Renderer(const char* appName, uint32_t appVersion, GLFWwindow* window)
-			: m_SingleThreadStack((uint8_t*)malloc(c_SingleThreadStackSize), c_SingleThreadStackSize), 
+			: m_SingleThreadStack((uint8_t*)malloc(cexpr_SingleThreadStackSize), cexpr_SingleThreadStackSize), 
 				m_InFlightRenderStack(m_InFlightRenderStackData, cexpr_in_flight_render_stack_size), m_Window(window), 
 				m_CriticalErrorCallback(T_critical_error_callback), m_ErrorCallback(T_error_callback), m_SwapchainCreateCallback(T_swapchain_create_callback) {
 
 			static_assert(T_critical_error_callback, "critical error callback was null!");
 			static_assert(T_error_callback, "error callback was null!");
-			static_assert(T_gpu_swapchain_create_callback, "error callback was null!");
+			static_assert(T_swapchain_create_callback, "error callback was null!");
 
 			uint32_t instanceExtensionCount;
 			const char** instanceExtensions = glfwGetRequiredInstanceExtensions(&instanceExtensionCount);
