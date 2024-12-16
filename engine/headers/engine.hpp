@@ -1,5 +1,6 @@
 #include "renderer.hpp"
 #include "math.hpp"
+#include "vulkan/vulkan_core.h"
 #include <assert.h>
 #include <cstdio>
 #include <cstdlib>
@@ -23,6 +24,36 @@ namespace engine {
 	public:
 
 		typedef uint64_t UID;
+
+		enum class ErrorOrigin {
+			Uncategorized = 0,
+			Vulkan = 1,
+			Entity = 2,
+			DynamicArray = 3,
+			FileParsing = 4,
+			MaxEnum,
+		};
+
+		static const char* ErrorOriginStr(ErrorOrigin origin) {
+			const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
+				"Uncategorized",
+				"Vulkan",
+				"Entity",
+				"DynamicArray",
+				"FileParsing",
+			};
+			if (origin == ErrorOrigin::MaxEnum) {
+				return strings[0];
+			}
+			return strings[(size_t)origin];
+		}
+
+		static void PrintError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS) {
+			printf("Engine called an error!\nError origin: %s\nError: %s\n", ErrorOriginStr(origin), err);
+			if (vkErr != VK_SUCCESS) {
+				printf("Vulkan error code: %i\n", (int)vkErr);
+			}
+		}
 
 		template<typename T, typename U>
 		struct IsSame {
@@ -61,7 +92,7 @@ namespace engine {
 				m_Capacity = 0;
 			}
 
-			constexpr size_t Size() const noexcept {
+			size_t Size() const noexcept {
 				return m_Size;
 			}
 
@@ -71,7 +102,7 @@ namespace engine {
 				}
 				T* temp = new T[capacity];
 				for (size_t i = 0; i < m_Size; i++) {
-					new (temp[i]) T(std::move(m_Data[i]));
+					new(&temp[i]) T(std::move(m_Data[i]));
 				}
 				delete[] m_Data;
 				m_Capacity = capacity;
@@ -91,7 +122,7 @@ namespace engine {
 				if (m_Size == m_Capacity) {
 					Reserve(m_Capacity * 2);
 				}
-				new (m_Data[m_Size++]) T(value);
+				new(&m_Data[m_Size++]) T(value);
 				return &m_Data[m_Size];
 			}
 
@@ -100,16 +131,32 @@ namespace engine {
 				if (m_Size == m_Capacity) {
 					Reserve(m_Capacity * 2);
 				}
-				new (m_Data[m_Size++]) T(std::forward(args)...);
+				new(m_Data[m_Size++]) T(std::forward(args)...);
 				return &m_Data[m_Size];
 			}
 
-			constexpr Iterator begin() const {
+			Iterator Erase(Iterator where) {
+				ptrdiff_t diff = m_Data - where;
+				if (diff < 0 || diff >= m_Size) {
+					PrintError(ErrorOrigin::DynamicArray, 
+						"attempting to erase from dynamic array with an iterator that's outside the bounds of the array (function Erase)!");
+					return nullptr;
+				}
+				while (where != &m_Data[m_Size - 1]) {
+					where->~T();
+					new(where) T(std::move(*(where + 1)));
+					++where;
+				}
+				--m_Size;
+				return &m_Data[diff];
+			}
+
+			Iterator begin() const {
 				return m_Data;
 			}
 
-			constexpr ConstIterator end() const {
-				return m_Data ? m_Data[m_Size] : nullptr;
+			ConstIterator end() const {
+				return m_Data ? &m_Data[m_Size] : nullptr;
 			}
 		};
 
@@ -117,7 +164,9 @@ namespace engine {
 		class Set {
 		public:
 	
-			typedef T Bucket[BucketCapacity];	
+			typedef T Bucket[BucketCapacity];
+
+			struct Iterator;
 
 			struct ConstIterator {
 			private:
@@ -128,10 +177,10 @@ namespace engine {
 
 			public:
 
-				constexpr ConstIterator(Set& set, DynamicArray<size_t>::ConstIterator indexIter, size_t bucketIndex) noexcept 
+				ConstIterator(const Set& set, DynamicArray<size_t>::ConstIterator indexIter, size_t bucketIndex) noexcept 
 					: m_Set(set), m_IndexIter(indexIter), m_BucketIndex(bucketIndex) {}
 
-				constexpr ConstIterator(const ConstIterator& other) noexcept 
+				ConstIterator(const ConstIterator& other) noexcept 
 					: m_Set(other.m_Set), m_IndexIter(other.m_IndexIter), m_BucketIndex(other.m_BucketIndex) {}
 
 				T& operator*() const {
@@ -139,6 +188,8 @@ namespace engine {
 						&& "error in Engine::Set::ConstIterator (attempting to dereference an invalid iterator!)");
 					return m_Set.m_Buckets[*m_IndexIter][m_BucketIndex];
 				}
+
+				friend struct Iterator;
 			};
 
 			struct Iterator {
@@ -150,15 +201,20 @@ namespace engine {
 
 			public:
 
-				constexpr Iterator(Set& set) 
-					noexcept : m_Set(set), m_IndexIter(nullptr), m_BucketIndex(BucketCapacity) {
-					if (m_Set.m_BucketIndices.Size()) {
-						m_IndexIter = m_Set.m_BucketIndices.begin();
-						m_BucketIndex = 0;
+				Iterator(const Set& set) noexcept 
+					: m_Set(set), m_IndexIter(nullptr), m_BucketIndex(BucketCapacity) {
+					m_IndexIter = m_Set.m_BucketIndices.begin();
+					m_BucketIndex = BucketCapacity;
+					while (m_IndexIter != m_Set.m_BucketIndices.end()) {
+						if (m_Set.m_BucketSizes[*m_IndexIter]) {
+							m_BucketIndex = 0;
+							break;
+						}
+						++m_IndexIter;
 					}
 				}
 
-				constexpr Iterator(const Iterator& other) noexcept
+				Iterator(const Iterator& other) noexcept
 					: m_Set(other.m_Set), m_IndexIter(other.m_IndexIter), m_BucketIndex(other.m_BucketIndex) {}
 
 				Iterator& operator++() noexcept {
@@ -167,11 +223,13 @@ namespace engine {
 						return *this;
 					}
 					++m_IndexIter;
-					if (m_IndexIter != m_Set.m_BucketIndices.end()) {
-						m_BucketIndex = 0;
-						return *this;
+					while (m_IndexIter != m_Set.m_BucketIndices.end()) {
+						if (m_Set.m_BucketSizes[*m_IndexIter]) {
+							m_BucketIndex = 0;
+							return *this;
+						}
+						++m_IndexIter;
 					}
-					m_IndexIter = nullptr;
 					m_BucketIndex = BucketCapacity;
 					return *this;
 				}
@@ -181,30 +239,36 @@ namespace engine {
 						--m_BucketIndex;
 						return *this;
 					}
-					if (m_IndexIter == m_Set.m_BucketIndices.begin()) {
-						m_IndexIter = nullptr;
-						m_BucketIndex = BucketCapacity;
+					while (m_IndexIter != m_Set.m_BucketIndices.begin()) {
+						if (m_Set.m_BucketSizes[*m_IndexIter]) {
+							m_BucketIndex = m_Set.m_BucketSizes[*m_IndexIter] - 1;
+							return *this;
+						}
+						--m_IndexIter;
+					}
+					if (m_Set.m_BucketSizes[*m_IndexIter]) {
+						m_BucketIndex = m_Set.m_BucketSizes[*m_IndexIter] - 1;
 						return *this;
 					}
-					--m_IndexIter;
-					m_BucketIndex = m_Set.m_BucketSizes[*m_IndexIter] - 1;
+					m_BucketIndex = BucketCapacity;
+					m_IndexIter = m_Set.m_BucketIndices.end();
 					return *this;
 				}
 
 				T& operator*() const {
-					assert(m_IndexIter != nullptr && m_BucketIndex < BucketCapacity 
+					assert(m_IndexIter != m_Set.m_BucketIndices.end() && m_BucketIndex < BucketCapacity
 						&& "error in Engine::Set::Iterator (attempting to dereference an invalid iterator!)");
 					return m_Set.m_Buckets[*m_IndexIter][m_BucketIndex];
 				}
 
 				bool operator==(const Iterator& other) const noexcept {
 					return &m_Set == &other.m_Set && m_IndexIter == other.m_IndexIter && m_BucketIndex == other.m_BucketIndex
-						|| (m_IndexIter == nullptr && other.m_IndexIter == nullptr);
+						|| (m_IndexIter == m_Set.m_BucketIndices.end() && other.m_IndexIter == m_Set.m_BucketIndices.end());
 				}
 
 				bool operator==(const ConstIterator& other) const noexcept {
 					return &m_Set == &other.m_Set && m_IndexIter == other.m_IndexIter && m_BucketIndex == other.m_BucketIndex
-						|| (m_IndexIter == nullptr && other.m_IndexIter == nullptr);
+						|| (m_IndexIter == m_Set.m_BucketIndices.end() && other.m_IndexIter == m_Set.m_BucketIndices.end());
 				};
 			};
 
@@ -214,6 +278,7 @@ namespace engine {
 			size_t* m_BucketSizes;
 			DynamicArray<size_t> m_BucketIndices;
 			size_t m_Capacity;
+			size_t m_Trash;
 
 		public:
 
@@ -230,13 +295,42 @@ namespace engine {
 				if (capacity <= m_Capacity) {
 					return;
 				}
-				Bucket* tempBuckets = malloc(sizeof(Bucket) * capacity);
-				Bucket* tempBucketSizes = new size_t[capacity];
+				Bucket* tempBuckets = (Bucket*)malloc(sizeof(Bucket) * capacity);
+				size_t* tempBucketSizes = new size_t[capacity];
+				DynamicArray<size_t> tempBucketIndices;
+				tempBucketIndices.Reserve(capacity);
+				for (T& value : *this) {
+					uint64_t hash;
+					if constexpr (IsSame<T, Hash>::value) {
+						hash = value();
+					}
+					else {
+						hash = Hash()(value);
+					}
+					size_t index = hash & capacity;
+					size_t& bucketSize = tempBucketSizes[index];
+					Bucket& bucket = tempBuckets[index];
+					if (bucketSize) {
+						printf("bad hash (in Engine::Set::Reserve)!");
+					}
+					new(&bucket[bucketSize++]) T(std::move(value));
+					tempBucketIndices.PushBack(index);
+				}
+				free(m_Buckets);
+				m_Buckets = tempBuckets;
+				delete[] m_BucketSizes;
+				m_BucketSizes = tempBucketSizes;
+				m_BucketIndices.Clear();
+				new(&m_BucketIndices) DynamicArray<size_t>(std::move(tempBucketIndices));
+				m_Capacity = capacity;
 			}	
 
 			T* Insert(const T& value) {
 				if (!m_Capacity) {
 					Reserve(128);
+				}
+				if ((double)m_BucketIndices.Size() / m_Capacity >= 0.8) {
+					Reserve(m_Capacity * 2);
 				}
 				uint64_t hash;
 				if constexpr (IsSame<T, Hash>::value) {
@@ -250,16 +344,17 @@ namespace engine {
 				Bucket& bucket = m_Buckets[index];
 				if (bucketSize) {
 					for (size_t i = 0; i < bucketSize; i++) {
-						if (m_Buckets[i] == value) {
+						if (bucket[i] == value) {
 							return nullptr;
 						}
 					}
-					printf("bad hash!");
+					printf("bad hash (in function Engine::Set::Insert)!");
 					if (bucketSize == BucketCapacity) {
 						return nullptr;
 					}
 				}
 				new(&bucket[bucketSize]) T(value);
+				m_BucketIndices.PushBack(index);
 				return bucket[bucketSize++];
 			}
 
@@ -267,6 +362,9 @@ namespace engine {
 			T* Emplace(Args&&... args) {
 				if (!m_Capacity) {
 					Reserve(128);
+				}
+				if ((double)m_BucketIndices.Size() / m_Capacity >= 0.8) {
+					Reserve(m_Capacity * 2);
 				}
 				T value(std::forward(args)...);
 				uint64_t hash;
@@ -280,20 +378,56 @@ namespace engine {
 				size_t& bucketSize = m_BucketSizes[index];
 				Bucket& bucket = m_Buckets[index];
 				if (bucketSize) {
-					bool sameValueFound = false;
 					for (size_t i = 0; i < bucketSize; i++) {
-						if (m_Buckets[i] == value) {
-							sameValueFound = true;
+						if (bucket[i] == value) {
 							return nullptr;
 						}
 					}
-					printf("bad hash!");
+					printf("bad hash (in function Engine::Set::Emplace)!");
 					if (bucketSize == BucketCapacity) {
 						return nullptr;
 					}
 				}
 				new(&bucket[bucketSize]) T(std::move(value));
+				m_BucketIndices.PushBack(index);
 				return bucket[bucketSize++];
+			}
+
+			void CleanUp() {
+				for (auto iter = m_BucketIndices.begin(); iter != m_BucketIndices.end();) {
+					if (!m_BucketSizes[*iter]) {
+						iter = m_BucketIndices.Erase(iter);
+						continue;
+					}
+					++iter;
+				}
+			}
+
+			bool Erase(const T& value) {
+				uint64_t hash;
+				if constexpr (IsSame<T, Hash>::value) {
+					hash = value();
+				}
+				else {
+					hash = Hash()(value);
+				}
+				size_t index = hash & m_Capacity;
+				size_t& bucketSize = m_BucketSizes[index];
+				Bucket& bucket = m_Buckets[index];
+				if (bucketSize) {
+					for (size_t i = 0; i < bucketSize; i++) {
+						if (bucket[i] == value) {
+							(&bucket[i])->~T();
+							--bucketSize;
+							return true;
+						}
+					}
+				}
+				++m_Trash;
+				if ((double)m_Trash / m_Capacity >= 0.25) {
+					CleanUp();
+				}	
+				return false;
 			}
 
 			Iterator begin() const noexcept {
@@ -301,7 +435,7 @@ namespace engine {
 			}
 
 			ConstIterator end() const noexcept {
-				return ConstIterator(*this, nullptr, BucketCapacity);
+				return ConstIterator(*this, m_BucketIndices.end(), BucketCapacity);
 			}
 		};
 
@@ -385,43 +519,105 @@ namespace engine {
 			VkDescriptorPool m_DescriptorPool{};
 		};
 
-		class GraphicsPipelineData1 {
+		struct MeshBufferData {
+			size_t vertexBufferCount;
+			VkBuffer* vertexBuffers;
+			VkDeviceSize* vertexBufferOffsets;
+			VkBuffer indexBuffer;
 		};
+
+		struct GraphicsPipeline;
 
 		class Entity {
 		public:
-			String m_Name;
-			UID m_UID;
-			virtual void Initialize(Engine* pEngine, const String& name, uint64_t UID) = 0;
-			virtual void Initialize(Engine* pEngine, FILE* file) = 0;
+
+			static constexpr size_t cexpr_name_max_length = 63;
+
+			const size_t c_ClassSize;
+			char m_Name[cexpr_name_max_length + 1];
+			size_t m_NameLength;
+			const UID m_UID;
+			Engine* const m_pEngine;
+			DynamicArray<GraphicsPipeline> m_GraphicsPipelines;
+
+			Entity(Engine* pEngine, const char* name, UID UID, size_t classSize) noexcept 
+				: m_pEngine(pEngine), c_ClassSize(classSize), m_UID(UID) {
+				size_t len = strlen(name);
+				if (len > cexpr_name_max_length) {
+					PrintError(ErrorOrigin::Entity, "given entity name is longer than entity name max size (in Entity constructor)!");
+				}
+				size_t i = 0;
+				for (; i < len && i < cexpr_name_max_length; i++) {
+					m_Name[i] = name[i];
+				}
+				m_Name[i] = '\0';
+				m_NameLength = i;
+			}
+
+			Entity(Engine* pEngine, FILE* file, UID UID, size_t classSize) noexcept : m_pEngine(pEngine), c_ClassSize(classSize), m_UID(UID) {
+				char c = fgetchar();
+				size_t i = 0;
+				for (; i < cexpr_name_max_length && c != '\n'; i++) {
+					m_Name[i] = c;
+					c = fgetchar();
+				}
+				m_Name[i] = '\0';
+				m_NameLength = i;
+				if (c != '\n') {
+					PrintError(ErrorOrigin::FileParsing, "there was an entity name larger than entity name max size in file (in Entity constructor)!");
+				}
+				while (c != '\n') {
+					c = fgetchar();
+				}
+			}
+
 			virtual void LogicUpdate(Engine* pEngine, bool& outTerminate) {};
-			virtual void RenderUpdate(GraphicsPipelineData1* pPipeline, size_t desciptorCount, VkDescriptorSet* outDescriptorSets, 
-				VkBuffer* outVertexBuffer, VkBuffer* outIndexBuffer) {};
+			virtual void RenderUpdate(const GraphicsPipeline& pipeline, const CameraData1& camera, const size_t desciptorCount, VkDescriptorSet** outDescriptorSets,
+				size_t& meshCount, MeshBufferData** meshes) {};
 			virtual void EditorUpdate(Engine* pEngine) = 0;
 			virtual void WriteToFile(FILE* file) = 0;
-			virtual void Terminate() = 0;
+			virtual void OnTerminate() = 0;
 
-			uint64_t EntityPtrHash() {
-				return m_Name() ^ m_UID;
+			void Terminate() {
+				for (GraphicsPipeline& graphicsPipeline : m_GraphicsPipelines) {
+					graphicsPipeline.m_Entites.Erase(this);
+				}
+				OnTerminate();
 			}
+
+			virtual ~Entity() {
+			}
+
+			struct Hash {
+				uint64_t operator()(Entity* entity) {
+					return StringHash(entity->m_Name) ^ entity->m_UID;
+				}
+			};
 		};
 
 		class EntityAllocator {
+		public:
 
 			template<typename EntityType>
-			EntityType* Allocate() {
-				return new EntityType();
+			EntityType* Allocate(Engine* pEngine, const char* name, UID UID) {
+				return new EntityType(pEngine, name, UID, sizeof(EntityType));
 			}
 
-			template<typename EntityType>
-			void Deallocate() {
-				delete EntityType();
+			void Deallocate(Entity* entity) {
+				delete entity;
 			}
+		};
+
+		struct GraphicsPipeline {
+			VkPipeline m_GpuPipeline;
+			VkPipelineLayout m_GpuPipelineLayout;
+			uint32_t m_DescriptorSetCount;
+			Set<Entity*, Entity::Hash> m_Entites;
 		};
 
 		class EntityConstructor {
 			const char* m_TypeName;
-			Entity* (*m_NewEntityFunction)(EntityAllocator*);
+			Entity* (*m_NewEntityFunction)(EntityAllocator&);
 		};
 
 		inline static Engine* s_engine_instance = nullptr;
@@ -432,16 +628,17 @@ namespace engine {
 		const size_t m_EntityConstructorCount;
 		EntityConstructor* const m_pEntityConstructors;	
 
-		Set<Entity*> m_Entities;
+		Set<Entity*, Entity::Hash> m_Entities{};
+		DynamicArray<GraphicsPipeline> m_GraphicsPipelineDatas1{};
 
 		Renderer m_Renderer;
 
-		CameraData1 m_GameCamera;
-		CameraData1 m_DebugCamera;
-		CameraData2 m_GameCameraData2;
-		CameraData2 m_DebugCameraData2;
+		CameraData1 m_GameCamera{};
+		CameraData1 m_DebugCamera{};
+		CameraData2 m_GameCameraData2{};
+		CameraData2 m_DebugCameraData2{};
 
-		static void RendererCriticalErrorCallback(Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkFlags vkErr) {
+		static void RendererCriticalErrorCallback(const Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkFlags vkErr) {
 			printf("Renderer called a critical error!\nError origin: %s\nError: %s\n", Renderer::ErrorOriginStr(origin), err);
 			if (vkErr != VK_SUCCESS) {
 				printf("Vulkan error code: %i\n", (int)vkErr); 
@@ -453,14 +650,14 @@ namespace engine {
 			exit(EXIT_FAILURE);
 		}
 
-		static void RendererErrorCallback(Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkFlags vkErr) {
+		static void RendererErrorCallback(const Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkFlags vkErr) {
 			printf("Renderer called an error!\nError origin: %s\nError: %s\n", Renderer::ErrorOriginStr(origin), err);
 			if (vkErr != VK_SUCCESS) {
 				printf("Vulkan error code: %i\n", (int)vkErr); 
 			}
 		}
 
-		static void SwapchainCreateCallback(Renderer* renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews) {
+		static void SwapchainCreateCallback(const Renderer* renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews) {
 		}
 
 		static inline bool UpdateEngineInstance(Engine* engine) {
@@ -472,20 +669,54 @@ namespace engine {
 			return true;
 		}
 
-		Engine(const char* appName, GLFWwindow* window, size_t entityConstructorCount, EntityConstructor* pEntityConstructors)
+		Engine(const char* appName, GLFWwindow* window, size_t entityConstructorCount, EntityConstructor* pEntityConstructors, size_t entityReservation)
 			: m_Initialized(UpdateEngineInstance(this)), 
 				m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, RendererCriticalErrorCallback, RendererErrorCallback, SwapchainCreateCallback),
-				m_EntityConstructorCount(entityConstructorCount), m_pEntityConstructors(pEntityConstructors) {
+				m_EntityAllocator(), m_EntityConstructorCount(entityConstructorCount), m_pEntityConstructors(pEntityConstructors) {
+			m_Entities.Reserve(entityReservation);
 		}
 
 		~Engine() {
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
+			for (Entity* entity : m_Entities) {
+				entity->Terminate();
+				m_EntityAllocator.Deallocate(entity);
+			}
 		}
 
 		void DrawLoop() {
 			Renderer::DrawData drawData;
 			if (m_Renderer.BeginFrame(drawData)) {
+				CameraData1* cameras[2] = { &m_GameCamera, &m_DebugCamera };
+				for (size_t i = 0; i < 2; i++) {
+					for (GraphicsPipeline& pipeline : m_GraphicsPipelineDatas1) {
+						vkCmdBindPipeline(drawData.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_GpuPipeline);
+						for (Entity* entity : pipeline.m_Entites) {
+							VkDescriptorSet* pDescriptorSets = nullptr;
+							VkBuffer* pVertexBuffer = nullptr;
+							VkBuffer* pIndexBuffer = nullptr;
+							size_t meshCount = 0;
+							MeshBufferData* meshes = nullptr;
+							entity->RenderUpdate(pipeline, *cameras[i], pipeline.m_DescriptorSetCount, &pDescriptorSets, meshCount, &meshes);
+							if (pDescriptorSets) {
+								vkCmdBindDescriptorSets(drawData.commandBuffer, 
+									VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_GpuPipelineLayout, 0, pipeline.m_DescriptorSetCount, pDescriptorSets, 
+									0, nullptr);
+								if (meshCount && !meshes) {
+									PrintError(ErrorOrigin::Entity, "Entity::RenderUpdate returned a non zero mesh count but meshes pointer was null (in function DrawLooLoopp)!");
+									continue;
+								}
+								for (size_t i = 0; i < meshCount; i++) {
+									vkCmdBindVertexBuffers(drawData.commandBuffer, 
+										0, meshes[i].vertexBufferCount, meshes[i].vertexBuffers, meshes[i].vertexBufferOffsets);
+									vkCmdBindIndexBuffer(drawData.commandBuffer, meshes[i].indexBuffer, 
+										0, VK_INDEX_TYPE_UINT32);
+								}
+							}
+						}
+					}
+				}
 				m_Renderer.EndFrame();
 			}
 		}
