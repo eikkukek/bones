@@ -3,10 +3,13 @@
 #include "vulkan/vulkan.h"
 #define GLFW_INCLUDE_VULKAN
 #include "GLFW/glfw3.h"
+#include "glslang_c_interface.h"
 #include <assert.h>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
+#include <new>
 
 namespace engine {
 
@@ -24,11 +27,12 @@ namespace engine {
 			StackOutOfMemory = 3,
 			NullDereference = 4,
 			IndexOutOfBounds = 5,
+			Shader = 6,
 			MaxEnum,
 		};
 
-		typedef void (*ErrorCallback)(Renderer* renderer, ErrorOrigin origin, const char* err, VkFlags vkErr);
-		typedef void (*SwapchainCreateCallback)(Renderer* renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews);
+		typedef void (*ErrorCallback)(const Renderer* renderer, ErrorOrigin origin, const char* err, VkFlags vkErr);
+		typedef void (*SwapchainCreateCallback)(const Renderer* renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews);
 
 		static const char* ErrorOriginStr(ErrorOrigin origin) {
 			static constexpr const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
@@ -38,6 +42,7 @@ namespace engine {
 				"StackOutOfMemory",
 				"NullDereference",
 				"IndexOutOfBounds",
+				"Shader",
 			};
 			if (origin == ErrorOrigin::MaxEnum) {
 				return strings[0];
@@ -45,9 +50,17 @@ namespace engine {
 			return strings[(size_t)origin];
 		}
 
-		static void PrintMsg(const char* msg);
-		static void PrintWarn(const char* warn);
-		static void PrintErr(const char* err, ErrorOrigin origin);
+		static void PrintMessage(const char* msg) {
+			printf("renderer message: %s\n", msg);
+		}
+
+		static void PrintWarning(const char* warn) {
+			printf("renderer warning: %s\n", warn);
+		}
+
+		static void PrintError(const char* err, ErrorOrigin origin) {
+			printf("renderer error: %s error origin: %s\n", err, Renderer::ErrorOriginStr(origin));
+		}
 
 		struct Stack {
 
@@ -91,7 +104,7 @@ namespace engine {
 
 				T* operator[](size_t index) {
 					if (index >= m_Size) {
-						PrintErr("index out of bounds (engine::Renderer::Stack::Array::operator[])!", ErrorOrigin::IndexOutOfBounds);
+						PrintError("index out of bounds (engine::Renderer::Stack::Array::operator[])!", ErrorOrigin::IndexOutOfBounds);
 						return nullptr;
 					}
 					return &m_Data[index];
@@ -105,7 +118,7 @@ namespace engine {
 			Stack(uint8_t* data, size_t maxSize)
 				: m_Data(data), m_MaxSize(maxSize), m_UsedSize(0) {
 				if (!m_Data) {
-					PrintWarn("data was null (engine::Renderer::Stack constructor)!");
+					PrintWarning("data was null (engine::Renderer::Stack constructor)!");
 				}
 			}
 
@@ -113,7 +126,7 @@ namespace engine {
 			Array<T> Allocate(size_t count) {
 				T* ret = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T) * count) > m_MaxSize) {
-					PrintErr("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::StackOutOfMemory);
+					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::StackOutOfMemory);
 					return Array<T>(nullptr, 0);
 				}
 				T* iter = ret;
@@ -128,7 +141,7 @@ namespace engine {
 			bool Allocate(size_t count, Array<T>* out) {
 				T* ret = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T) * count) > m_MaxSize) {
-					PrintErr("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::StackOutOfMemory);
+					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::StackOutOfMemory);
 					return false;
 				}
 				T* iter = ret;
@@ -151,6 +164,171 @@ namespace engine {
 			}
 		};
 
+		class DescriptorPool {
+		public:
+
+			const Renderer& m_Renderer;
+			const uint32_t m_MaxSets;
+			VkDescriptorPool m_DescriptorPool;
+
+			DescriptorPool(Renderer& renderer, uint32_t maxSets) noexcept : m_Renderer(renderer), m_MaxSets(maxSets), m_DescriptorPool(VK_NULL_HANDLE) {}
+
+			~DescriptorPool() {
+				Terminate();
+			}
+
+			void Terminate() {
+				if (m_DescriptorPool != VK_NULL_HANDLE) {
+					vkDestroyDescriptorPool(m_Renderer.m_GpuDevice, m_DescriptorPool, m_Renderer.m_GpuAllocationCallbacks);
+					m_DescriptorPool = VK_NULL_HANDLE;
+				}
+			}
+
+			bool CreatePool(uint32_t poolSizeCount, VkDescriptorPoolSize* pPoolSizes) {
+				if (m_DescriptorPool != VK_NULL_HANDLE) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Uncategorized, 
+						"attempting to create descriptor pool (in function DescriptorPool::CreatePool) that has already been created!", VK_SUCCESS);
+					return false;
+				}
+				VkDescriptorPoolCreateInfo createInfo {
+					.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.maxSets = m_MaxSets,
+					.poolSizeCount = poolSizeCount,
+					.pPoolSizes = pPoolSizes,
+				};
+				VkResult vkRes = vkCreateDescriptorPool(m_Renderer.m_GpuDevice, &createInfo, m_Renderer.m_GpuAllocationCallbacks, &m_DescriptorPool);
+				if (vkRes != VK_SUCCESS) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Vulkan, "failed to create descriptor pool (function vkCreateDescriptorPool in function DescriptorPool::CreatePool)!", vkRes);
+					m_DescriptorPool = VK_NULL_HANDLE;
+					return false;
+				}
+				return true;
+			}
+		};
+
+		struct Shader {
+
+			static constexpr glslang_stage_t GetGlslangStage(VkShaderStageFlagBits shaderStage) noexcept {
+				switch (shaderStage) {
+				case VK_SHADER_STAGE_VERTEX_BIT:
+					return GLSLANG_STAGE_VERTEX;
+				case VK_SHADER_STAGE_FRAGMENT_BIT:
+					return GLSLANG_STAGE_FRAGMENT;
+				default:
+					return GLSLANG_STAGE_ANYHIT;
+				}
+			}
+
+			const Renderer& m_Renderer;
+			glslang_shader_t* m_GlslangShader;
+			glslang_program_t* m_GlslangProgram;
+
+			Shader(Renderer& renderer) noexcept 
+				: m_Renderer(renderer), m_GlslangShader(nullptr), m_GlslangProgram(nullptr) {}
+
+			bool Compile(const char* shaderCode, VkShaderStageFlagBits shaderStage) {
+
+				const glslang_resource_t resource {
+					.max_draw_buffers = m_Renderer.m_GpuMaxFragmentOutputAttachments,
+				};
+
+				const glslang_input_t input = {
+					.language = GLSLANG_SOURCE_GLSL,
+					.stage = GetGlslangStage(shaderStage),
+					.client = GLSLANG_CLIENT_VULKAN,
+					.client_version = GLSLANG_TARGET_VULKAN_1_3,
+					.target_language = GLSLANG_TARGET_SPV,
+					.target_language_version = GLSLANG_TARGET_SPV_1_6,
+					.code = shaderCode,
+					.default_version = 100,
+					.default_profile = GLSLANG_NO_PROFILE,
+					.force_default_version_and_profile = false,
+					.forward_compatible = false,
+					.messages = GLSLANG_MSG_DEFAULT_BIT,
+					.resource = &resource,
+				};
+
+				if (!glslang_initialize_process()) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, "failed to initialize glslang process (in Shader constructor)!", VK_SUCCESS);
+					return false;
+				}
+
+				m_GlslangShader = glslang_shader_create(&input);
+
+				if (!glslang_shader_preprocess(m_GlslangShader, &input)) {
+					const char* log = glslang_shader_get_info_log(m_GlslangShader);
+					const char* dLog = glslang_shader_get_info_debug_log(m_GlslangShader);
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, log, VK_SUCCESS);
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, dLog, VK_SUCCESS);
+					glslang_shader_delete(m_GlslangShader);
+					m_GlslangShader = nullptr;
+					return false;
+				}
+
+				if (!glslang_shader_parse(m_GlslangShader, &input)) {
+					const char* log = glslang_shader_get_info_log(m_GlslangShader);
+					const char* dLog = glslang_shader_get_info_debug_log(m_GlslangShader);
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, log, VK_SUCCESS);
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, dLog, VK_SUCCESS);
+					glslang_shader_delete(m_GlslangShader);
+					m_GlslangShader = nullptr;
+					return false;
+				}
+
+				m_GlslangProgram = glslang_program_create();
+				glslang_program_add_shader(m_GlslangProgram, m_GlslangShader);
+
+				if (!glslang_program_link(m_GlslangProgram, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT)) {
+					const char* log = glslang_program_get_info_log(m_GlslangProgram);
+					const char* dLog = glslang_program_get_info_debug_log(m_GlslangProgram);
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, log, VK_SUCCESS);
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, dLog, VK_SUCCESS);
+					glslang_shader_delete(m_GlslangShader);
+					glslang_program_delete(m_GlslangProgram);
+					m_GlslangShader = nullptr;
+					m_GlslangProgram = nullptr;
+					return false;
+				}
+
+				glslang_program_SPIRV_generate(m_GlslangProgram, input.stage);
+
+				if (glslang_program_SPIRV_get_messages(m_GlslangProgram)) {
+					PrintMessage(glslang_program_SPIRV_get_messages(m_GlslangProgram));
+				}
+			}
+
+			bool NotCompiled() const {
+				return !m_GlslangShader || !m_GlslangProgram;
+			}
+
+			size_t GetBinarySize() const noexcept {
+				if (NotCompiled()) {
+					return 0;
+				}
+				return glslang_program_SPIRV_get_size(m_GlslangProgram);
+			}
+
+			const unsigned int* GetBinary() const noexcept {
+				if (NotCompiled()) {
+					return nullptr;
+				}
+				return glslang_program_SPIRV_get_ptr(m_GlslangProgram);
+			}
+
+			~Shader() {
+				if (m_GlslangShader) {
+					glslang_shader_delete(m_GlslangShader);
+					m_GlslangShader = nullptr;
+				}
+				if (m_GlslangProgram) {
+					glslang_program_delete(m_GlslangProgram);
+					m_GlslangProgram = nullptr;
+				}
+			}
+		};
+
 		static constexpr uint32_t cexpr_desired_frames_in_flight = 2;
 		static constexpr const char* cexpr_gpu_validation_layer_name = "VK_LAYER_KHRONOS_validation";
 		static constexpr const char* cexpr_gpu_dynamic_rendering_extension_name = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
@@ -159,6 +337,8 @@ namespace engine {
 		static constexpr size_t cexpr_in_flight_render_stack_size = 512;
 		static constexpr size_t cexpr_single_thread_stack_size = 524288;
 		static constexpr size_t cexpr_graphics_commands_stack_size = 32768;
+
+		static constexpr size_t max_model_descriptor_sets = 250000;
 
 		static bool GpuSucceeded(VkResult result) {
 			return result == VK_SUCCESS;
@@ -175,6 +355,10 @@ namespace engine {
 		VkSampleCountFlags m_GpuColorMsaaSamples = 1;
 		VkSampleCountFlags m_GpuDepthMsaaSamples = 1;
 		VkSurfaceKHR m_GpuSurface = VK_NULL_HANDLE;
+		uint32_t m_GpuMaxFragmentOutputAttachments;
+
+		VkDescriptorSetLayout m_ModelDescriptorSetLayout;
+		DescriptorPool m_ModelDescriptorPool { *this, max_model_descriptor_sets };
 
 		Stack::Array<VkCommandBuffer> m_GpuRenderCommandBuffers { 0, 0 };
 		Stack::Array<VkSemaphore> m_GpuRenderFinishedSemaphores { 0, 0 };
@@ -205,7 +389,7 @@ namespace engine {
 		ErrorCallback m_ErrorCallback;
 		ErrorCallback m_CriticalErrorCallback;
 
-		bool VkAssert(VkResult result, const char* err) {
+		bool VkAssert(VkResult result, const char* err) const {
 			if (result != VK_SUCCESS) {
 				m_CriticalErrorCallback(this, ErrorOrigin::Vulkan, err, result);
 				return false;
@@ -213,7 +397,7 @@ namespace engine {
 			return true;
 		}
 
-		bool VkCheck(VkResult result, const char* err) {
+		bool VkCheck(VkResult result, const char* err) const {
 			if (result != VK_SUCCESS) {
 				m_ErrorCallback(this, ErrorOrigin::Vulkan, err, result);
 				return false;
@@ -222,7 +406,7 @@ namespace engine {
 		}
 
 		template<typename T>
-		T* PtrAssert(T* ptr, const char* err) {
+		T* PtrAssert(T* ptr, const char* err) const {
 			if (!ptr) {
 				m_CriticalErrorCallback(this, ErrorOrigin::NullDereference, err, VK_SUCCESS);
 			}
@@ -276,7 +460,7 @@ namespace engine {
 					}
 				}
 				if (!includeGpuValidationLayer) {
-					PrintWarn("Vulkan Khronos validation not supported (in Renderer constructor)!");
+					PrintWarning("Vulkan Khronos validation not supported (in Renderer constructor)!");
 				}
 			}
 
@@ -388,6 +572,7 @@ namespace engine {
 					score += 100;
 				}
 				if (score > bestGpuScore) {
+					m_GpuMaxFragmentOutputAttachments = properties.limits.maxFragmentOutputAttachments;
 					bestGpuScore = score;
 					bestGpu = gpu;
 					bestGpuQueueFamilyIndices[0] = queueFamilyIndices[0];
@@ -465,6 +650,13 @@ namespace engine {
 			}
 
 			CreateSwapchain();
+
+			VkDescriptorPoolSize modelPoolSize {
+				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				.descriptorCount = 2,
+			};
+
+			m_ModelDescriptorPool.CreatePool(1, &modelPoolSize);
 		}	
 
 		~Renderer() {
@@ -758,6 +950,7 @@ namespace engine {
 
 		void Terminate() {
 			if (m_GpuDevice) {
+				m_ModelDescriptorPool.Terminate();
 				vkDeviceWaitIdle(m_GpuDevice);
 				for (size_t i = 0; i < m_FramesInFlight; i++) {
 					vkDestroyImageView(m_GpuDevice, m_GpuSwapchainImageViews[i] ? *m_GpuSwapchainImageViews[i] : nullptr, m_GpuAllocationCallbacks);
@@ -781,6 +974,80 @@ namespace engine {
 		void RecreateSwapchain() {
 			vkDestroySwapchainKHR(m_GpuDevice, m_GpuSwapchain, m_GpuAllocationCallbacks);
 			CreateSwapchain();
+		}
+
+		VkDescriptorSetLayout CreateDescriptorSetLayout(uint32_t bindingCount, VkDescriptorSetLayoutBinding* pBindings) const {
+			VkDescriptorSetLayoutCreateInfo createInfo {
+				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.bindingCount = bindingCount,
+				.pBindings = pBindings,
+			};
+			VkDescriptorSetLayout res;
+			VkResult vkRes = vkCreateDescriptorSetLayout(m_GpuDevice, &createInfo, m_GpuAllocationCallbacks, &res);
+			if (vkRes != VK_SUCCESS) {
+				m_ErrorCallback(this, ErrorOrigin::Vulkan, "failed to create descriptor set layout (function vkCreateDescriptorSetLayout in function CreateDescriptorSetLayout)!", vkRes);
+				return VK_NULL_HANDLE;
+			}
+			return res;
+		}
+
+		bool AllocateDescriptorSets(const DescriptorPool& descriptorPool, uint32_t setCount, VkDescriptorSetLayout* pLayouts, VkDescriptorSet outSets[]) {
+			if (descriptorPool.m_DescriptorPool == VK_NULL_HANDLE) {
+				m_ErrorCallback(this, ErrorOrigin::Vulkan, "attempting to allocate descriptor sets with a descriptor pool that's null!", VK_SUCCESS);
+				return false;
+			}
+			VkDescriptorSetAllocateInfo allocInfo {
+				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+				.pNext = nullptr,
+				.descriptorPool = descriptorPool.m_DescriptorPool,
+				.descriptorSetCount = setCount,
+				.pSetLayouts = pLayouts,
+			};
+			VkResult vkRes = vkAllocateDescriptorSets(m_GpuDevice, &allocInfo, outSets);
+			if (vkRes == VK_ERROR_OUT_OF_POOL_MEMORY) {
+				m_ErrorCallback(this, ErrorOrigin::Vulkan, 
+					"failed to allocate descriptor sets (function vkAllocateDescriptorSets in function AllocateDescriptorSets) because descriptor pool is out of memory!", vkRes);
+				return false;
+			}
+			else if (vkRes != VK_SUCCESS) {
+				m_ErrorCallback(this, ErrorOrigin::Vulkan, 
+					"failed to allocate descriptor sets (in function AllocateDescriptorSets)!", vkRes);
+				return false;
+			}
+			return true;
+		}
+
+		VkPipelineLayout CreatePipelineLayout(uint32_t setLayoutCount, VkDescriptorSetLayout* pSetLayouts, 
+				uint32_t pushConstantRangeCount, VkPushConstantRange* pPushConstantRanges) {
+			VkPipelineLayoutCreateInfo createInfo {
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.setLayoutCount = setLayoutCount,
+				.pSetLayouts = pSetLayouts,
+				.pushConstantRangeCount = pushConstantRangeCount,
+				.pPushConstantRanges = pPushConstantRanges,
+			};
+			VkPipelineLayout res;
+			VkResult vkRes = vkCreatePipelineLayout(m_GpuDevice, &createInfo, m_GpuAllocationCallbacks, &res);
+			if (vkRes != VK_SUCCESS) {
+				m_ErrorCallback(this, ErrorOrigin::Vulkan,
+					"failed to create pipeline layout (function vkCreatePipelineLayout in function CreatePipelineLayout)!", vkRes);
+				return VK_NULL_HANDLE;
+			}
+			return res;
+		}
+
+		bool CreateGraphicsPipelines(uint32_t pipelineCount, VkGraphicsPipelineCreateInfo pipelineCreateInfos[], VkPipeline outPipelines[]) {
+			VkResult vkRes = vkCreateGraphicsPipelines(m_GpuDevice, VK_NULL_HANDLE, pipelineCount, pipelineCreateInfos, m_GpuAllocationCallbacks, outPipelines);
+			if (vkRes != VK_SUCCESS) {
+				m_ErrorCallback(this, ErrorOrigin::Vulkan, 
+					"failed to create graphics pipelines (function vkCreateGraphicsPipelines in function CreateGraphicsPipelines)!", vkRes);
+				return false;
+			}
+			return true;
 		}
 
 		struct DrawData {
