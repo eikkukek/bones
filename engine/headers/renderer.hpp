@@ -231,7 +231,7 @@ namespace engine {
 			bool Compile(const char* shaderCode, VkShaderStageFlagBits shaderStage) {
 
 				const glslang_resource_t resource {
-					.max_draw_buffers = m_Renderer.m_GpuMaxFragmentOutputAttachments,
+					.max_draw_buffers = (int)m_Renderer.m_GpuMaxFragmentOutputAttachments,
 				};
 
 				const glslang_input_t input = {
