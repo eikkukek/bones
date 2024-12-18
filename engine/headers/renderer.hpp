@@ -1,5 +1,6 @@
 #pragma once
 
+#include "math.hpp"
 #include "vulkan/vulkan.h"
 #define GLFW_INCLUDE_VULKAN
 #include "GLFW/glfw3.h"
@@ -228,6 +229,10 @@ namespace engine {
 			Shader(Renderer& renderer) noexcept 
 				: m_Renderer(renderer), m_GlslangShader(nullptr), m_GlslangProgram(nullptr) {}
 
+			bool NotCompiled() const {
+				return !m_GlslangShader || !m_GlslangProgram;
+			}
+
 			bool Compile(const char* shaderCode, VkShaderStageFlagBits shaderStage) {
 
 				const glslang_resource_t resource {
@@ -299,15 +304,11 @@ namespace engine {
 				}
 			}
 
-			bool NotCompiled() const {
-				return !m_GlslangShader || !m_GlslangProgram;
-			}
-
-			size_t GetBinarySize() const noexcept {
+			uint32_t GetCodeSize() const noexcept {
 				if (NotCompiled()) {
 					return 0;
 				}
-				return glslang_program_SPIRV_get_size(m_GlslangProgram);
+				return (uint32_t)glslang_program_SPIRV_get_size(m_GlslangProgram) * sizeof(uint32_t);
 			}
 
 			const unsigned int* GetBinary() const noexcept {
@@ -315,6 +316,27 @@ namespace engine {
 					return nullptr;
 				}
 				return glslang_program_SPIRV_get_ptr(m_GlslangProgram);
+			}
+
+			VkShaderModule CreateShaderModule() {
+				if (NotCompiled()) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, 
+						"attempting to create shader module with a shader (in function CreateShaderModule) with a shader that hasn't been compiled", VK_SUCCESS);
+					return VK_NULL_HANDLE;
+				}
+				VkShaderModuleCreateInfo createInfo {
+					.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.codeSize = GetCodeSize(),
+					.pCode = GetBinary(),
+				};
+				VkShaderModule res;	
+				if (!m_Renderer.VkCheck(vkCreateShaderModule(m_Renderer.m_GpuDevice, &createInfo, m_Renderer.m_GpuAllocationCallbacks, &res), 
+					"failed to create shader module (function vkCreateShaderModule in function Shader::CreateShaderModule)!")) {
+					return VK_NULL_HANDLE;
+				}
+				return res;
 			}
 
 			~Shader() {
@@ -327,6 +349,26 @@ namespace engine {
 					m_GlslangProgram = nullptr;
 				}
 			}
+		};
+
+		struct Vertex {
+			static void GetVertexAttributes(uint32_t& outCount, const VkVertexInputAttributeDescription** outAttributes) {
+				static constexpr uint32_t attribute_count = 5;
+				static constexpr VkVertexInputAttributeDescription attributes[attribute_count] {
+					{ .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Position) },
+					{ .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Normal) },
+					{ .location = 2, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, m_UV) },
+					{ .location = 3, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Tangent) },
+					{ .location = 4, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Bitangent) },
+				};
+				*outAttributes = attributes;
+				outCount = attribute_count;
+			}
+			Vec3 m_Position;
+			Vec3 m_Normal;
+			Vec2 m_UV;
+			Vec3 m_Tangent;
+			Vec3 m_Bitangent;
 		};
 
 		static constexpr uint32_t cexpr_desired_frames_in_flight = 2;
@@ -985,9 +1027,8 @@ namespace engine {
 				.pBindings = pBindings,
 			};
 			VkDescriptorSetLayout res;
-			VkResult vkRes = vkCreateDescriptorSetLayout(m_GpuDevice, &createInfo, m_GpuAllocationCallbacks, &res);
-			if (vkRes != VK_SUCCESS) {
-				m_ErrorCallback(this, ErrorOrigin::Vulkan, "failed to create descriptor set layout (function vkCreateDescriptorSetLayout in function CreateDescriptorSetLayout)!", vkRes);
+			if (!VkCheck(vkCreateDescriptorSetLayout(m_GpuDevice, &createInfo, m_GpuAllocationCallbacks, &res), 
+				"failed to create descriptor set layout (function vkCreateDescriptorSetLayout in function CreateDescriptorSetLayout)!")) {
 				return VK_NULL_HANDLE;
 			}
 			return res;
@@ -1011,9 +1052,7 @@ namespace engine {
 					"failed to allocate descriptor sets (function vkAllocateDescriptorSets in function AllocateDescriptorSets) because descriptor pool is out of memory!", vkRes);
 				return false;
 			}
-			else if (vkRes != VK_SUCCESS) {
-				m_ErrorCallback(this, ErrorOrigin::Vulkan, 
-					"failed to allocate descriptor sets (in function AllocateDescriptorSets)!", vkRes);
+			else if (!VkCheck(vkRes,"failed to allocate descriptor sets (in function AllocateDescriptorSets)!")) {
 				return false;
 			}
 			return true;
@@ -1031,20 +1070,16 @@ namespace engine {
 				.pPushConstantRanges = pPushConstantRanges,
 			};
 			VkPipelineLayout res;
-			VkResult vkRes = vkCreatePipelineLayout(m_GpuDevice, &createInfo, m_GpuAllocationCallbacks, &res);
-			if (vkRes != VK_SUCCESS) {
-				m_ErrorCallback(this, ErrorOrigin::Vulkan,
-					"failed to create pipeline layout (function vkCreatePipelineLayout in function CreatePipelineLayout)!", vkRes);
+			if (!VkCheck(vkCreatePipelineLayout(m_GpuDevice, &createInfo, m_GpuAllocationCallbacks, &res), 
+				"failed to create pipeline layout (function vkCreatePipelineLayout in function CreatePipelineLayout)!")) {
 				return VK_NULL_HANDLE;
 			}
 			return res;
 		}
 
 		bool CreateGraphicsPipelines(uint32_t pipelineCount, VkGraphicsPipelineCreateInfo pipelineCreateInfos[], VkPipeline outPipelines[]) {
-			VkResult vkRes = vkCreateGraphicsPipelines(m_GpuDevice, VK_NULL_HANDLE, pipelineCount, pipelineCreateInfos, m_GpuAllocationCallbacks, outPipelines);
-			if (vkRes != VK_SUCCESS) {
-				m_ErrorCallback(this, ErrorOrigin::Vulkan, 
-					"failed to create graphics pipelines (function vkCreateGraphicsPipelines in function CreateGraphicsPipelines)!", vkRes);
+			if (!VkCheck(vkCreateGraphicsPipelines(m_GpuDevice, VK_NULL_HANDLE, pipelineCount, pipelineCreateInfos, m_GpuAllocationCallbacks, outPipelines), 
+				"failed to create graphics pipelines (function vkCreateGraphicsPipelines in function CreateGraphicsPipelines)!")) {
 				return false;
 			}
 			return true;
@@ -1141,16 +1176,14 @@ namespace engine {
 				.pResults = nullptr,
 			};
 
-			VkResult result = vkQueuePresentKHR(m_GpuGraphicsQueue, &presentInfo);
+			VkResult vkRes = vkQueuePresentKHR(m_GpuGraphicsQueue, &presentInfo);
 
 			m_CurrentFrame = (m_CurrentFrame + 1) % m_FramesInFlight;
 
-			if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+			if (vkRes == VK_ERROR_OUT_OF_DATE_KHR || vkRes == VK_SUBOPTIMAL_KHR) {
 				RecreateSwapchain();
 			}
-			else if (result != VK_SUCCESS) {
-				m_ErrorCallback(this, ErrorOrigin::Vulkan, "failed to present image (function vkQueuePresentKHR in function EndFrame)!", result);
-			}
+			VkCheck(vkRes, "failed to present image (function vkQueuePresentKHR in function EndFrame)!");
 		}	
 	};
 }
