@@ -118,21 +118,21 @@ namespace engine {
 				return *this;
 			}
 
-			Iterator PushBack(const T& value) {
+			T& PushBack(const T& value) {
 				if (m_Size == m_Capacity) {
 					Reserve(m_Capacity * 2);
 				}
-				new(&m_Data[m_Size++]) T(value);
-				return &m_Data[m_Size];
+				new(&m_Data[m_Size]) T(value);
+				return m_Data[m_Size++];
 			}
 
 			template<typename... Args>
-			Iterator EmplaceBack(Args&&... args) {
+			T& EmplaceBack(Args&&... args) {
 				if (m_Size == m_Capacity) {
 					Reserve(m_Capacity * 2);
 				}
-				new(m_Data[m_Size++]) T(std::forward(args)...);
-				return &m_Data[m_Size];
+				new(&m_Data[m_Size]) T(std::forward(args)...);
+				return m_Data[m_Size++];
 			}
 
 			Iterator Erase(Iterator where) {
@@ -160,7 +160,7 @@ namespace engine {
 			}
 		};
 
-		template<typename T, typename Hash = T, size_t BucketCapacity = 4>
+		template<typename T, typename Hash = T, typename Compare = T, size_t BucketCapacity = 4>
 		class Set {
 		public:
 	
@@ -282,9 +282,29 @@ namespace engine {
 
 		public:
 
-			Set() : m_Buckets(nullptr), m_BucketSizes(nullptr), m_BucketIndices(), m_Capacity(0) {}
+			Set() noexcept 
+				: m_Buckets(nullptr), m_BucketSizes(nullptr), m_BucketIndices(), m_Capacity(0), m_Trash(0) {}
 
-			~Set() {
+			Set(const Set& other) noexcept
+				: m_Buckets(nullptr), m_BucketSizes(nullptr), m_BucketIndices(0),
+					m_Capacity(0), m_Trash(0) {
+				Reserve(m_Capacity);
+				for (const T& value : other) {
+					Insert(value);
+				}
+			}
+
+			Set(Set&& other) noexcept
+				: m_Buckets(other.m_Buckets), m_BucketSizes(other.m_BucketSizes), 
+					m_BucketIndices(std::move(other.m_BucketIndices)), m_Capacity(other.m_Capacity),
+					m_Trash(other.m_Trash) {
+				other.m_Buckets = nullptr;
+				other.m_BucketSizes = nullptr;
+				other.m_Capacity = 0;
+				other.m_Trash = 0;
+			}
+
+			~Set() noexcept {
 				delete[] m_Buckets;
 				m_BucketSizes = 0;
 				m_BucketIndices.Clear();
@@ -296,8 +316,9 @@ namespace engine {
 					return;
 				}
 				Bucket* tempBuckets = (Bucket*)malloc(sizeof(Bucket) * capacity);
-				size_t* tempBucketSizes = new size_t[capacity];
-				DynamicArray<size_t> tempBucketIndices;
+				assert(tempBuckets && "failed to allocate memory for set!");
+				size_t* tempBucketSizes = new size_t[capacity]{};
+				DynamicArray<size_t> tempBucketIndices{};
 				tempBucketIndices.Reserve(capacity);
 				for (T& value : *this) {
 					uint64_t hash;
@@ -339,13 +360,20 @@ namespace engine {
 				else {
 					hash = Hash()(value);
 				}
-				size_t index = hash & m_Capacity;
+				size_t index = hash & (m_Capacity - 1);
 				size_t& bucketSize = m_BucketSizes[index];
 				Bucket& bucket = m_Buckets[index];
 				if (bucketSize) {
 					for (size_t i = 0; i < bucketSize; i++) {
-						if (bucket[i] == value) {
-							return nullptr;
+						if constexpr (IsSame<T, Compare>::value) {
+							if (bucket[i] == value) {
+								return nullptr;
+							}
+						}	
+						else {
+							if (Compare::Eq(bucket[i], value)) {
+								return nullptr;
+							}
 						}
 					}
 					printf("bad hash (in function Engine::Set::Insert)!");
@@ -355,7 +383,7 @@ namespace engine {
 				}
 				new(&bucket[bucketSize]) T(value);
 				m_BucketIndices.PushBack(index);
-				return bucket[bucketSize++];
+				return &bucket[bucketSize++];
 			}
 
 			template<typename... Args>
@@ -374,13 +402,20 @@ namespace engine {
 				else {
 					hash = Hash()(value);
 				}
-				size_t index = hash & m_Capacity;
+				size_t index = hash & (m_Capacity - 1);
 				size_t& bucketSize = m_BucketSizes[index];
 				Bucket& bucket = m_Buckets[index];
 				if (bucketSize) {
 					for (size_t i = 0; i < bucketSize; i++) {
-						if (bucket[i] == value) {
-							return nullptr;
+						if constexpr (IsSame<T, Compare>::value) {
+							if (bucket[i] == value) {
+								return nullptr;
+							}
+						}	
+						else {
+							if (Compare::Eq(bucket[i], value)) {
+								return nullptr;
+							}
 						}
 					}
 					printf("bad hash (in function Engine::Set::Emplace)!");
@@ -390,7 +425,7 @@ namespace engine {
 				}
 				new(&bucket[bucketSize]) T(std::move(value));
 				m_BucketIndices.PushBack(index);
-				return bucket[bucketSize++];
+				return &bucket[bucketSize++];
 			}
 
 			void CleanUp() {
@@ -411,15 +446,24 @@ namespace engine {
 				else {
 					hash = Hash()(value);
 				}
-				size_t index = hash & m_Capacity;
+				size_t index = hash & (m_Capacity - 1);
 				size_t& bucketSize = m_BucketSizes[index];
 				Bucket& bucket = m_Buckets[index];
 				if (bucketSize) {
 					for (size_t i = 0; i < bucketSize; i++) {
-						if (bucket[i] == value) {
-							(&bucket[i])->~T();
-							--bucketSize;
-							return true;
+						if constexpr (IsSame<T, Compare>::value) {
+							if (bucket[i] == value) {
+								(&bucket[i])->~T();
+								--bucketSize;
+								return true;
+							}
+						}
+						else {
+							if (Compare::Eq(bucket[i], value)) {
+								(&bucket[i])->~T();
+								--bucketSize;
+								return true;
+							}
 						}
 					}
 				}
@@ -502,6 +546,23 @@ namespace engine {
 			uint64_t operator()() {
 				return StringHash(m_Data);
 			}
+
+			struct Hash {
+				uint64_t operator()(const char* str) {
+					return StringHash(str);
+				}
+			};	
+
+			struct Compare {
+
+				static bool Eq(const char* a, const char* b) {
+					return !strcmp(a, b);
+				}
+
+				static bool NotEq(const char* a, const char* b) {
+					return strcmp(a, b);
+				}
+			};
 		};
 
 		struct CameraData1 {
@@ -609,10 +670,19 @@ namespace engine {
 		};
 
 		struct GraphicsPipeline {
+
 			VkPipeline m_GpuPipeline;
 			VkPipelineLayout m_GpuPipelineLayout;
 			uint32_t m_DescriptorSetCount;
 			Set<Entity*, Entity::Hash> m_Entites;
+
+			GraphicsPipeline() 
+				: m_GpuPipeline(VK_NULL_HANDLE), m_GpuPipelineLayout(VK_NULL_HANDLE),
+					m_DescriptorSetCount(0), m_Entites() {}
+
+			GraphicsPipeline(GraphicsPipeline&& other) noexcept 
+				: m_GpuPipeline(other.m_GpuPipeline), m_GpuPipelineLayout(other.m_GpuPipelineLayout),
+					m_DescriptorSetCount(other.m_DescriptorSetCount), m_Entites(std::move(other.m_Entites)) {}
 		};
 
 		class EntityConstructor {
@@ -629,7 +699,7 @@ namespace engine {
 		EntityConstructor* const m_pEntityConstructors;	
 
 		Set<Entity*, Entity::Hash> m_Entities{};
-		DynamicArray<GraphicsPipeline> m_GraphicsPipelineDatas1{};
+		DynamicArray<GraphicsPipeline> m_GraphicsPipelines{};
 
 		Renderer m_Renderer;
 
@@ -669,6 +739,13 @@ namespace engine {
 			return true;
 		}
 
+		void CriticalError(ErrorOrigin origin, const char* err) {
+			printf("Engine called a critical error!\nError origin: %s\nError: %s\n", ErrorOriginStr(origin), err);
+			this->~Engine();
+			printf("Stopping program execution...\n");
+			exit(EXIT_FAILURE);
+		}	
+
 		Engine(const char* appName, GLFWwindow* window, size_t entityConstructorCount, EntityConstructor* pEntityConstructors, size_t entityReservation)
 			: m_Initialized(UpdateEngineInstance(this)), 
 				m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, RendererCriticalErrorCallback, RendererErrorCallback, SwapchainCreateCallback),
@@ -676,7 +753,7 @@ namespace engine {
 			m_Entities.Reserve(entityReservation);
 		}
 
-		~Engine() {
+		~Engine() {	
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
 			for (Entity* entity : m_Entities) {
@@ -685,12 +762,24 @@ namespace engine {
 			}
 		}
 
+		GraphicsPipeline& AddGraphicsPipeline(VkPipeline pipeline, VkPipelineLayout pipelineLayout, uint32_t descriptorSetCount, size_t entityReserve) {
+			if (pipeline == VK_NULL_HANDLE || pipelineLayout == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Uncategorized, "attempting to add graphics pipeline that's null (function AddGraphicsPipeline)!");
+			}
+			GraphicsPipeline& res = m_GraphicsPipelines.EmplaceBack();
+			res.m_GpuPipeline = pipeline;
+			res.m_GpuPipelineLayout = pipelineLayout;
+			res.m_DescriptorSetCount = descriptorSetCount;
+			res.m_Entites.Reserve(entityReserve);
+			return res;
+		}
+
 		void DrawLoop() {
 			Renderer::DrawData drawData;
 			if (m_Renderer.BeginFrame(drawData)) {
 				CameraData1* cameras[2] = { &m_GameCamera, &m_DebugCamera };
 				for (size_t i = 0; i < 2; i++) {
-					for (GraphicsPipeline& pipeline : m_GraphicsPipelineDatas1) {
+					for (GraphicsPipeline& pipeline : m_GraphicsPipelines) {
 						vkCmdBindPipeline(drawData.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_GpuPipeline);
 						for (Entity* entity : pipeline.m_Entites) {
 							VkDescriptorSet* pDescriptorSets = nullptr;
