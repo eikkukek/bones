@@ -21,6 +21,8 @@ namespace engine {
 	class Renderer {
 	public:
 
+		typedef void (*SwapchainCreateCallback)(const Renderer* renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews);
+
 		enum class ErrorOrigin {
 			Uncategorized = 0,
 			InitializationFailed = 1,
@@ -33,35 +35,12 @@ namespace engine {
 		};
 
 		typedef void (*ErrorCallback)(const Renderer* renderer, ErrorOrigin origin, const char* err, VkFlags vkErr);
-		typedef void (*SwapchainCreateCallback)(const Renderer* renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews);
 
-		static const char* ErrorOriginStr(ErrorOrigin origin) {
-			static constexpr const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
-				"Uncategorized",
-				"InitializationFailed",
-				"Vulkan",
-				"StackOutOfMemory",
-				"NullDereference",
-				"IndexOutOfBounds",
-				"Shader",
-			};
-			if (origin == ErrorOrigin::MaxEnum) {
-				return strings[0];
-			}
-			return strings[(size_t)origin];
-		}
-
-		static void PrintMessage(const char* msg) {
-			printf("renderer message: %s\n", msg);
-		}
-
-		static void PrintWarning(const char* warn) {
-			printf("renderer warning: %s\n", warn);
-		}
-
-		static void PrintError(const char* err, ErrorOrigin origin) {
-			printf("renderer error: %s error origin: %s\n", err, Renderer::ErrorOriginStr(origin));
-		}
+		enum class Queue {
+			Graphics = 0,
+			Transfer = 1,
+			Present = 2,
+		};
 
 		struct Stack {
 
@@ -351,6 +330,81 @@ namespace engine {
 			}
 		};
 
+		template<Queue queue_T>
+		struct CommandBuffer {
+			VkCommandBuffer m_GpuCommandBuffer{};
+		};
+
+		struct Buffer {
+
+			const Renderer& m_Renderer;
+			VkBuffer m_GpuBuffer;
+			VkDeviceMemory m_GpuDeviceMemory;
+			VkDeviceSize m_BufferSize;
+
+			Buffer(const Renderer& renderer) noexcept 
+				: m_Renderer(renderer), m_GpuBuffer(VK_NULL_HANDLE), m_GpuDeviceMemory(VK_NULL_HANDLE), m_BufferSize(0) {}
+
+			~Buffer() {
+				Terminate();
+			}
+
+			CommandBuffer<Queue::Transfer> CreateWithData(const void* data, VkDeviceSize size, VkBufferUsageFlags bufferUsage, VkMemoryPropertyFlags bufferProperties,
+				VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE, uint32_t queueFamilyIndexCount = 0, const uint32_t* pQueueFamilyIndices = nullptr) {
+				if (m_GpuBuffer != VK_NULL_HANDLE || m_GpuDeviceMemory != VK_NULL_HANDLE) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Uncategorized, 
+						"attempting to create buffer (in function Buffer::CreateWithData) when the buffer has already been created!", VK_SUCCESS);
+					return {};
+				}
+				VkBufferCreateInfo bufferInfo {
+					.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.size = size,
+					.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | bufferUsage,
+					.sharingMode = sharingMode,
+					.queueFamilyIndexCount = queueFamilyIndexCount,
+					.pQueueFamilyIndices = pQueueFamilyIndices,
+				};
+				if (!m_Renderer.VkCheck(vkCreateBuffer(m_Renderer.m_GpuDevice, &bufferInfo, m_Renderer.m_GpuAllocationCallbacks, &m_GpuBuffer),
+						"failed to create buffer (function vkCreateBuffer in function Buffer::CreateWithData)!")) {
+					m_GpuBuffer = VK_NULL_HANDLE;
+					return {};
+				}
+				VkMemoryRequirements memRequirements{};
+				vkGetBufferMemoryRequirements(m_Renderer.m_GpuDevice, m_GpuBuffer, &memRequirements);
+				VkMemoryAllocateInfo allocInfo {
+					.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+					.pNext = nullptr,
+					.allocationSize = memRequirements.size,
+				};
+				if (!m_Renderer.FindMemoryTypeIndex(memRequirements.memoryTypeBits, bufferProperties, allocInfo.memoryTypeIndex)) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Vulkan,
+						"failed to find memory type index when creating buffer (function FindMemoryTypeIndex in function Buffer::CreateWithData)!", VK_SUCCESS);
+					Terminate();
+					return {};
+				}
+				if (!m_Renderer.VkCheck(vkAllocateMemory(m_Renderer.m_GpuDevice, &allocInfo, m_Renderer.m_GpuAllocationCallbacks, &m_GpuDeviceMemory),
+						"failed to allocate memory for buffer (function vkAllocateMemory in function Buffer::CreateWithData)!")) {
+					Terminate();
+					return {};
+				}
+				if (!m_Renderer.VkCheck(vkBindBufferMemory(m_Renderer.m_GpuDevice, m_GpuBuffer, m_GpuDeviceMemory, 0),
+						"failed to bind buffer memory (function vkBindBufferMemory in function Buffer::CreateWithData)!")) {
+					Terminate();
+					return {};
+				}
+			}
+
+			void Terminate() {
+				vkFreeMemory(m_Renderer.m_GpuDevice, m_GpuDeviceMemory, m_Renderer.m_GpuAllocationCallbacks);
+				m_GpuDeviceMemory = VK_NULL_HANDLE;
+				vkDestroyBuffer(m_Renderer.m_GpuDevice, m_GpuBuffer, m_Renderer.m_GpuAllocationCallbacks);
+				m_GpuBuffer = VK_NULL_HANDLE;
+				m_BufferSize = 0;
+			}	
+		};
+
 		struct Vertex {
 			static void GetVertexAttributes(uint32_t& outCount, const VkVertexInputAttributeDescription** outAttributes) {
 				static constexpr uint32_t attribute_count = 5;
@@ -382,8 +436,32 @@ namespace engine {
 
 		static constexpr size_t max_model_descriptor_sets = 250000;
 
-		static bool GpuSucceeded(VkResult result) {
-			return result == VK_SUCCESS;
+		static const char* ErrorOriginStr(ErrorOrigin origin) {
+			static constexpr const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
+				"Uncategorized",
+				"InitializationFailed",
+				"Vulkan",
+				"StackOutOfMemory",
+				"NullDereference",
+				"IndexOutOfBounds",
+				"Shader",
+			};
+			if (origin == ErrorOrigin::MaxEnum) {
+				return strings[0];
+			}
+			return strings[(size_t)origin];
+		}
+
+		static void PrintMessage(const char* msg) {
+			printf("renderer message: %s\n", msg);
+		}
+
+		static void PrintWarning(const char* warn) {
+			printf("renderer warning: %s\n", warn);
+		}
+
+		static void PrintError(const char* err, ErrorOrigin origin) {
+			printf("renderer error: %s error origin: %s\n", err, Renderer::ErrorOriginStr(origin));
 		}
 
 		Stack m_SingleThreadStack;
@@ -1083,6 +1161,18 @@ namespace engine {
 				return false;
 			}
 			return true;
+		}
+
+		bool FindMemoryTypeIndex(uint32_t typeFilter, VkMemoryPropertyFlags properties, uint32_t& outIndex) const {
+			VkPhysicalDeviceMemoryProperties memProperties{};
+			vkGetPhysicalDeviceMemoryProperties(m_Gpu, &memProperties);
+			for (size_t i = 0; i < memProperties.memoryTypeCount; i++) {
+				if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+					outIndex = (uint32_t)i;
+					return true;
+				}
+			}
+			return false;
 		}
 
 		struct DrawData {
