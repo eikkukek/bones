@@ -18,6 +18,7 @@ add_subdirectory(libraries/glslang)
 
 add_library(engine STATIC
 	src/engine.cpp
+	src/renderer.cpp
 )
 
 target_link_libraries(engine vulkan glfw glslang)
