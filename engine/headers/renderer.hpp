@@ -11,6 +11,8 @@
 #include <cstring>
 #include <cstdio>
 #include <new>
+#include <thread>
+#include <mutex>
 
 namespace engine {
 
@@ -31,6 +33,8 @@ namespace engine {
 			NullDereference = 4,
 			IndexOutOfBounds = 5,
 			Shader = 6,
+			Buffer = 7,
+			Threading = 8,
 			MaxEnum,
 		};
 
@@ -102,34 +106,45 @@ namespace engine {
 				}
 			}
 
+			template<typename T, typename... Args>
+			T* AllocateSingle(Args&&... args) {
+				T* res = (T*)(m_Data + m_UsedSize);
+				if ((m_UsedSize += sizeof(T)) > m_MaxSize) {
+					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::StackOutOfMemory);
+					return nullptr;
+				}
+				new(res) T(std::forward(args)...);
+				return res;
+			}
+
 			template<typename T>
 			Array<T> Allocate(size_t count) {
-				T* ret = (T*)(m_Data + m_UsedSize);
+				T* res = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T) * count) > m_MaxSize) {
 					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::StackOutOfMemory);
 					return Array<T>(nullptr, 0);
 				}
-				T* iter = ret;
-				T* end = &ret[count];
+				T* iter = res;
+				T* end = &res[count];
 				for (; iter != end; iter++) {
 					new(iter) T();
 				}
-				return Array<T>(ret, count);
+				return Array<T>(res, count);
 			}
 
 			template<typename T>
 			bool Allocate(size_t count, Array<T>* out) {
-				T* ret = (T*)(m_Data + m_UsedSize);
+				T* res = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T) * count) > m_MaxSize) {
 					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::StackOutOfMemory);
 					return false;
 				}
-				T* iter = ret;
-				T* end = &ret[count];
+				T* iter = res;
+				T* end = &res[count];
 				for (; iter != end; iter++) {
 					new(iter) T();
 				}
-				new(out) Array<T>(ret, count);
+				new(out) Array<T>(res, count);
 				return true;
 			}
 
@@ -330,6 +345,53 @@ namespace engine {
 			}
 		};
 
+		struct Thread {
+
+			const Renderer& m_Renderer;
+			std::thread m_Thread;
+			const std::thread::id m_ID;
+			VkCommandPool m_GpuGraphicsCommandPool;
+			VkCommandPool m_GpuTransferCommandPool;
+
+			Thread(Renderer& renderer, std::thread&& thread) noexcept 
+				: m_Renderer(renderer), m_Thread(std::move(thread)), m_ID(thread.get_id()), 
+					m_GpuGraphicsCommandPool(VK_NULL_HANDLE), m_GpuTransferCommandPool(VK_NULL_HANDLE) {
+
+				VkCommandPoolCreateInfo graphicsCommandPoolInfo {
+					.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.queueFamilyIndex = m_Renderer.m_GpuGraphicsQueueFamilyIndex,
+				};
+
+				VkCommandPoolCreateInfo transferCommandPoolInfo {
+					.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.queueFamilyIndex = m_Renderer.m_GpuTransferQueueFamilyIndex,
+				};
+
+				m_Renderer.VkAssert(vkCreateCommandPool(m_Renderer.m_GpuDevice, &graphicsCommandPoolInfo, m_Renderer.m_GpuAllocationCallbacks, &m_GpuGraphicsCommandPool), 
+					"failed to create command pool for thread (function vkCreateCommandPool in Thread constructor)");
+
+				m_Renderer.VkAssert(vkCreateCommandPool(m_Renderer.m_GpuDevice, &transferCommandPoolInfo, m_Renderer.m_GpuAllocationCallbacks, &m_GpuTransferCommandPool), 
+					"failed to create command pool for thread (function vkCreateCommandPool in Thread constructor)");
+			}
+
+			void Terminate() {
+				if (std::this_thread::get_id() != m_Renderer.m_MainThreadID) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Threading, 
+						"attempting to terminate thread from a thread that isn't the programs main thread (in function Thread::Terminate)!", VK_SUCCESS);
+					return;
+				}
+				m_Thread.join();
+				vkDestroyCommandPool(m_Renderer.m_GpuDevice, m_GpuGraphicsCommandPool, m_Renderer.m_GpuAllocationCallbacks);
+				m_GpuGraphicsCommandPool = VK_NULL_HANDLE;
+				vkDestroyCommandPool(m_Renderer.m_GpuDevice, m_GpuTransferCommandPool, m_Renderer.m_GpuAllocationCallbacks);
+				m_GpuTransferCommandPool = VK_NULL_HANDLE;
+			}
+		};
+
 		template<Queue queue_T>
 		struct CommandBuffer {
 			VkCommandBuffer m_GpuCommandBuffer{};
@@ -349,12 +411,12 @@ namespace engine {
 				Terminate();
 			}
 
-			CommandBuffer<Queue::Transfer> CreateWithData(const void* data, VkDeviceSize size, VkBufferUsageFlags bufferUsage, VkMemoryPropertyFlags bufferProperties,
+			bool Create(VkDeviceSize size, VkBufferUsageFlags bufferUsage, VkMemoryPropertyFlags bufferProperties, 
 				VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE, uint32_t queueFamilyIndexCount = 0, const uint32_t* pQueueFamilyIndices = nullptr) {
 				if (m_GpuBuffer != VK_NULL_HANDLE || m_GpuDeviceMemory != VK_NULL_HANDLE) {
 					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Uncategorized, 
-						"attempting to create buffer (in function Buffer::CreateWithData) when the buffer has already been created!", VK_SUCCESS);
-					return {};
+						"attempting to create buffer (in function Buffer::Create) when the buffer has already been created!", VK_SUCCESS);
+					return false;
 				}
 				VkBufferCreateInfo bufferInfo {
 					.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -367,7 +429,7 @@ namespace engine {
 					.pQueueFamilyIndices = pQueueFamilyIndices,
 				};
 				if (!m_Renderer.VkCheck(vkCreateBuffer(m_Renderer.m_GpuDevice, &bufferInfo, m_Renderer.m_GpuAllocationCallbacks, &m_GpuBuffer),
-						"failed to create buffer (function vkCreateBuffer in function Buffer::CreateWithData)!")) {
+						"failed to create buffer (function vkCreateBuffer in function Buffer::Create)!")) {
 					m_GpuBuffer = VK_NULL_HANDLE;
 					return {};
 				}
@@ -380,20 +442,78 @@ namespace engine {
 				};
 				if (!m_Renderer.FindMemoryTypeIndex(memRequirements.memoryTypeBits, bufferProperties, allocInfo.memoryTypeIndex)) {
 					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Vulkan,
-						"failed to find memory type index when creating buffer (function FindMemoryTypeIndex in function Buffer::CreateWithData)!", VK_SUCCESS);
+						"failed to find memory type index when creating buffer (function FindMemoryTypeIndex in function Buffer::Create)!", VK_SUCCESS);
 					Terminate();
 					return {};
 				}
 				if (!m_Renderer.VkCheck(vkAllocateMemory(m_Renderer.m_GpuDevice, &allocInfo, m_Renderer.m_GpuAllocationCallbacks, &m_GpuDeviceMemory),
-						"failed to allocate memory for buffer (function vkAllocateMemory in function Buffer::CreateWithData)!")) {
+						"failed to allocate memory for buffer (function vkAllocateMemory in function Buffer::Create)!")) {
 					Terminate();
 					return {};
 				}
 				if (!m_Renderer.VkCheck(vkBindBufferMemory(m_Renderer.m_GpuDevice, m_GpuBuffer, m_GpuDeviceMemory, 0),
-						"failed to bind buffer memory (function vkBindBufferMemory in function Buffer::CreateWithData)!")) {
+						"failed to bind buffer memory (function vkBindBufferMemory in function Buffer::Create)!")) {
 					Terminate();
 					return {};
 				}
+				return true;
+			}
+
+			CommandBuffer<Queue::Transfer> CreateWithData(const void* data, VkDeviceSize size, VkBufferUsageFlags bufferUsage, VkMemoryPropertyFlags bufferProperties,
+				VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE, uint32_t queueFamilyIndexCount = 0, const uint32_t* pQueueFamilyIndices = nullptr) {
+				Buffer stagingBuffer(m_Renderer);
+				if (!stagingBuffer.Create(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Buffer, 
+						"failed to create buffer (function Buffer::Create in function Buffer::CreateWithData)!", VK_SUCCESS);
+				}
+
+				void* stagingMap;
+				vkMapMemory(m_Renderer.m_GpuDevice, stagingBuffer.m_GpuDeviceMemory, 0, size, 0, &stagingMap);
+				memcpy(stagingMap, data, size);
+				vkUnmapMemory(m_Renderer.m_GpuDevice, stagingBuffer.m_GpuDeviceMemory);
+
+				if (!Create(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | bufferUsage, bufferProperties, sharingMode, queueFamilyIndexCount, pQueueFamilyIndices)) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Buffer, 
+						"failed to create buffer (function Buffer::Create in function Buffer::CreateWithData)!", VK_SUCCESS);
+					return {};
+				}
+
+				VkCommandBufferAllocateInfo commandBufferAllocInfo {
+					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+					.pNext = nullptr,
+					.commandPool = m_Renderer.GetThisThreadCommandPool<Queue::Transfer>(),
+					.commandBufferCount = 1,
+				};
+				if (commandBufferAllocInfo.commandPool == VK_NULL_HANDLE) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Threading, 
+						"couldn't find command pool for thread (function GetThisThreadCommandPool in function Buffer::CreateWithData)!", VK_SUCCESS);
+					Terminate();
+					return{};
+				}
+				CommandBuffer<Queue::Transfer> ret;
+				if (!m_Renderer.VkCheck(vkAllocateCommandBuffers(m_Renderer.m_GpuDevice, &commandBufferAllocInfo, &ret.m_GpuCommandBuffer),
+						"failed to allocate command buffer for staging transfer (function vkAllocateCommandBuffers in function Buffer::CreateWithData)!")) {
+					Terminate();
+					return {};
+				}
+				VkCommandBufferBeginInfo commandBufferBeginInfo {
+					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.pInheritanceInfo = nullptr,
+				};
+				if (!m_Renderer.VkCheck(vkBeginCommandBuffer(ret.m_GpuCommandBuffer, &commandBufferBeginInfo), 
+						"failed to begin command buffer for staging transfer (function vkBeginCommandBuffer in function Buffer::CreateWithData)!")) {
+					Terminate();
+					return {};
+				}
+				VkBufferCopy copyRegion {
+					.srcOffset = 0,
+					.dstOffset = 0,
+					.size = size,
+				};
+				vkCmdCopyBuffer(ret.m_GpuCommandBuffer, stagingBuffer.m_GpuBuffer, m_GpuBuffer, 1, &copyRegion);
+				return ret;
 			}
 
 			void Terminate() {
@@ -433,10 +553,11 @@ namespace engine {
 		static constexpr size_t cexpr_in_flight_render_stack_size = 512;
 		static constexpr size_t cexpr_single_thread_stack_size = 524288;
 		static constexpr size_t cexpr_graphics_commands_stack_size = 32768;
+		static constexpr size_t cexpr_thread_stack_size = sizeof(Thread) * 256;
 
 		static constexpr size_t max_model_descriptor_sets = 250000;
 
-		static const char* ErrorOriginStr(ErrorOrigin origin) {
+		static const char* ErrorOriginString(ErrorOrigin origin) {
 			static constexpr const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
 				"Uncategorized",
 				"InitializationFailed",
@@ -445,6 +566,7 @@ namespace engine {
 				"NullDereference",
 				"IndexOutOfBounds",
 				"Shader",
+				"Buffer",
 			};
 			if (origin == ErrorOrigin::MaxEnum) {
 				return strings[0];
@@ -461,7 +583,7 @@ namespace engine {
 		}
 
 		static void PrintError(const char* err, ErrorOrigin origin) {
-			printf("renderer error: %s error origin: %s\n", err, Renderer::ErrorOriginStr(origin));
+			printf("renderer error: %s error origin: %s\n", err, Renderer::ErrorOriginString(origin));
 		}
 
 		Stack m_SingleThreadStack;
@@ -472,6 +594,10 @@ namespace engine {
 		VkDevice m_GpuDevice = VK_NULL_HANDLE;
 		VkAllocationCallbacks* m_GpuAllocationCallbacks = nullptr;
 		VkPhysicalDevice m_Gpu = VK_NULL_HANDLE;
+		Stack m_ThreadStack;
+		const std::thread::id m_MainThreadID;
+		VkCommandPool m_MainThreadGpuGraphicsCommandPool = VK_NULL_HANDLE;
+		VkCommandPool m_MainThreadGpuTransferCommandPool = VK_NULL_HANDLE;
 		VkSampleCountFlags m_GpuColorMsaaSamples = 1;
 		VkSampleCountFlags m_GpuDepthMsaaSamples = 1;
 		VkSurfaceKHR m_GpuSurface = VK_NULL_HANDLE;
@@ -497,7 +623,6 @@ namespace engine {
 		uint32_t m_GpuPresentQueueFamilyIndex = 0;
 
 		GLFWwindow* m_Window = nullptr;
-		VkCommandPool m_MainThreadGpuGraphicsCommandPool = VK_NULL_HANDLE;
 		VkSwapchainKHR m_GpuSwapchain = VK_NULL_HANDLE;
 		Stack::Array<VkImage> m_GpuSwapchainImages { 0, 0 };
 		VkSurfaceFormatKHR m_GpuSwapchainSurfaceFormat{};
@@ -537,6 +662,8 @@ namespace engine {
 			: m_SingleThreadStack((uint8_t*)malloc(cexpr_single_thread_stack_size), cexpr_single_thread_stack_size), 
 				m_InFlightRenderStack(m_InFlightRenderStackData, cexpr_in_flight_render_stack_size), m_Window(window),
 				m_GraphicsCommandsStack((uint8_t*)malloc(cexpr_graphics_commands_stack_size), cexpr_graphics_commands_stack_size),
+				m_ThreadStack(new uint8_t[cexpr_thread_stack_size]{}, cexpr_thread_stack_size),
+				m_MainThreadID(std::this_thread::get_id()),
 				m_CriticalErrorCallback(criticalErrorCallback), m_ErrorCallback(errorCallback), m_SwapchainCreateCallback(swapchainCreateCallback) {
 
 			assert(m_CriticalErrorCallback && "critical error callback was null (renderer)!");
@@ -561,10 +688,6 @@ namespace engine {
 						continue;
 					}
 				}
-			}
-
-			if (instanceExtensionsNotFoundCount) {
-				m_CriticalErrorCallback(this, ErrorOrigin::Vulkan, "couldn't find all the required vulkan instance extensions (in Renderer constructor)!", VK_SUCCESS);
 			}
 
 			bool includeGpuValidationLayer = false;
@@ -757,17 +880,25 @@ namespace engine {
 
 			m_SingleThreadStack.Clear();
 
-			VkCommandPoolCreateInfo renderCommandPoolInfo {
+			VkCommandPoolCreateInfo graphicsCommandPoolInfo {
 				.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
 				.pNext = nullptr,
 				.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
 				.queueFamilyIndex = m_GpuGraphicsQueueFamilyIndex,
 			};
 
-			if (!VkAssert(vkCreateCommandPool(m_GpuDevice, &renderCommandPoolInfo, m_GpuAllocationCallbacks, &m_MainThreadGpuGraphicsCommandPool), 
-					"failed to create render command pool (function vkCreateCommandPool in Renderer constructor)!")) {
-				return;
-			}
+			VkAssert(vkCreateCommandPool(m_GpuDevice, &graphicsCommandPoolInfo, m_GpuAllocationCallbacks, &m_MainThreadGpuGraphicsCommandPool),
+				"failed to create transfer command pool (function vkCreateCommandPool in Renderer constructor)!");
+
+			VkCommandPoolCreateInfo transferCommandPoolInfo {
+				.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+				.queueFamilyIndex = m_GpuGraphicsQueueFamilyIndex,
+			};
+
+			VkAssert(vkCreateCommandPool(m_GpuDevice, &transferCommandPoolInfo, m_GpuAllocationCallbacks, &m_MainThreadGpuTransferCommandPool),
+				"failed to create transfer command pool (function vkCreateCommandPool in Renderer constructor)!");
 
 			CreateSwapchain();
 
@@ -783,6 +914,63 @@ namespace engine {
 			Terminate();
 			free(m_SingleThreadStack.m_Data);
 			free(m_GraphicsCommandsStack.m_Data);
+		}
+
+		void Terminate() {
+			if (m_GpuDevice) {
+				m_ModelDescriptorPool.Terminate();
+				vkDeviceWaitIdle(m_GpuDevice);
+				for (size_t i = 0; i < m_FramesInFlight; i++) {
+					vkDestroyImageView(m_GpuDevice, m_GpuSwapchainImageViews[i] ? *m_GpuSwapchainImageViews[i] : nullptr, m_GpuAllocationCallbacks);
+					vkDestroySemaphore(m_GpuDevice, m_GpuRenderFinishedSemaphores[i] ? *m_GpuRenderFinishedSemaphores[i] : nullptr, m_GpuAllocationCallbacks);
+					vkDestroySemaphore(m_GpuDevice, m_GpuRenderWaitSemaphores[i] ? *m_GpuRenderWaitSemaphores[i] : nullptr, m_GpuAllocationCallbacks);
+					vkDestroyFence(m_GpuDevice, m_GpuInFlightFences[i] ? *m_GpuInFlightFences[i] : nullptr, m_GpuAllocationCallbacks);
+				}
+				vkDestroySwapchainKHR(m_GpuDevice, m_GpuSwapchain, m_GpuAllocationCallbacks);
+				vkDestroyCommandPool(m_GpuDevice, m_MainThreadGpuGraphicsCommandPool, m_GpuAllocationCallbacks);
+				vkDestroyCommandPool(m_GpuDevice, m_MainThreadGpuTransferCommandPool, m_GpuAllocationCallbacks);
+				Thread* const threadEnd = (Thread*)m_ThreadStack.m_Data + m_ThreadStack.m_UsedSize / sizeof(Thread);
+				for (Thread* iter = (Thread*)m_ThreadStack.m_Data; iter != threadEnd; iter++) {
+					iter->Terminate();
+				}
+				vkDestroyDevice(m_GpuDevice, m_GpuAllocationCallbacks);
+				m_GpuDevice = VK_NULL_HANDLE;
+			}
+			if (m_GpuInstance) {
+				vkDestroySurfaceKHR(m_GpuInstance, m_GpuSurface, m_GpuAllocationCallbacks);
+				m_GpuSurface = VK_NULL_HANDLE;
+				vkDestroyInstance(m_GpuInstance, m_GpuAllocationCallbacks);
+				m_GpuInstance = VK_NULL_HANDLE;
+			}
+		}
+
+		template<Queue queue_T>
+		VkCommandPool GetThisThreadCommandPool() const {
+			static_assert(queue_T != Queue::Present, "invalid queue for function Renderer::GetThisThreadCommandPool");
+			std::thread::id threadID = std::this_thread::get_id();
+			if (threadID == m_MainThreadID) {
+				if constexpr (queue_T == Queue::Graphics) {
+					return m_MainThreadGpuGraphicsCommandPool;
+				}
+				else if (queue_T == Queue::Transfer){
+					return m_MainThreadGpuTransferCommandPool;
+				}
+			}
+			else {
+				Thread* iter = (Thread*)m_ThreadStack.m_Data;
+				Thread* const end = iter + m_ThreadStack.m_UsedSize / sizeof(Thread);
+				for (; iter != end; iter++) {
+					if (iter->m_ID == threadID) {
+						if constexpr (queue_T == Queue::Graphics) {
+							return iter->m_GpuGraphicsCommandPool;
+						}
+						else if (queue_T == Queue::Transfer) {
+							return iter->m_GpuTransferCommandPool;
+						}
+					}
+				}
+			}
+			return VK_NULL_HANDLE;
 		}
 
 		void CreateSwapchain() {
@@ -1068,29 +1256,6 @@ namespace engine {
 			}
 		}
 
-		void Terminate() {
-			if (m_GpuDevice) {
-				m_ModelDescriptorPool.Terminate();
-				vkDeviceWaitIdle(m_GpuDevice);
-				for (size_t i = 0; i < m_FramesInFlight; i++) {
-					vkDestroyImageView(m_GpuDevice, m_GpuSwapchainImageViews[i] ? *m_GpuSwapchainImageViews[i] : nullptr, m_GpuAllocationCallbacks);
-					vkDestroySemaphore(m_GpuDevice, m_GpuRenderFinishedSemaphores[i] ? *m_GpuRenderFinishedSemaphores[i] : nullptr, m_GpuAllocationCallbacks);
-					vkDestroySemaphore(m_GpuDevice, m_GpuRenderWaitSemaphores[i] ? *m_GpuRenderWaitSemaphores[i] : nullptr, m_GpuAllocationCallbacks);
-					vkDestroyFence(m_GpuDevice, m_GpuInFlightFences[i] ? *m_GpuInFlightFences[i] : nullptr, m_GpuAllocationCallbacks);
-				}
-				vkDestroySwapchainKHR(m_GpuDevice, m_GpuSwapchain, m_GpuAllocationCallbacks);
-				vkDestroyCommandPool(m_GpuDevice, m_MainThreadGpuGraphicsCommandPool, m_GpuAllocationCallbacks);
-				vkDestroyDevice(m_GpuDevice, m_GpuAllocationCallbacks);
-				m_GpuDevice = VK_NULL_HANDLE;
-			}
-			if (m_GpuInstance) {
-				vkDestroySurfaceKHR(m_GpuInstance, m_GpuSurface, m_GpuAllocationCallbacks);
-				m_GpuSurface = VK_NULL_HANDLE;
-				vkDestroyInstance(m_GpuInstance, m_GpuAllocationCallbacks);
-				m_GpuInstance = VK_NULL_HANDLE;
-			}
-		}
-
 		void RecreateSwapchain() {
 			vkDestroySwapchainKHR(m_GpuDevice, m_GpuSwapchain, m_GpuAllocationCallbacks);
 			CreateSwapchain();
@@ -1244,7 +1409,7 @@ namespace engine {
 				},
 				{
 					.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-					.commandBufferCount = (uint32_t)m_GraphicsCommandsStack.m_UsedSize / sizeof(VkCommandBuffer),
+					.commandBufferCount = (uint32_t)m_GraphicsCommandsStack.m_UsedSize / (uint32_t)sizeof(VkCommandBuffer),
 					.pCommandBuffers = (VkCommandBuffer*)m_GraphicsCommandsStack.m_Data,
 				},
 			};

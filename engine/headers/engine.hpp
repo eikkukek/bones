@@ -25,6 +25,16 @@ namespace engine {
 
 		typedef uint64_t UID;
 
+		template<typename T, typename U>
+		struct IsSame {
+			static constexpr bool value = false;
+		};
+
+		template<typename T>
+		struct IsSame<T, T> {
+			static constexpr bool value = true;
+		};
+
 		enum class ErrorOrigin {
 			Uncategorized = 0,
 			Vulkan = 1,
@@ -34,7 +44,7 @@ namespace engine {
 			MaxEnum,
 		};
 
-		static const char* ErrorOriginStr(ErrorOrigin origin) {
+		static const char* ErrorOriginString(ErrorOrigin origin) {
 			const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
 				"Uncategorized",
 				"Vulkan",
@@ -49,21 +59,11 @@ namespace engine {
 		}
 
 		static void PrintError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS) {
-			printf("Engine called an error!\nError origin: %s\nError: %s\n", ErrorOriginStr(origin), err);
+			printf("Engine called an error!\nError origin: %s\nError: %s\n", ErrorOriginString(origin), err);
 			if (vkErr != VK_SUCCESS) {
 				printf("Vulkan error code: %i\n", (int)vkErr);
 			}
 		}
-
-		template<typename T, typename U>
-		struct IsSame {
-			static constexpr bool value = false;
-		};
-
-		template<typename T>
-		struct IsSame<T, T> {
-			static constexpr bool value = true;
-		};
 
 		template<typename T>
 		class DynamicArray {
@@ -281,17 +281,18 @@ namespace engine {
 			size_t* m_BucketSizes;
 			DynamicArray<size_t> m_BucketIndices;
 			size_t m_Capacity;
+			size_t m_Size;
 			size_t m_Trash;
 
 		public:
 
 			Set() noexcept 
-				: m_Buckets(nullptr), m_BucketSizes(nullptr), m_BucketIndices(), m_Capacity(0), m_Trash(0) {}
+				: m_Buckets(nullptr), m_BucketSizes(nullptr), m_BucketIndices(), m_Capacity(0), m_Size(0), m_Trash(0) {}
 
 			Set(const Set& other) noexcept
 				: m_Buckets(nullptr), m_BucketSizes(nullptr), m_BucketIndices(0),
-					m_Capacity(0), m_Trash(0) {
-				Reserve(m_Capacity);
+					m_Capacity(0), m_Size(0), m_Trash(0) {
+				Reserve(other.m_Capacity);
 				for (const T& value : other) {
 					Insert(value);
 				}
@@ -300,11 +301,12 @@ namespace engine {
 			Set(Set&& other) noexcept
 				: m_Buckets(other.m_Buckets), m_BucketSizes(other.m_BucketSizes), 
 					m_BucketIndices(std::move(other.m_BucketIndices)), m_Capacity(other.m_Capacity),
-					m_Trash(other.m_Trash) {
+					m_Size(other.m_Size), m_Trash(other.m_Trash) {
 				other.m_Buckets = nullptr;
 				other.m_BucketSizes = nullptr;
 				other.m_Capacity = 0;
 				other.m_Trash = 0;
+				other.m_Size = 0;
 			}
 
 			~Set() noexcept {
@@ -316,6 +318,7 @@ namespace engine {
 				m_BucketSizes = 0;
 				m_BucketIndices.Clear();
 				m_Capacity = 0;
+				m_Size = 0;
 			}
 
 			void Reserve(size_t capacity) {
@@ -357,7 +360,7 @@ namespace engine {
 				if (!m_Capacity) {
 					Reserve(128);
 				}
-				if ((double)m_BucketIndices.Size() / m_Capacity >= 0.8) {
+				if ((float)m_BucketIndices.Size() / m_Capacity >= 0.8) {
 					Reserve(m_Capacity * 2);
 				}
 				uint64_t hash;
@@ -390,6 +393,7 @@ namespace engine {
 				}
 				new(&bucket[bucketSize]) T(value);
 				m_BucketIndices.PushBack(index);
+				++m_Size;
 				return &bucket[bucketSize++];
 			}
 
@@ -398,7 +402,7 @@ namespace engine {
 				if (!m_Capacity) {
 					Reserve(128);
 				}
-				if ((double)m_BucketIndices.Size() / m_Capacity >= 0.8) {
+				if ((float)m_BucketIndices.Size() / m_Capacity >= 0.8) {
 					Reserve(m_Capacity * 2);
 				}
 				T value(std::forward(args)...);
@@ -432,6 +436,7 @@ namespace engine {
 				}
 				new(&bucket[bucketSize]) T(std::move(value));
 				m_BucketIndices.PushBack(index);
+				++m_Size;
 				return &bucket[bucketSize++];
 			}
 
@@ -443,6 +448,7 @@ namespace engine {
 					}
 					++iter;
 				}
+				m_Trash = 0;
 			}
 
 			bool Erase(const T& value) {
@@ -462,6 +468,11 @@ namespace engine {
 							if (bucket[i] == value) {
 								(&bucket[i])->~T();
 								--bucketSize;
+								++m_Trash;
+								--m_Size;
+								if ((float)m_Trash / m_Capacity >= 0.25) {
+									CleanUp();
+								}
 								return true;
 							}
 						}
@@ -469,15 +480,16 @@ namespace engine {
 							if (Compare::Eq(bucket[i], value)) {
 								(&bucket[i])->~T();
 								--bucketSize;
+								++m_Trash;
+								--m_Size;
+								if ((float)m_Trash / m_Capacity >= 0.25) {
+									CleanUp();
+								}
 								return true;
 							}
 						}
 					}
 				}
-				++m_Trash;
-				if ((double)m_Trash / m_Capacity >= 0.25) {
-					CleanUp();
-				}	
 				return false;
 			}
 
@@ -716,7 +728,7 @@ namespace engine {
 		CameraData2 m_DebugCameraData2{};
 
 		static void RendererCriticalErrorCallback(const Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkFlags vkErr) {
-			printf("Renderer called a critical error!\nError origin: %s\nError: %s\n", Renderer::ErrorOriginStr(origin), err);
+			printf("Renderer called a critical error!\nError origin: %s\nError: %s\n", Renderer::ErrorOriginString(origin), err);
 			if (vkErr != VK_SUCCESS) {
 				printf("Vulkan error code: %i\n", (int)vkErr); 
 			}
@@ -728,7 +740,7 @@ namespace engine {
 		}
 
 		static void RendererErrorCallback(const Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkFlags vkErr) {
-			printf("Renderer called an error!\nError origin: %s\nError: %s\n", Renderer::ErrorOriginStr(origin), err);
+			printf("Renderer called an error!\nError origin: %s\nError: %s\n", Renderer::ErrorOriginString(origin), err);
 			if (vkErr != VK_SUCCESS) {
 				printf("Vulkan error code: %i\n", (int)vkErr); 
 			}
@@ -747,7 +759,7 @@ namespace engine {
 		}
 
 		void CriticalError(ErrorOrigin origin, const char* err) {
-			printf("Engine called a critical error!\nError origin: %s\nError: %s\n", ErrorOriginStr(origin), err);
+			printf("Engine called a critical error!\nError origin: %s\nError: %s\n", ErrorOriginString(origin), err);
 			this->~Engine();
 			printf("Stopping program execution...\n");
 			exit(EXIT_FAILURE);
