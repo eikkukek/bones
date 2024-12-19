@@ -86,7 +86,10 @@ namespace engine {
 			}
 
 			~DynamicArray() {
-				delete[] m_Data;
+				for (size_t i = 0; i < m_Size; i++) {
+					(&m_Data[i])->~T();
+				}
+				free(m_Data);
 				m_Data = nullptr;
 				m_Size = 0;
 				m_Capacity = 0;
@@ -100,18 +103,18 @@ namespace engine {
 				if (capacity < m_Capacity) {
 					return *this;
 				}
-				T* temp = new T[capacity];
+				T* temp = (T*)malloc(sizeof(T) * capacity);
 				for (size_t i = 0; i < m_Size; i++) {
 					new(&temp[i]) T(std::move(m_Data[i]));
 				}
-				delete[] m_Data;
+				free(m_Data);
 				m_Capacity = capacity;
 				m_Data = temp;
 				return *this;
 			}
 
 			DynamicArray& Clear() {
-				delete[] m_Data;
+				free(m_Data);
 				m_Data = nullptr;
 				m_Size = 0;
 				m_Capacity = 0;
@@ -120,7 +123,7 @@ namespace engine {
 
 			T& PushBack(const T& value) {
 				if (m_Size == m_Capacity) {
-					Reserve(m_Capacity * 2);
+					Reserve(m_Capacity ? m_Capacity * 2 : 2);
 				}
 				new(&m_Data[m_Size]) T(value);
 				return m_Data[m_Size++];
@@ -129,7 +132,7 @@ namespace engine {
 			template<typename... Args>
 			T& EmplaceBack(Args&&... args) {
 				if (m_Size == m_Capacity) {
-					Reserve(m_Capacity * 2);
+					Reserve(m_Capacity ? m_Capacity * 2 : 2);
 				}
 				new(&m_Data[m_Size]) T(std::forward(args)...);
 				return m_Data[m_Size++];
@@ -305,7 +308,11 @@ namespace engine {
 			}
 
 			~Set() noexcept {
-				delete[] m_Buckets;
+				for (T& value : *this) {
+					(&value)->~T();
+				}
+				free(m_Buckets);
+				delete[] m_BucketSizes;
 				m_BucketSizes = 0;
 				m_BucketIndices.Clear();
 				m_Capacity = 0;
@@ -753,7 +760,7 @@ namespace engine {
 			m_Entities.Reserve(entityReservation);
 		}
 
-		~Engine() {	
+		~Engine() {
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
 			for (Entity* entity : m_Entities) {

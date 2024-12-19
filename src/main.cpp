@@ -221,10 +221,12 @@ int main() {
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
 	Engine engine("Test", pWindow, 0, nullptr, 1000);
 	TestPipeline testPipeline(engine.m_Renderer);
+	engine.AddGraphicsPipeline(testPipeline.m_GpuPipeline, testPipeline.m_GpuPipelineLayout, 0, 1000);
 	while (!glfwWindowShouldClose(pWindow)) {
 		glfwPollEvents();
 		engine.DrawLoop();
-	}
-	glfwTerminate();
+	}	
+	vkDeviceWaitIdle(engine.m_Renderer.m_GpuDevice);	
 	testPipeline.Terminate();
+	glfwTerminate();
 }
