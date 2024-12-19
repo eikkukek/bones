@@ -1273,7 +1273,9 @@ namespace engine {
 			if (vkRes == VK_ERROR_OUT_OF_DATE_KHR || vkRes == VK_SUBOPTIMAL_KHR) {
 				RecreateSwapchain();
 			}
-			VkCheck(vkRes, "failed to present image (function vkQueuePresentKHR in function EndFrame)!");
+			else {
+				VkCheck(vkRes, "failed to present image (function vkQueuePresentKHR in function EndFrame)!");
+			}
 		}	
 	};
 }
