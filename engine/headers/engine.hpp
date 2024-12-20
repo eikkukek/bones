@@ -134,7 +134,7 @@ namespace engine {
 				if (m_Size == m_Capacity) {
 					Reserve(m_Capacity ? m_Capacity * 2 : 2);
 				}
-				new(&m_Data[m_Size]) T(std::forward(args)...);
+				new(&m_Data[m_Size]) T(std::forward<Args>(args)...);
 				return m_Data[m_Size++];
 			}
 
@@ -290,7 +290,7 @@ namespace engine {
 				: m_Buckets(nullptr), m_BucketSizes(nullptr), m_BucketIndices(), m_Capacity(0), m_Size(0), m_Trash(0) {}
 
 			Set(const Set& other) noexcept
-				: m_Buckets(nullptr), m_BucketSizes(nullptr), m_BucketIndices(0),
+				: m_Buckets(nullptr), m_BucketSizes(nullptr), m_BucketIndices(),
 					m_Capacity(0), m_Size(0), m_Trash(0) {
 				Reserve(other.m_Capacity);
 				for (const T& value : other) {
@@ -756,13 +756,6 @@ namespace engine {
 			}
 			s_engine_instance = engine;
 			return true;
-		}
-
-		void CriticalError(ErrorOrigin origin, const char* err) {
-			printf("Engine called a critical error!\nError origin: %s\nError: %s\n", ErrorOriginString(origin), err);
-			this->~Engine();
-			printf("Stopping program execution...\n");
-			exit(EXIT_FAILURE);
 		}	
 
 		Engine(const char* appName, GLFWwindow* window, size_t entityConstructorCount, EntityConstructor* pEntityConstructors, size_t entityReservation)
@@ -779,6 +772,20 @@ namespace engine {
 				entity->Terminate();
 				m_EntityAllocator.Deallocate(entity);
 			}
+		}
+
+		void CriticalError(ErrorOrigin origin, const char* err) {
+			printf("Engine called a critical error!\nError origin: %s\nError: %s\n", ErrorOriginString(origin), err);
+			this->~Engine();
+			printf("Stopping program execution...\n");
+			exit(EXIT_FAILURE);
+		}
+
+		template<typename VertexType>
+		void CreateVertexBuffer(size_t vertexCount, VertexType* pVertices, Renderer::Buffer& outVertexBuffer) {
+		}
+
+		void CreateIndexBuffer(size_t indexCount, uint32_t* pIndices, Renderer::Buffer& outIndexBuffer) {
 		}
 
 		GraphicsPipeline& AddGraphicsPipeline(VkPipeline pipeline, VkPipelineLayout pipelineLayout, uint32_t descriptorSetCount, size_t entityReserve) {
