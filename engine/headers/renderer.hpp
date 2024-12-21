@@ -31,7 +31,7 @@ namespace engine {
 			Uncategorized = 0,
 			InitializationFailed = 1,
 			Vulkan = 2,
-			StackOutOfMemory = 3,
+			OutOfMemory = 3,
 			NullDereference = 4,
 			IndexOutOfBounds = 5,
 			Shader = 6,
@@ -112,7 +112,7 @@ namespace engine {
 			T* AllocateSingle(Args&&... args) {
 				T* res = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T)) > m_MaxSize) {
-					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::StackOutOfMemory);
+					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::OutOfMemory);
 					return nullptr;
 				}
 				new(res) T(std::forward<Args>(args)...);
@@ -123,7 +123,7 @@ namespace engine {
 			Array<T> Allocate(size_t count) {
 				T* res = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T) * count) > m_MaxSize) {
-					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::StackOutOfMemory);
+					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::OutOfMemory);
 					return Array<T>(0, nullptr);
 				}
 				T* iter = res;
@@ -138,7 +138,7 @@ namespace engine {
 			bool Allocate(size_t count, Array<T>* out) {
 				T* res = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T) * count) > m_MaxSize) {
-					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::StackOutOfMemory);
+					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::OutOfMemory);
 					return false;
 				}
 				T* iter = res;
@@ -157,7 +157,7 @@ namespace engine {
 				}
 				*out = m_Data + m_UsedSize;
 				if ((m_UsedSize += size) > m_MaxSize) {
-					PrintError("stack out of memory (function Stack::Allocate)!", ErrorOrigin::StackOutOfMemory);
+					PrintError("stack out of memory (function Stack::Allocate)!", ErrorOrigin::OutOfMemory);
 					return false;
 				}
 				return true;
@@ -360,28 +360,111 @@ namespace engine {
 			}
 		};
 
-		template<Queue queue_T>
-		struct CommandBuffer {
-			VkCommandBuffer m_GpuCommandBuffer{};
+		struct CommandBufferFreeList {
+
+			static constexpr size_t max_command_buffers_per_frame = 1000;
+
+			const Renderer& m_Renderer;
+			VkCommandPool m_GpuCommandPool;
+			uint32_t m_FramesInFlight; 
+			VkCommandBuffer(*m_Data)[max_command_buffers_per_frame];
+			uint32_t* m_Counts;
+
+			CommandBufferFreeList(Renderer& renderer)
+				: m_Renderer(renderer), m_FramesInFlight(0), m_Data(nullptr), m_Counts(nullptr) {}
+
+			~CommandBufferFreeList() {
+				FreeAll();
+				free(m_Data);
+				delete[] m_Counts;
+			}
+
+			void Initialize(VkCommandPool commandPool) {
+				if (m_FramesInFlight != 0) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::InitializationFailed, 
+						"attempting to initialize command buffer free list more than once (function CommandBufferFreeList::Initialize)!",
+						VK_SUCCESS);
+					return;
+				}
+				m_GpuCommandPool = commandPool;
+				m_FramesInFlight = m_Renderer.m_FramesInFlight;
+				m_Data = (VkCommandBuffer(*)[max_command_buffers_per_frame])malloc(m_FramesInFlight 
+					* sizeof(VkCommandBuffer[max_command_buffers_per_frame]));
+				m_Counts = new uint32_t[m_FramesInFlight]{};
+			}
+
+			void Reallocate() {
+				FreeAll();
+				if (m_FramesInFlight != m_Renderer.m_FramesInFlight) {
+					m_FramesInFlight = m_Renderer.m_FramesInFlight;
+					free(m_Data);
+					delete[] m_Counts;
+					m_Data = (VkCommandBuffer(*)[max_command_buffers_per_frame])malloc(m_FramesInFlight 
+						* sizeof(VkCommandBuffer[max_command_buffers_per_frame]));
+					m_Counts = new uint32_t[m_FramesInFlight]{};
+				}
+			}
+
+			void Push(VkCommandBuffer commandBuffer, uint32_t currentFrame) {
+				if (currentFrame >= m_FramesInFlight) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::IndexOutOfBounds, 
+						"current frame goes out of bounds of command buffer free list frames in flight (function CommandBufferFreeList::Push)!", 
+						VK_SUCCESS);
+					return;
+				}
+				uint32_t& count = m_Counts[currentFrame];
+				if (count >= max_command_buffers_per_frame) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::OutOfMemory, 
+						"command buffer free list was out of memory (function CommandBufferFreeList::Push)!", VK_SUCCESS);
+					return;
+				}
+				m_Data[currentFrame][count++] = commandBuffer;
+			}
+
+			void Free(uint32_t currentFrame) {
+				if (currentFrame >= m_FramesInFlight) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::IndexOutOfBounds, 
+						"current frame goes out of bounds of command buffer free list frames in flight (function CommandBufferFreeList::Push)!", 
+						VK_SUCCESS);
+					return;
+				}
+				uint32_t& count = m_Counts[currentFrame];
+				if (count) {
+					vkFreeCommandBuffers(m_Renderer.m_GpuDevice, m_GpuCommandPool, 
+						count, m_Data[currentFrame]);
+					count = 0;
+				}
+			}
+
+			void FreeAll() {
+				for (uint32_t i = 0; i < m_FramesInFlight; i++) {
+					uint32_t& count = m_Counts[i];
+					if (count) {
+						vkFreeCommandBuffers(m_Renderer.m_GpuDevice, m_GpuCommandPool, 
+							count, m_Data[i]);
+						count = 0;
+					}
+				}
+			}
 		};
 
 		struct Thread {
 
-			static constexpr size_t cexpr_max_free_command_buffer_count = 1000;
+			static constexpr size_t max_free_command_buffer_count = 1000;
 
 			Renderer& m_Renderer;
+			std::mutex m_Mutex{};
 			std::thread m_Thread;
 			const std::thread::id m_ID;
 			VkCommandPool m_GpuGraphicsCommandPool;
 			VkCommandPool m_GpuTransferCommandPool;
-			Stack::Array<VkCommandBuffer> m_FreeGpuGraphicsCommandBuffers { 0, nullptr };
-			size_t m_FreeGpuGraphicsCommandBuffersCount = 0;
-			Stack::Array<VkCommandBuffer> m_FreeGpuTransferCommandBuffers { 0, nullptr };
-			size_t m_FreeGpuTransferCommandBuffersCount = 0;
+			CommandBufferFreeList m_GraphicsCommandBufferFreeList;
+			CommandBufferFreeList m_TransferCommandBufferFreeList;
 
 			Thread(Renderer& renderer, std::thread&& thread) noexcept 
 				: m_Renderer(renderer), m_Thread(std::move(thread)), m_ID(thread.get_id()), 
-					m_GpuGraphicsCommandPool(VK_NULL_HANDLE), m_GpuTransferCommandPool(VK_NULL_HANDLE) {
+					m_GpuGraphicsCommandPool(VK_NULL_HANDLE), m_GpuTransferCommandPool(VK_NULL_HANDLE),
+					m_GraphicsCommandBufferFreeList(m_Renderer), m_TransferCommandBufferFreeList(m_Renderer) {
 				VkCommandPoolCreateInfo graphicsCommandPoolInfo {
 					.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
 					.pNext = nullptr,
@@ -402,60 +485,8 @@ namespace engine {
 				m_Renderer.VkAssert(vkCreateCommandPool(m_Renderer.m_GpuDevice, &transferCommandPoolInfo, m_Renderer.m_GpuAllocationCallbacks, &m_GpuTransferCommandPool), 
 					"failed to create command pool for thread (function vkCreateCommandPool in Thread constructor)");
 
-				CreateFreeCommandBuffers();
-			}
-
-			void FreeCommandBuffers() {
-				if (m_FreeGpuGraphicsCommandBuffersCount) {
-					vkFreeCommandBuffers(m_Renderer.m_GpuDevice, m_GpuGraphicsCommandPool, m_FreeGpuGraphicsCommandBuffersCount,
-						m_FreeGpuGraphicsCommandBuffers.m_Data);
-				}
-				if (m_FreeGpuTransferCommandBuffersCount) {
-					vkFreeCommandBuffers(m_Renderer.m_GpuDevice, m_GpuTransferCommandPool, m_FreeGpuTransferCommandBuffersCount, 
-						m_FreeGpuTransferCommandBuffers.m_Data);
-				}
-				m_FreeGpuGraphicsCommandBuffersCount = 0;
-				m_FreeGpuTransferCommandBuffersCount = 0;
-			}
-
-			void CreateFreeCommandBuffers() {
-				FreeCommandBuffers();
-				size_t count = cexpr_max_free_command_buffer_count;
-				if (!m_Renderer.m_InFlightRenderStack.Allocate<VkCommandBuffer>(count, &m_FreeGpuGraphicsCommandBuffers)) {
-					m_Renderer.m_CriticalErrorCallback(&m_Renderer, ErrorOrigin::StackOutOfMemory, 
-						"in flight stack was out of memory", VK_SUCCESS);
-				}
-				if (!m_Renderer.m_InFlightRenderStack.Allocate<VkCommandBuffer>(count, &m_FreeGpuTransferCommandBuffers)) {
-					m_Renderer.m_CriticalErrorCallback(&m_Renderer, ErrorOrigin::StackOutOfMemory, 
-						"in flight stack was out of memory", VK_SUCCESS);
-				}
-			}
-
-			template<Queue queue_T>
-			bool PushFreeCommandBuffer(CommandBuffer<queue_T> commandBuffer) {
-				LockGuard lockGuard(m_Renderer.m_ThreadStackMutex);
-				static_assert(queue_T != Queue::Present, "invalid queue for Thread::PushFreeCommandBuffer");
-				if constexpr (queue_T == Queue::Graphics) {
-					if (m_FreeGpuGraphicsCommandBuffersCount >= m_FreeGpuGraphicsCommandBuffersCount.m_Size) {
-						m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Vulkan, 
-							"free graphics commandbuffers array was full!", VK_SUCCESS);
-						return false;
-					}
-					else {
-						*m_FreeGpuGraphicsCommandBuffers[m_FreeGpuGraphicsCommandBuffersCount++] = commandBuffer.m_GpuCommandBuffer;
-					}
-				}
-				else {
-					if (m_FreeGpuTransferCommandBuffersCount >= m_FreeGpuTransferCommandBuffers.m_Size) {
-						m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Vulkan, 
-							"free transfer commandbuffers array was full!", VK_SUCCESS);
-						return false;
-					}
-					else {
-						*m_FreeGpuTransferCommandBuffers[m_FreeGpuTransferCommandBuffersCount++] = commandBuffer.m_GpuCommandBuffer;
-					}
-				}
-				return true;
+				m_GraphicsCommandBufferFreeList.Initialize(m_GpuGraphicsCommandPool);
+				m_TransferCommandBufferFreeList.Initialize(m_GpuTransferCommandPool);
 			}
 
 			void Terminate() {
@@ -465,11 +496,25 @@ namespace engine {
 					return;
 				}
 				m_Thread.join();
+				m_GraphicsCommandBufferFreeList.FreeAll();
+				m_TransferCommandBufferFreeList.FreeAll();
 				vkDestroyCommandPool(m_Renderer.m_GpuDevice, m_GpuGraphicsCommandPool, m_Renderer.m_GpuAllocationCallbacks);
 				m_GpuGraphicsCommandPool = VK_NULL_HANDLE;
 				vkDestroyCommandPool(m_Renderer.m_GpuDevice, m_GpuTransferCommandPool, m_Renderer.m_GpuAllocationCallbacks);
 				m_GpuTransferCommandPool = VK_NULL_HANDLE;
 			}
+		};
+
+
+		template<Queue queue_T>
+		struct CommandBuffer {
+			enum class AfterSubmit {
+				DoNothing = 0,
+				Free = 1,
+			};
+			VkCommandBuffer m_GpuCommandBuffer{};
+			Thread* m_Thread{};
+			AfterSubmit m_AfterSubmit{};
 		};
 
 		struct Buffer {
@@ -621,22 +666,22 @@ namespace engine {
 			Vec3 m_Bitangent;
 		};
 
-		static constexpr uint32_t cexpr_desired_frames_in_flight = 2;
-		static constexpr const char* cexpr_gpu_validation_layer_name = "VK_LAYER_KHRONOS_validation";
-		static constexpr const char* cexpr_gpu_dynamic_rendering_extension_name = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
-		static constexpr const char* cexpr_gpu_timeline_semaphore_extension_name = VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME;
-		static constexpr const char* cexpr_gpu_swapchain_extension_name = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+		static constexpr uint32_t desired_frames_in_flight = 2;
+		static constexpr const char* gpu_validation_layer_name = "VK_LAYER_KHRONOS_validation";
+		static constexpr const char* gpu_dynamic_rendering_extension_name = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
+		static constexpr const char* gpu_timeline_semaphore_extension_name = VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME;
+		static constexpr const char* gpu_swapchain_extension_name = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 
-		static constexpr size_t cexpr_single_thread_stack_size = 524288;
-		static constexpr size_t cexpr_max_thread_count = 256;
-		static constexpr size_t cexpr_thread_stack_size = sizeof(Thread) * cexpr_max_thread_count;
-		static constexpr size_t cexpr_max_pending_graphics_command_buffer_count = 250000;
-		static constexpr size_t cexpr_max_pending_transfer_command_buffer_count = 250000;
-		static constexpr size_t cexpr_graphics_command_buffer_stack_size 
-			= sizeof(CommandBuffer<Queue::Graphics>) * cexpr_max_pending_graphics_command_buffer_count;
-		static constexpr size_t cexpr_transfer_command_buffer_stack_size 
-			= sizeof(CommandBuffer<Queue::Transfer>) * cexpr_max_pending_transfer_command_buffer_count;
-		static constexpr size_t cexpr_in_flight_render_stack_size = 512 + cexpr_max_thread_count * 8 * 1000 * 2;
+		static constexpr size_t single_thread_stack_size = 524288;
+		static constexpr size_t max_thread_count = 256;
+		static constexpr size_t thread_stack_size = sizeof(Thread) * max_thread_count;
+		static constexpr size_t max_pending_graphics_command_buffer_count = 250000;
+		static constexpr size_t max_pending_transfer_command_buffer_count = 250000;
+		static constexpr size_t graphics_command_buffer_stack_size 
+			= sizeof(CommandBuffer<Queue::Graphics>) * max_pending_graphics_command_buffer_count;
+		static constexpr size_t transfer_command_buffer_stack_size 
+			= sizeof(CommandBuffer<Queue::Transfer>) * max_pending_transfer_command_buffer_count;
+		static constexpr size_t in_flight_render_stack_size = 512 + max_thread_count * 8 * 1000 * 2;
 
 		static constexpr size_t max_model_descriptor_sets = 250000;
 
@@ -645,7 +690,7 @@ namespace engine {
 				"Uncategorized",
 				"InitializationFailed",
 				"Vulkan",
-				"StackOutOfMemory",
+				"OutOfMemory",
 				"NullDereference",
 				"IndexOutOfBounds",
 				"Shader",
@@ -677,13 +722,11 @@ namespace engine {
 		VkPhysicalDevice m_Gpu = VK_NULL_HANDLE;
 		std::mutex m_ThreadStackMutex{};
 		const std::thread::id m_MainThreadID;
-		Stack::Array<VkCommandBuffer> m_MainThreadFreeGpuGraphicsCommandBuffers { 0, nullptr };
-		size_t m_MainThreadFreeGpuGraphicsCommandBuffersCount = 0;
-		Stack::Array<VkCommandBuffer> m_MainThreadFreeGpuTransferCommandBuffers { 0, nullptr };
-		size_t m_MainThreadFreeGpuTransferCommandBuffersCount = 0;
+		CommandBufferFreeList m_GraphicsCommandBufferFreeList;
+		CommandBufferFreeList m_TransferCommandBufferFreeList;
 		Stack m_ThreadStack;
-		VkCommandPool m_MainThreadGpuGraphicsCommandPool = VK_NULL_HANDLE;
-		VkCommandPool m_MainThreadGpuTransferCommandPool = VK_NULL_HANDLE;
+		VkCommandPool m_GpuGraphicsCommandPool = VK_NULL_HANDLE;
+		VkCommandPool m_GpuTransferCommandPool = VK_NULL_HANDLE;
 
 		Stack m_GraphicsQueueCommandBuffersStack;
 		std::mutex m_GraphicsQueueCommandBuffersStackMutex{};
@@ -753,11 +796,13 @@ namespace engine {
 		}
 
 		Renderer(const char* appName, uint32_t appVersion, GLFWwindow* window, ErrorCallback criticalErrorCallback, ErrorCallback errorCallback, SwapchainCreateCallback swapchainCreateCallback)
-			: m_SingleThreadStack(cexpr_single_thread_stack_size, (uint8_t*)malloc(cexpr_single_thread_stack_size)), 
-				m_InFlightRenderStack(cexpr_in_flight_render_stack_size, (uint8_t*)malloc(cexpr_in_flight_render_stack_size)), m_Window(window),
-				m_ThreadStack(cexpr_thread_stack_size, (uint8_t*)malloc(cexpr_thread_stack_size)),
-				m_GraphicsQueueCommandBuffersStack(cexpr_graphics_command_buffer_stack_size, (uint8_t*)malloc(cexpr_graphics_command_buffer_stack_size)),
-				m_TransferQueueCommandBuffersStack(cexpr_transfer_command_buffer_stack_size, (uint8_t*)malloc(cexpr_transfer_command_buffer_stack_size)),
+			: m_SingleThreadStack(single_thread_stack_size, (uint8_t*)malloc(single_thread_stack_size)), 
+				m_InFlightRenderStack(in_flight_render_stack_size, (uint8_t*)malloc(in_flight_render_stack_size)), m_Window(window),
+				m_ThreadStack(thread_stack_size, (uint8_t*)malloc(thread_stack_size)),
+				m_GraphicsQueueCommandBuffersStack(graphics_command_buffer_stack_size, (uint8_t*)malloc(graphics_command_buffer_stack_size)),
+				m_TransferQueueCommandBuffersStack(transfer_command_buffer_stack_size, (uint8_t*)malloc(transfer_command_buffer_stack_size)),
+				m_GraphicsCommandBufferFreeList(*this),
+				m_TransferCommandBufferFreeList(*this),
 				m_MainThreadID(std::this_thread::get_id()),
 				m_CriticalErrorCallback(criticalErrorCallback), m_ErrorCallback(errorCallback), m_SwapchainCreateCallback(swapchainCreateCallback) {
 
@@ -794,7 +839,7 @@ namespace engine {
 				Stack::Array<VkLayerProperties> availableGpuInstanceLayers = m_SingleThreadStack.Allocate<VkLayerProperties>(availableInstanceLayerCount);
 				vkEnumerateInstanceLayerProperties(&availableInstanceLayerCount, availableGpuInstanceLayers.m_Data);
 				for (VkLayerProperties& layer : availableGpuInstanceLayers) {
-					if (!strcmp(layer.layerName, cexpr_gpu_validation_layer_name)) {
+					if (!strcmp(layer.layerName, gpu_validation_layer_name)) {
 						includeGpuValidationLayer = true;
 						break;
 					}
@@ -820,7 +865,7 @@ namespace engine {
 				.flags = 0,
 				.pApplicationInfo = &appInfo,
 				.enabledLayerCount = includeGpuValidationLayer ? 1U : 0U,
-				.ppEnabledLayerNames = includeGpuValidationLayer ? &cexpr_gpu_validation_layer_name : nullptr,
+				.ppEnabledLayerNames = includeGpuValidationLayer ? &gpu_validation_layer_name : nullptr,
 				.enabledExtensionCount = instanceExtensionCount,
 				.ppEnabledExtensionNames = instanceExtensions,
 			};
@@ -867,10 +912,10 @@ namespace engine {
 					if (dynamicRenderingExtensionFound && timelineSemaphoreExtensionFound) {
 						break;
 					}
-					if (!dynamicRenderingExtensionFound && !strcmp(cexpr_gpu_dynamic_rendering_extension_name, extension.extensionName)) {
+					if (!dynamicRenderingExtensionFound && !strcmp(gpu_dynamic_rendering_extension_name, extension.extensionName)) {
 						dynamicRenderingExtensionFound = true;
 					}
-					if (!timelineSemaphoreExtensionFound && !strcmp(cexpr_gpu_timeline_semaphore_extension_name, extension.extensionName)) {
+					if (!timelineSemaphoreExtensionFound && !strcmp(gpu_timeline_semaphore_extension_name, extension.extensionName)) {
 						timelineSemaphoreExtensionFound = true;
 					}
 				}
@@ -976,7 +1021,7 @@ namespace engine {
 				.queueCreateInfoCount = 3,
 				.pQueueCreateInfos = deviceQueueInfos,
 				.enabledExtensionCount = 1,
-				.ppEnabledExtensionNames = &cexpr_gpu_swapchain_extension_name,
+				.ppEnabledExtensionNames = &gpu_swapchain_extension_name,
 				.pEnabledFeatures = &gpuFeatures,
 			};
 
@@ -997,7 +1042,7 @@ namespace engine {
 				.queueFamilyIndex = m_GpuGraphicsQueueFamilyIndex,
 			};
 
-			VkAssert(vkCreateCommandPool(m_GpuDevice, &graphicsCommandPoolInfo, m_GpuAllocationCallbacks, &m_MainThreadGpuGraphicsCommandPool),
+			VkAssert(vkCreateCommandPool(m_GpuDevice, &graphicsCommandPoolInfo, m_GpuAllocationCallbacks, &m_GpuGraphicsCommandPool),
 				"failed to create transfer command pool (function vkCreateCommandPool in Renderer constructor)!");
 
 			VkCommandPoolCreateInfo transferCommandPoolInfo {
@@ -1007,10 +1052,13 @@ namespace engine {
 				.queueFamilyIndex = m_GpuGraphicsQueueFamilyIndex,
 			};
 
-			VkAssert(vkCreateCommandPool(m_GpuDevice, &transferCommandPoolInfo, m_GpuAllocationCallbacks, &m_MainThreadGpuTransferCommandPool),
+			VkAssert(vkCreateCommandPool(m_GpuDevice, &transferCommandPoolInfo, m_GpuAllocationCallbacks, &m_GpuTransferCommandPool),
 				"failed to create transfer command pool (function vkCreateCommandPool in Renderer constructor)!");
 
 			CreateSwapchain();
+
+			m_GraphicsCommandBufferFreeList.Initialize(m_GpuGraphicsCommandPool);
+			m_TransferCommandBufferFreeList.Initialize(m_GpuTransferCommandPool);
 
 			VkDescriptorPoolSize modelPoolSize {
 				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -1040,8 +1088,8 @@ namespace engine {
 					vkDestroyFence(m_GpuDevice, m_GpuInFlightFences[i] ? *m_GpuInFlightFences[i] : nullptr, m_GpuAllocationCallbacks);
 				}
 				vkDestroySwapchainKHR(m_GpuDevice, m_GpuSwapchain, m_GpuAllocationCallbacks);
-				vkDestroyCommandPool(m_GpuDevice, m_MainThreadGpuGraphicsCommandPool, m_GpuAllocationCallbacks);
-				vkDestroyCommandPool(m_GpuDevice, m_MainThreadGpuTransferCommandPool, m_GpuAllocationCallbacks);
+				vkDestroyCommandPool(m_GpuDevice, m_GpuGraphicsCommandPool, m_GpuAllocationCallbacks);
+				vkDestroyCommandPool(m_GpuDevice, m_GpuTransferCommandPool, m_GpuAllocationCallbacks);
 				Thread* const threadEnd = (Thread*)m_ThreadStack.m_Data + m_ThreadStack.m_UsedSize / sizeof(Thread);
 				for (Thread* iter = (Thread*)m_ThreadStack.m_Data; iter != threadEnd; iter++) {
 					iter->Terminate();
@@ -1063,10 +1111,10 @@ namespace engine {
 			std::thread::id threadID = std::this_thread::get_id();
 			if (threadID == m_MainThreadID) {
 				if constexpr (queue_T == Queue::Graphics) {
-					return m_MainThreadGpuGraphicsCommandPool;
+					return m_GpuGraphicsCommandPool;
 				}
 				else if (queue_T == Queue::Transfer){
-					return m_MainThreadGpuTransferCommandPool;
+					return m_GpuTransferCommandPool;
 				}
 			}
 			else {
@@ -1096,59 +1144,6 @@ namespace engine {
 		void TransferGraphicsCommandBufferSubmit(const CommandBuffer<Queue::Transfer>& commandBuffer) {
 			LockGuard lockGuard(m_TransferQueueCommandBuffersStackMutex);
 			m_TransferQueueCommandBuffersStack.AllocateSingle<CommandBuffer<Queue::Transfer>>(commandBuffer);
-		}
-
-		template<Queue queue_T>
-		bool PushFreeCommandBuffer(CommandBuffer<queue_T> commandBuffer) {
-			static_assert(queue_T != Queue::Present, "invalid queue for Thread::PushFreeCommandBuffer");
-			if constexpr (queue_T == Queue::Graphics) {
-				if (m_MainThreadFreeGpuGraphicsCommandBuffersCount >= m_MainThreadFreeGpuGraphicsCommandBuffers.m_Size) {
-					m_ErrorCallback(this, ErrorOrigin::Vulkan, 
-						"free graphics commandbuffers array was full!", VK_SUCCESS);
-					return false;
-				}
-				else {
-					*m_MainThreadFreeGpuGraphicsCommandBuffers[m_MainThreadFreeGpuGraphicsCommandBuffersCount++] = commandBuffer.m_GpuCommandBuffer;
-				}
-			}
-			else {
-				if (m_MainThreadFreeGpuTransferCommandBuffersCount >= m_MainThreadFreeGpuTransferCommandBuffers.m_Size) {
-					m_ErrorCallback(this, ErrorOrigin::Vulkan, 
-						"free transfer commandbuffers array was full!", VK_SUCCESS);
-					return false;
-				}
-				else {
-					*m_MainThreadFreeGpuTransferCommandBuffers[m_MainThreadFreeGpuTransferCommandBuffersCount++] = commandBuffer.m_GpuCommandBuffer;
-				}
-			}
-			return true;
-		}
-
-		void FreeMainThreadCommandBuffers() {
-			if (m_MainThreadFreeGpuGraphicsCommandBuffersCount) {
-				vkFreeCommandBuffers(m_GpuDevice, m_MainThreadGpuGraphicsCommandPool, m_MainThreadFreeGpuGraphicsCommandBuffersCount, 
-					m_MainThreadFreeGpuGraphicsCommandBuffers.m_Data);
-			}
-			if (m_MainThreadFreeGpuTransferCommandBuffersCount) {
-				vkFreeCommandBuffers(m_GpuDevice, m_MainThreadGpuGraphicsCommandPool, m_MainThreadFreeGpuTransferCommandBuffersCount, 
-					m_MainThreadFreeGpuTransferCommandBuffers.m_Data);
-			}
-			m_MainThreadFreeGpuGraphicsCommandBuffersCount = 0;
-			m_MainThreadFreeGpuTransferCommandBuffersCount = 0;
-		}
-
-		void CreateFreeMainThreadCommandBuffers() {
-			FreeMainThreadCommandBuffers();
-			if (!m_InFlightRenderStack.Allocate<VkCommandBuffer>(Thread::cexpr_max_free_command_buffer_count, 
-				&m_MainThreadFreeGpuGraphicsCommandBuffers)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, 
-					"in flight stack was out of memory (in function CreateFreeMainThreadCommandBuffers)!", VK_SUCCESS);
-			}
-			if (!m_InFlightRenderStack.Allocate<VkCommandBuffer>(Thread::cexpr_max_free_command_buffer_count, 
-				&m_MainThreadFreeGpuTransferCommandBuffers)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, 
-					"in flight stack was out of memory (in function CreateFreeMainThreadCommandBuffers)!", VK_SUCCESS);
-			}
 		}
 
 		void CreateSwapchain() {
@@ -1221,7 +1216,7 @@ namespace engine {
 				m_GpuSwapchainExtent = actualExtent;
 			}
 
-			m_FramesInFlight = clamp(cexpr_desired_frames_in_flight, surfaceCapabilities.minImageCount, surfaceCapabilities.maxImageCount);
+			m_FramesInFlight = clamp(desired_frames_in_flight, surfaceCapabilities.minImageCount, surfaceCapabilities.maxImageCount);
 
 			uint32_t queueFamilyIndices[2] {
 				m_GpuGraphicsQueueFamilyIndex,
@@ -1266,21 +1261,11 @@ namespace engine {
 				vkDestroyFence(m_GpuDevice, *m_GpuInFlightFences[i], m_GpuAllocationCallbacks);
 			}
 
-
-			LockGuard threadsLockGuard(m_ThreadStackMutex);
-
 			m_InFlightRenderStack.Clear();
-
-			CreateFreeMainThreadCommandBuffers();
-
-			Thread* const threadsEnd = (Thread*)(m_ThreadStack.m_Data + m_ThreadStack.m_UsedSize);
-			for (Thread* iter = (Thread*)m_ThreadStack.m_Data; iter != threadsEnd; iter++) {
-				iter->CreateFreeCommandBuffers();
-			}
 
 			vkGetSwapchainImagesKHR(m_GpuDevice, m_GpuSwapchain, &m_FramesInFlight, nullptr);
 			if (!m_InFlightRenderStack.Allocate<VkImage>(m_FramesInFlight, &m_GpuSwapchainImages)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", 0);
+				m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", 0);
 				return;
 			}
 			vkGetSwapchainImagesKHR(m_GpuDevice, m_GpuSwapchain, &m_FramesInFlight, m_GpuSwapchainImages.m_Data);
@@ -1290,14 +1275,14 @@ namespace engine {
 				!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_GpuRenderWaitSemaphores) ||
 				!m_InFlightRenderStack.Allocate<VkFence>(m_FramesInFlight, &m_GpuInFlightFences) ||
 				!m_InFlightRenderStack.Allocate<VkCommandBuffer>(m_FramesInFlight, &m_GpuRenderCommandBuffers)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, 
+				m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
 					"in flight stack was out of memory (in function CreateSwapchain)!", 0);
 			}
 
 			VkCommandBufferAllocateInfo renderCommandBufferAllocInfo {
 				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 				.pNext = nullptr,
-				.commandPool = m_MainThreadGpuGraphicsCommandPool,
+				.commandPool = m_GpuGraphicsCommandPool,
 				.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
 				.commandBufferCount = m_FramesInFlight,
 			};
@@ -1378,7 +1363,7 @@ namespace engine {
 
 			CommandBuffer<Queue::Graphics>* transitionCommandBuffer = m_GraphicsQueueCommandBuffersStack.AllocateSingle<CommandBuffer<Queue::Graphics>>();
 			if (!transitionCommandBuffer) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, 
+				m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
 					"graphics commands stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
 				return;
 			}
@@ -1386,7 +1371,7 @@ namespace engine {
 			VkCommandBufferAllocateInfo transitionCommandBuffersAllocInfo{
 				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 				.pNext = nullptr,
-				.commandPool = m_MainThreadGpuGraphicsCommandPool,
+				.commandPool = m_GpuGraphicsCommandPool,
 				.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
 				.commandBufferCount = 1,
 			};
@@ -1403,15 +1388,14 @@ namespace engine {
 				.pInheritanceInfo = nullptr,
 			};
 
-			if (!VkAssert(vkBeginCommandBuffer(transitionCommandBuffer->m_GpuCommandBuffer, &transitionBeginInfo), 
-					"failed to begin swapchain image view layout transition command buffer (function vkBeginCommandBuffer in function CreateSwapchain)")) {
-				return;
-			}
+			VkAssert(vkBeginCommandBuffer(transitionCommandBuffer->m_GpuCommandBuffer, &transitionBeginInfo),
+				"failed to begin swapchain image view layout transition command buffer (function vkBeginCommandBuffer in function CreateSwapchain)");
 
 			Stack::Array<VkImageMemoryBarrier> imageMemoryBarriers = m_SingleThreadStack.Allocate<VkImageMemoryBarrier>(m_FramesInFlight);
 
 			if (!imageMemoryBarriers.m_Data) {
-				m_CriticalErrorCallback(this, ErrorOrigin::StackOutOfMemory, "single thread stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
+					"single thread stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
 				return;
 			}
 
@@ -1437,15 +1421,22 @@ namespace engine {
 			vkCmdPipelineBarrier(transitionCommandBuffer->m_GpuCommandBuffer,
 				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 
 				imageMemoryBarriers.m_Size, imageMemoryBarriers.m_Data);
-			if (!VkAssert(vkEndCommandBuffer(transitionCommandBuffer->m_GpuCommandBuffer), 
-					"failed to end swapchain image view layout transition command buffer (function vkEndCommandBuffer in function CreateSwapchain)")) {
-				return;
-			}
+			VkAssert(vkEndCommandBuffer(transitionCommandBuffer->m_GpuCommandBuffer),
+				"failed to end swapchain image view layout transition command buffer (function vkEndCommandBuffer in function CreateSwapchain)");
+			transitionCommandBuffer->m_AfterSubmit = CommandBuffer<Queue::Graphics>::AfterSubmit::Free;
 		}
 
 		void RecreateSwapchain() {
 			vkDestroySwapchainKHR(m_GpuDevice, m_GpuSwapchain, m_GpuAllocationCallbacks);
+			LockGuard threadsLockGuard(m_ThreadStackMutex);
 			CreateSwapchain();
+			Thread* const threadsEnd = (Thread*)(m_ThreadStack.m_Data + m_ThreadStack.m_UsedSize);
+			for (Thread* iter = (Thread*)m_ThreadStack.m_Data; iter != threadsEnd; iter++) {
+				iter->m_GraphicsCommandBufferFreeList.Reallocate();
+				iter->m_TransferCommandBufferFreeList.Reallocate();
+			}
+			m_GraphicsCommandBufferFreeList.Reallocate();
+			m_TransferCommandBufferFreeList.Reallocate();
 		}
 
 		VkDescriptorSetLayout CreateDescriptorSetLayout(uint32_t bindingCount, VkDescriptorSetLayoutBinding* pBindings) const {
@@ -1545,6 +1536,15 @@ namespace engine {
 			if (!VkCheck(vkWaitForFences(m_GpuDevice, 1, m_GpuInFlightFences[m_CurrentFrame], VK_TRUE, frame_timeout), "failed to wait for in flight fence (in function BeginFrame)!")) {
 				return false;
 			}
+			m_GraphicsCommandBufferFreeList.Free(m_CurrentFrame);
+			{
+				LockGuard lockGuard(m_ThreadStackMutex);
+				Thread* const end = (Thread*)(m_ThreadStack.m_Data + m_ThreadStack.m_UsedSize);
+				for (Thread* iter = (Thread*)m_ThreadStack.m_Data; iter != end; iter++) {
+					LockGuard lockGuard(iter->m_Mutex);
+					iter->m_GraphicsCommandBufferFreeList.Free(m_CurrentFrame);
+				}
+			}
 			uint32_t imageIndex;
 			VkResult result = vkAcquireNextImageKHR(m_GpuDevice, m_GpuSwapchain, frame_timeout, 
 					*m_GpuRenderWaitSemaphores[m_CurrentFrame], VK_NULL_HANDLE , &imageIndex);
@@ -1583,7 +1583,25 @@ namespace engine {
 
 			VkPipelineStageFlags waitStagesRender[1] { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 
-			LockGuard graphiscCommandBuffersLockGuard(m_GraphicsQueueCommandBuffersStackMutex);
+			LockGuard graphicsCommandBuffersLockGuard(m_GraphicsQueueCommandBuffersStackMutex);
+
+			uint32_t graphicsCommandBufferCount = m_GraphicsQueueCommandBuffersStack.m_UsedSize / sizeof(CommandBuffer<Queue::Graphics>);
+
+			Stack::Array<VkCommandBuffer> graphicsCommandBuffers = m_SingleThreadStack.Allocate<VkCommandBuffer>(graphicsCommandBufferCount);
+
+			for (uint32_t i = 0; i < graphicsCommandBufferCount; i++) {
+				CommandBuffer<Queue::Graphics>& commandBuffer = ((CommandBuffer<Queue::Graphics>*)m_GraphicsQueueCommandBuffersStack.m_Data)[i];
+				*graphicsCommandBuffers[i] = commandBuffer.m_GpuCommandBuffer;
+				if (commandBuffer.m_AfterSubmit == CommandBuffer<Queue::Graphics>::AfterSubmit::Free) {
+					if (commandBuffer.m_Thread) {
+						LockGuard lockGuard(commandBuffer.m_Thread->m_Mutex);
+						commandBuffer.m_Thread->m_GraphicsCommandBufferFreeList.Push(commandBuffer.m_GpuCommandBuffer, m_CurrentFrame);
+					}
+					else {
+						m_GraphicsCommandBufferFreeList.Push(commandBuffer.m_GpuCommandBuffer, m_CurrentFrame);
+					}
+				}
+			}
 
 			VkSubmitInfo submits[2]{
 				{
@@ -1599,8 +1617,8 @@ namespace engine {
 				},
 				{
 					.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-					.commandBufferCount = (uint32_t)m_GraphicsQueueCommandBuffersStack.m_UsedSize / (uint32_t)sizeof(VkCommandBuffer),
-					.pCommandBuffers = (VkCommandBuffer*)m_GraphicsQueueCommandBuffersStack.m_Data,
+					.commandBufferCount = graphicsCommandBufferCount,
+					.pCommandBuffers = graphicsCommandBuffers.m_Data,
 				}
 			};
 
