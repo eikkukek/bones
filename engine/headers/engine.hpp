@@ -611,10 +611,10 @@ namespace engine {
 		class Entity {
 		public:
 
-			static constexpr size_t cexpr_name_max_length = 63;
+			static constexpr size_t name_max_length = 63;
 
 			const size_t c_ClassSize;
-			char m_Name[cexpr_name_max_length + 1];
+			char m_Name[name_max_length + 1];
 			size_t m_NameLength;
 			const UID m_UID;
 			Engine* const m_pEngine;
@@ -623,11 +623,11 @@ namespace engine {
 			Entity(Engine* pEngine, const char* name, UID UID, size_t classSize) noexcept 
 				: m_pEngine(pEngine), c_ClassSize(classSize), m_UID(UID) {
 				size_t len = strlen(name);
-				if (len > cexpr_name_max_length) {
+				if (len > name_max_length) {
 					PrintError(ErrorOrigin::Entity, "given entity name is longer than entity name max size (in Entity constructor)!");
 				}
 				size_t i = 0;
-				for (; i < len && i < cexpr_name_max_length; i++) {
+				for (; i < len && i < name_max_length; i++) {
 					m_Name[i] = name[i];
 				}
 				m_Name[i] = '\0';
@@ -637,7 +637,7 @@ namespace engine {
 			Entity(Engine* pEngine, FILE* file, UID UID, size_t classSize) noexcept : m_pEngine(pEngine), c_ClassSize(classSize), m_UID(UID) {
 				char c = fgetchar();
 				size_t i = 0;
-				for (; i < cexpr_name_max_length && c != '\n'; i++) {
+				for (; i < name_max_length && c != '\n'; i++) {
 					m_Name[i] = c;
 					c = fgetchar();
 				}
