@@ -1,5 +1,4 @@
 #include "engine.hpp"
-#include "renderer.hpp"
 
 using namespace engine;
 
@@ -74,7 +73,7 @@ void main() {
 
 		VkVertexInputBindingDescription vertexBinding {
 			.binding = 0,
-			.stride = sizeof(Renderer::Vertex),
+			.stride = sizeof(Engine::Vertex),
 			.inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
 		};
 
@@ -86,7 +85,7 @@ void main() {
 			.pVertexBindingDescriptions = &vertexBinding,
 		};
 
-		Renderer::Vertex::GetVertexAttributes(vertexInputStateInfo.vertexAttributeDescriptionCount, &vertexInputStateInfo.pVertexAttributeDescriptions);
+		Engine::Vertex::GetVertexAttributes(vertexInputStateInfo.vertexAttributeDescriptionCount, &vertexInputStateInfo.pVertexAttributeDescriptions);
 
 		VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateInfo {
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -222,11 +221,16 @@ int main() {
 	Engine engine("Test", pWindow, 0, nullptr, 1000);
 	TestPipeline testPipeline(engine.m_Renderer);
 	engine.AddGraphicsPipeline(testPipeline.m_GpuPipeline, testPipeline.m_GpuPipelineLayout, 0, 1000);
+	Engine::Mesh<Engine::MeshType::Static> mesh(engine);
+	Engine::Vertex vertices[3]{};
+	uint32_t indices[3]{ 0, 1, 2 };
+	mesh.CreateBuffers(3, vertices, 3, indices);
 	while (!glfwWindowShouldClose(pWindow)) {
 		glfwPollEvents();
 		engine.DrawLoop();
-	}	
+	}
 	vkDeviceWaitIdle(engine.m_Renderer.m_GpuDevice);	
+	mesh.Terminate();
 	testPipeline.Terminate();
 	glfwTerminate();
 }

@@ -371,10 +371,9 @@ namespace engine {
 			uint32_t* m_Counts;
 
 			CommandBufferFreeList(Renderer& renderer)
-				: m_Renderer(renderer), m_FramesInFlight(0), m_Data(nullptr), m_Counts(nullptr) {}
+				: m_Renderer(renderer), m_GpuCommandPool(VK_NULL_HANDLE), m_FramesInFlight(0), m_Data(nullptr), m_Counts(nullptr) {}
 
 			~CommandBufferFreeList() {
-				FreeAll();
 				free(m_Data);
 				delete[] m_Counts;
 			}
@@ -424,7 +423,7 @@ namespace engine {
 			void Free(uint32_t currentFrame) {
 				if (currentFrame >= m_FramesInFlight) {
 					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::IndexOutOfBounds, 
-						"current frame goes out of bounds of command buffer free list frames in flight (function CommandBufferFreeList::Push)!", 
+						"given frame goes out of bounds of command buffer free list frames in flight (function CommandBufferFreeList::Free)!", 
 						VK_SUCCESS);
 					return;
 				}
@@ -552,15 +551,23 @@ namespace engine {
 			}
 		};
 
+		struct Buffer;
+
+		enum class CommandBufferUsage {
+			DoNothing = 0,
+			Free = 1,
+			DestroyStagingBuffer = 2,
+		};	
+
+		typedef uint32_t CommandBufferUsageFlags;
+
 		template<Queue queue_T>
 		struct CommandBuffer {
-			enum class AfterSubmit {
-				DoNothing = 0,
-				Free = 1,
-			};
 			VkCommandBuffer m_GpuCommandBuffer{};
 			Thread* m_Thread{};
-			AfterSubmit m_AfterSubmit{};
+			CommandBufferUsageFlags m_Flags{};
+			VkBuffer m_GpuBuffer{};
+			VkDeviceMemory m_GpuDeviceMemory{};
 		};
 
 		template<Queue queue_T, uint32_t max_buffers_T>
@@ -594,6 +601,14 @@ namespace engine {
 				m_Size = 0;
 			}
 
+			void Lock() {
+				m_Mutex.lock();
+			}
+
+			void Unlock() {
+				m_Mutex.unlock();
+			}
+
 			Iterator begin() const {
 				return m_Data;
 			}
@@ -605,16 +620,32 @@ namespace engine {
 
 		struct Buffer {
 
-			const Renderer& m_Renderer;
+			Renderer& m_Renderer;
 			VkBuffer m_GpuBuffer;
 			VkDeviceMemory m_GpuDeviceMemory;
-			VkDeviceSize m_BufferSize;
+			VkDeviceSize m_BufferSize;	
 
-			Buffer(const Renderer& renderer) noexcept 
+			Buffer(Renderer& renderer) noexcept 
 				: m_Renderer(renderer), m_GpuBuffer(VK_NULL_HANDLE), m_GpuDeviceMemory(VK_NULL_HANDLE), m_BufferSize(0) {}
+
+			Buffer(Buffer&& other) 
+				: m_Renderer(other.m_Renderer), m_GpuBuffer(other.m_GpuBuffer), m_GpuDeviceMemory(other.m_GpuDeviceMemory),
+					m_BufferSize(other.m_BufferSize) {
+				other.m_GpuBuffer = VK_NULL_HANDLE;
+				other.m_GpuDeviceMemory = VK_NULL_HANDLE;
+				other.m_BufferSize = 0;
+			}
 
 			~Buffer() {
 				Terminate();
+			}
+
+			void Terminate() {
+				vkFreeMemory(m_Renderer.m_GpuDevice, m_GpuDeviceMemory, m_Renderer.m_GpuAllocationCallbacks);
+				m_GpuDeviceMemory = VK_NULL_HANDLE;
+				vkDestroyBuffer(m_Renderer.m_GpuDevice, m_GpuBuffer, m_Renderer.m_GpuAllocationCallbacks);
+				m_GpuBuffer = VK_NULL_HANDLE;
+				m_BufferSize = 0;
 			}
 
 			bool Create(VkDeviceSize size, VkBufferUsageFlags bufferUsage, VkMemoryPropertyFlags bufferProperties, 
@@ -630,7 +661,7 @@ namespace engine {
 					.pNext = nullptr,
 					.flags = 0,
 					.size = size,
-					.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | bufferUsage,
+					.usage = bufferUsage,
 					.sharingMode = sharingMode,
 					.queueFamilyIndexCount = queueFamilyIndexCount,
 					.pQueueFamilyIndices = pQueueFamilyIndices,
@@ -668,10 +699,11 @@ namespace engine {
 				return true;
 			}
 
-			CommandBuffer<Queue::Transfer> CreateWithData(const void* data, VkDeviceSize size, 
+			bool CreateWithData(VkDeviceSize size, const void* data,
 				VkBufferUsageFlags bufferUsage, VkMemoryPropertyFlags bufferProperties,
 				VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE, uint32_t queueFamilyIndexCount = 0, 
 				const uint32_t* pQueueFamilyIndices = nullptr) {
+
 				Buffer stagingBuffer(m_Renderer);
 				if (!stagingBuffer.Create(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
 						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
@@ -688,7 +720,7 @@ namespace engine {
 						bufferProperties, sharingMode, queueFamilyIndexCount, pQueueFamilyIndices)) {
 					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Buffer, 
 						"failed to create buffer (function Buffer::Create in function Buffer::CreateWithData)!", VK_SUCCESS);
-					return {};
+					return false;
 				}
 
 				VkCommandBufferAllocateInfo commandBufferAllocInfo {
@@ -703,14 +735,16 @@ namespace engine {
 						"couldn't find command pool for thread (function GetThisThreadCommandPool in function Buffer::CreateWithData)!", 
 						VK_SUCCESS);
 					Terminate();
-					return{};
+					return false;
 				}
-				CommandBuffer<Queue::Transfer> ret;
-				if (!m_Renderer.VkCheck(vkAllocateCommandBuffers(m_Renderer.m_GpuDevice, &commandBufferAllocInfo, &ret.m_GpuCommandBuffer),
+				m_Renderer.m_TransferCommandBufferQueue.Lock();
+				CommandBuffer<Queue::Transfer>& commandBuffer = m_Renderer.m_TransferCommandBufferQueue.New();
+				if (!m_Renderer.VkCheck(vkAllocateCommandBuffers(m_Renderer.m_GpuDevice, 
+						&commandBufferAllocInfo, &commandBuffer.m_GpuCommandBuffer),
 						"failed to allocate command buffer for staging transfer (function vkAllocateCommandBuffers in function Buffer::CreateWithData)!"
 					)) {
 					Terminate();
-					return {};
+					return false;
 				}
 				VkCommandBufferBeginInfo commandBufferBeginInfo {
 					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -718,48 +752,183 @@ namespace engine {
 					.flags = 0,
 					.pInheritanceInfo = nullptr,
 				};
-				if (!m_Renderer.VkCheck(vkBeginCommandBuffer(ret.m_GpuCommandBuffer, &commandBufferBeginInfo), 
+				if (!m_Renderer.VkCheck(vkBeginCommandBuffer(commandBuffer.m_GpuCommandBuffer, &commandBufferBeginInfo), 
 						"failed to begin command buffer for staging transfer (function vkBeginCommandBuffer in function Buffer::CreateWithData)!"
 				)) {
 					Terminate();
-					return {};
+					return false;
 				}
 				VkBufferCopy copyRegion {
 					.srcOffset = 0,
 					.dstOffset = 0,
 					.size = size,
 				};
-				vkCmdCopyBuffer(ret.m_GpuCommandBuffer, stagingBuffer.m_GpuBuffer, m_GpuBuffer, 1, &copyRegion);
-				return ret;
+				vkCmdCopyBuffer(commandBuffer.m_GpuCommandBuffer, stagingBuffer.m_GpuBuffer, m_GpuBuffer, 1, &copyRegion);
+				if (!m_Renderer.VkCheck(vkEndCommandBuffer(commandBuffer.m_GpuCommandBuffer),
+						"failed to end command buffer (function vkEndCommandBuffer in function Buffer::CreateWithData)")) {
+					return false;
+				}
+				commandBuffer.m_Flags = (uint32_t)CommandBufferUsage::DestroyStagingBuffer | (uint32_t)CommandBufferUsage::Free;
+				commandBuffer.m_GpuBuffer = stagingBuffer.m_GpuBuffer;
+				stagingBuffer.m_GpuBuffer = VK_NULL_HANDLE;
+				commandBuffer.m_GpuDeviceMemory = stagingBuffer.m_GpuDeviceMemory;
+				stagingBuffer.m_GpuDeviceMemory = VK_NULL_HANDLE;
+				m_Renderer.m_TransferCommandBufferQueue.Unlock();
+				return true;
 			}
 
-			void Terminate() {
-				vkFreeMemory(m_Renderer.m_GpuDevice, m_GpuDeviceMemory, m_Renderer.m_GpuAllocationCallbacks);
-				m_GpuDeviceMemory = VK_NULL_HANDLE;
-				vkDestroyBuffer(m_Renderer.m_GpuDevice, m_GpuBuffer, m_Renderer.m_GpuAllocationCallbacks);
-				m_GpuBuffer = VK_NULL_HANDLE;
-				m_BufferSize = 0;
-			}	
+			bool CopyBuffer(Buffer& dst, VkDeviceSize srcOffset, VkDeviceSize dstOffset, VkDeviceSize size) const {
+				if (m_GpuBuffer == VK_NULL_HANDLE || dst.m_GpuBuffer == VK_NULL_HANDLE) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Buffer, 
+						"attempting to copy buffer when the size + srcOffset is larger than source size (in function Buffer::CopyBuffer)!", 
+						VK_SUCCESS);
+				}
+				if (m_BufferSize < size + srcOffset) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Buffer, 
+						"attempting to copy buffer when the size + srcOffset is larger than source size (in function Buffer::CopyBuffer)!", 
+						VK_SUCCESS);
+					return false;
+				}
+				if (dst.m_BufferSize < size + dstOffset) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Buffer, 
+						"attempting to copy buffer when the size + dstOffset is larger than destination size (in function Buffer::CopyBuffer)!", 
+						VK_SUCCESS);
+					return false;
+				}
+				m_Renderer.m_TransferCommandBufferQueue.Lock();
+				CommandBuffer<Queue::Transfer> commandBuffer = m_Renderer.m_TransferCommandBufferQueue.New();
+				VkCommandBufferAllocateInfo commandBufferAllocInfo {
+					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+					.pNext = nullptr,
+					.commandPool = m_Renderer.GetThisThreadCommandPool<Queue::Transfer>(),
+					.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+					.commandBufferCount = 1,
+				};
+				if (!m_Renderer.VkCheck(vkAllocateCommandBuffers(m_Renderer.m_GpuDevice, &commandBufferAllocInfo, 
+						&commandBuffer.m_GpuCommandBuffer), 
+						"failed to allocate command buffer (function vkAllocateCommandBuffers in function Buffer::CopyBuffer)!")) {
+					return false;
+				}
+				VkCommandBufferBeginInfo commandBufferBeginInfo {
+					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+					.pNext = nullptr,
+					.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+					.pInheritanceInfo = nullptr,
+				};
+				if (!m_Renderer.VkCheck(vkBeginCommandBuffer(commandBuffer.m_GpuCommandBuffer, &commandBufferBeginInfo), 
+						"failed to begin command buffer (function vkBeginCommandBuffer in function Buffer::CopyBuffer)!")) {
+					return false;
+				}
+				VkBufferCopy copyRegion {
+					.srcOffset = srcOffset,
+					.dstOffset = dstOffset,
+					.size = size,
+				};
+				vkCmdCopyBuffer(commandBuffer.m_GpuCommandBuffer, m_GpuBuffer, dst.m_GpuBuffer, 1, &copyRegion);
+				if (!m_Renderer.VkCheck(vkEndCommandBuffer(commandBuffer.m_GpuCommandBuffer),
+						"failed to end command buffer (function vkEndCommandBuffer in function Buffer::CopyBuffer)")) {
+					return false;
+				}
+				m_Renderer.m_TransferCommandBufferQueue.Unlock();
+				return true;
+			}
 		};
 
-		struct Vertex {
-			static void GetVertexAttributes(uint32_t& outCount, const VkVertexInputAttributeDescription** outAttributes) {
-				static constexpr uint32_t attribute_count = 5;
-				static constexpr VkVertexInputAttributeDescription attributes[attribute_count] {
-					{ .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Position) },
-					{ .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Normal) },
-					{ .location = 2, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, m_UV) },
-					{ .location = 3, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Tangent) },
-					{ .location = 4, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Bitangent) },
-				};
-				*outAttributes = attributes;
-				outCount = attribute_count;
+		struct StagingBufferDestroyList {
+
+			struct BufferData {
+				VkBuffer m_GpuBuffer{};
+				VkDeviceMemory m_GpuDeviceMemory{};
+			};
+			
+			static constexpr size_t max_buffers_per_frame = 1000;
+
+			const Renderer& m_Renderer;
+			uint32_t m_FramesInFlight;
+			BufferData(*m_Data)[max_buffers_per_frame];
+			size_t* m_Counts;
+
+			StagingBufferDestroyList(Renderer& renderer) 
+				: m_Renderer(renderer), m_FramesInFlight(0), m_Data(nullptr), m_Counts(nullptr) {}
+
+			void Terminate() {
+				DestroyAll();
 			}
-			Vec3 m_Position;
-			Vec3 m_Normal;
-			Vec2 m_UV;
-			Vec3 m_Tangent;
-			Vec3 m_Bitangent;
+
+			~StagingBufferDestroyList() {
+				free(m_Data);
+				delete[] m_Counts;
+			}
+
+			void Initialize() {
+				if (m_FramesInFlight != 0) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::InitializationFailed, 
+						"attempting to initialize command buffer free list more than once (function CommandBufferFreeList::Initialize)!",
+						VK_SUCCESS);
+					return;
+				}
+				m_FramesInFlight = m_Renderer.m_FramesInFlight;
+				m_Data = (BufferData(*)[max_buffers_per_frame])malloc(m_FramesInFlight 
+					* sizeof(BufferData[max_buffers_per_frame]));
+				m_Counts = new size_t [m_FramesInFlight]{};
+			}
+
+			void Push(uint32_t currentFrame, VkBuffer buffer, VkDeviceMemory deviceMemory) {
+				if (currentFrame >= m_FramesInFlight) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::IndexOutOfBounds, 
+					"current frame goes out of bounds of staging buffer destroy list frames in flight (function StagingBufferDestroyList::Push)!", 
+						VK_SUCCESS);
+					return;
+				}
+				size_t& count = m_Counts[currentFrame];
+				if (count >= max_buffers_per_frame) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::OutOfMemory, 
+						"staging buffer destroy list was out of memory (function StagingBufferDestroyList::Push)!", VK_SUCCESS);
+					return;
+				}
+				m_Data[currentFrame][count++] = { buffer, deviceMemory };
+			}
+
+			void Destroy(uint32_t currentFrame) {
+				if (currentFrame >= m_FramesInFlight) {
+					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::IndexOutOfBounds, 
+					"given frame goes out of bounds of staging buffer destroy list frames in flight (function StagingBufferDestroyList::Destroy)!", 
+						VK_SUCCESS);
+					return;
+				}
+				size_t& count = m_Counts[currentFrame];
+				BufferData(&buffers)[max_buffers_per_frame] = m_Data[currentFrame];
+				for (size_t i = 0; i < count; i++) {
+					BufferData& data = buffers[i];
+					vkDestroyBuffer(m_Renderer.m_GpuDevice, data.m_GpuBuffer, m_Renderer.m_GpuAllocationCallbacks);
+					vkFreeMemory(m_Renderer.m_GpuDevice, data.m_GpuDeviceMemory, m_Renderer.m_GpuAllocationCallbacks);
+				}
+				count = 0;
+			}
+
+			void DestroyAll() {
+				for (uint32_t i = 0; i < m_FramesInFlight; i++) {
+					size_t& count = m_Counts[i];
+					for (size_t j = 0; j < count; j++) {
+						BufferData& data = m_Data[i][j];
+						vkDestroyBuffer(m_Renderer.m_GpuDevice, data.m_GpuBuffer, m_Renderer.m_GpuAllocationCallbacks);
+						vkFreeMemory(m_Renderer.m_GpuDevice, data.m_GpuDeviceMemory, m_Renderer.m_GpuAllocationCallbacks);
+					}
+					count = 0;
+				}
+			}	
+
+			void Reallocate() {
+				DestroyAll();
+				if (m_FramesInFlight != m_Renderer.m_FramesInFlight) {
+					m_FramesInFlight = m_Renderer.m_FramesInFlight;
+					free(m_Data);
+					delete[] m_Counts;
+					m_Data = (BufferData(*)[max_buffers_per_frame])malloc(m_FramesInFlight 
+						* sizeof(BufferData[max_buffers_per_frame]));
+					m_Counts = new size_t[m_FramesInFlight]{};
+				}
+			}
 		};
 
 		struct Fence {
@@ -829,6 +998,7 @@ namespace engine {
 		const std::thread::id m_MainThreadID;
 		CommandBufferFreeList m_GraphicsCommandBufferFreeList;
 		CommandBufferFreeList m_TransferCommandBufferFreeList;
+		StagingBufferDestroyList m_StagingBufferDestroyList;
 		ThreadList m_ThreadList;
 		VkCommandPool m_GpuGraphicsCommandPool = VK_NULL_HANDLE;
 		VkCommandPool m_GpuTransferCommandPool = VK_NULL_HANDLE;
@@ -910,6 +1080,7 @@ namespace engine {
 				m_TransferCommandBufferQueue(*this),
 				m_GraphicsCommandBufferFreeList(*this),
 				m_TransferCommandBufferFreeList(*this),
+				m_StagingBufferDestroyList(*this),
 				m_MainThreadID(std::this_thread::get_id()),
 				m_CriticalErrorCallback(criticalErrorCallback), m_ErrorCallback(errorCallback), m_SwapchainCreateCallback(swapchainCreateCallback) {
 
@@ -1159,7 +1330,7 @@ namespace engine {
 				.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
 				.pNext = nullptr,
 				.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-				.queueFamilyIndex = m_GpuGraphicsQueueFamilyIndex,
+				.queueFamilyIndex = m_GpuTransferQueueFamilyIndex,
 			};
 
 			VkAssert(vkCreateCommandPool(m_GpuDevice, &transferCommandPoolInfo, m_GpuAllocationCallbacks, &m_GpuTransferCommandPool),
@@ -1169,6 +1340,7 @@ namespace engine {
 
 			m_GraphicsCommandBufferFreeList.Initialize(m_GpuGraphicsCommandPool);
 			m_TransferCommandBufferFreeList.Initialize(m_GpuTransferCommandPool);
+			m_StagingBufferDestroyList.Initialize();
 
 			VkDescriptorPoolSize modelPoolSize {
 				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -1200,6 +1372,7 @@ namespace engine {
 				vkDestroySwapchainKHR(m_GpuDevice, m_GpuSwapchain, m_GpuAllocationCallbacks);
 				vkDestroyCommandPool(m_GpuDevice, m_GpuGraphicsCommandPool, m_GpuAllocationCallbacks);
 				vkDestroyCommandPool(m_GpuDevice, m_GpuTransferCommandPool, m_GpuAllocationCallbacks);
+				m_StagingBufferDestroyList.Terminate();
 				for (Thread& thread : m_ThreadList) {
 					thread.Terminate();
 				}
@@ -1239,7 +1412,7 @@ namespace engine {
 			}
 			m_ErrorCallback(this, ErrorOrigin::Threading, 
 				"attempting to get command pool from a thread that hasn't been created yet!", VK_SUCCESS);
-			return {};
+			return VK_NULL_HANDLE;
 		}
 
 		void CreateSwapchain() {
@@ -1470,9 +1643,8 @@ namespace engine {
 			m_CurrentFrame = 0;
 			m_SwapchainCreateCallback(this, m_GpuSwapchainExtent, m_FramesInFlight, m_GpuSwapchainImageViews.m_Data);
 
-			m_GraphicsCommandBufferQueue.m_Mutex.lock();
+			m_GraphicsCommandBufferQueue.Lock();
 			CommandBuffer<Queue::Graphics>& transitionCommandBuffer = m_GraphicsCommandBufferQueue.New();
-			m_GraphicsCommandBufferQueue.m_Mutex.unlock();
 
 			VkCommandBufferAllocateInfo transitionCommandBuffersAllocInfo{
 				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -1528,7 +1700,9 @@ namespace engine {
 			VkAssert(vkEndCommandBuffer(transitionCommandBuffer.m_GpuCommandBuffer),
 				"failed to end swapchain image view layout transition command buffer (function vkEndCommandBuffer in function CreateSwapchain)");
 
-			transitionCommandBuffer.m_AfterSubmit = CommandBuffer<Queue::Graphics>::AfterSubmit::Free;
+			transitionCommandBuffer.m_Flags = (uint32_t)CommandBufferUsage::Free;
+
+			m_GraphicsCommandBufferQueue.Unlock();
 
 			m_SingleThreadStack.Clear();
 		}
@@ -1543,6 +1717,7 @@ namespace engine {
 			}
 			m_GraphicsCommandBufferFreeList.Reallocate();
 			m_TransferCommandBufferFreeList.Reallocate();
+			m_StagingBufferDestroyList.Reallocate();
 		}
 
 		VkDescriptorSetLayout CreateDescriptorSetLayout(uint32_t bindingCount, VkDescriptorSetLayoutBinding* pBindings) const {
@@ -1633,6 +1808,7 @@ namespace engine {
 		};
 
 		bool BeginFrame(DrawData& outDrawData) {
+
 			static constexpr uint64_t frame_timeout = 2000000000;
 			if (m_GpuSwapchain == VK_NULL_HANDLE || m_GpuSwapchainExtent.width == 0 || m_GpuSwapchainExtent.height == 0) {
 				return false;
@@ -1652,7 +1828,8 @@ namespace engine {
 					return false;
 				}
 				vkResetFences(m_GpuDevice, 2, fences);
-			}
+			}	
+
 			else if (m_GpuInFlightGraphicsFences[m_CurrentFrame].state == Fence::State::Resettable) {
 				if (!VkCheck(vkWaitForFences(m_GpuDevice, 1, &fences[0], VK_TRUE, frame_timeout), 
 						"failed to wait for in flight fences (function vkWaitForFences in function BeginFrame)!")) {
@@ -1679,6 +1856,56 @@ namespace engine {
 				thread.m_TransferCommandBufferFreeList.Free(m_CurrentFrame);
 			}
 			m_ThreadStackMutex.unlock();
+
+			m_StagingBufferDestroyList.Destroy(m_CurrentFrame);
+
+			m_TransferCommandBufferQueue.Lock();
+
+			if (m_TransferCommandBufferQueue.m_Size) {
+
+				Stack::Array<VkCommandBuffer> transferCommandBuffers 
+					= m_SingleThreadStack.Allocate<VkCommandBuffer>(m_TransferCommandBufferQueue.m_Size);
+
+				if (!transferCommandBuffers.m_Data) {
+					m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
+						"single thread stack was out of memory (in function EndFrame)!", VK_SUCCESS);
+				}
+
+				for (size_t i = 0; i < m_TransferCommandBufferQueue.m_Size; i++) {
+					CommandBuffer<Queue::Transfer>& commandBuffer = m_TransferCommandBufferQueue.m_Data[i];
+					transferCommandBuffers[i] = commandBuffer.m_GpuCommandBuffer;
+					if (commandBuffer.m_Flags & (uint32_t)CommandBufferUsage::Free) {
+						if (commandBuffer.m_Thread) {
+							commandBuffer.m_Thread->m_TransferCommandBufferFreeList.Push(commandBuffer.m_GpuCommandBuffer, m_CurrentFrame);
+						}
+						else {
+							m_TransferCommandBufferFreeList.Push(commandBuffer.m_GpuCommandBuffer, m_CurrentFrame);
+						}
+					}
+					if (commandBuffer.m_Flags & (uint32_t)CommandBufferUsage::DestroyStagingBuffer) {
+						m_StagingBufferDestroyList.Push(m_CurrentFrame, commandBuffer.m_GpuBuffer, commandBuffer.m_GpuDeviceMemory);
+					}
+				}
+
+				VkSubmitInfo transferSubmit {
+					.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+					.pNext = nullptr,
+					.waitSemaphoreCount = 0,
+					.commandBufferCount = (uint32_t)transferCommandBuffers.m_Size,
+					.pCommandBuffers = transferCommandBuffers.m_Data,
+				};
+
+				if (VkCheck(vkQueueSubmit(m_GpuTransferQueue, 1, &transferSubmit, m_GpuInFlightTransferFences[m_CurrentFrame].fence), 
+						"failed to submit to transfer queue (function vkQueueSubmit in function EndFrame)!")) {
+					m_GpuInFlightTransferFences[m_CurrentFrame].state = Fence::State::Resettable;
+				}
+
+				m_TransferCommandBufferQueue.Clear();
+				m_SingleThreadStack.Clear();
+			}
+
+			m_TransferCommandBufferQueue.Unlock();
+
 			uint32_t imageIndex;
 			VkResult result = vkAcquireNextImageKHR(m_GpuDevice, m_GpuSwapchain, frame_timeout, 
 					m_GpuRenderWaitSemaphores[m_CurrentFrame], VK_NULL_HANDLE , &imageIndex);
@@ -1716,7 +1943,7 @@ namespace engine {
 
 			Stack::Array<VkCommandBuffer> graphicsCommandBuffers { 0, nullptr };
 
-			m_GraphicsCommandBufferQueue.m_Mutex.lock();
+			m_GraphicsCommandBufferQueue.Lock();
 
 			if (m_GraphicsCommandBufferQueue.m_Size) {
 
@@ -1730,7 +1957,7 @@ namespace engine {
 				for (size_t i = 0; i < m_GraphicsCommandBufferQueue.m_Size; i++) {
 					CommandBuffer<Queue::Graphics>& commandBuffer = m_GraphicsCommandBufferQueue.m_Data[i];
 					graphicsCommandBuffers[i] = commandBuffer.m_GpuCommandBuffer;
-					if (commandBuffer.m_AfterSubmit == CommandBuffer<Queue::Graphics>::AfterSubmit::Free) {
+					if (commandBuffer.m_Flags & (uint32_t)CommandBufferUsage::Free) {
 						if (commandBuffer.m_Thread) {
 							commandBuffer.m_Thread->m_GraphicsCommandBufferFreeList.Push(commandBuffer.m_GpuCommandBuffer, m_CurrentFrame);
 						}
@@ -1743,7 +1970,7 @@ namespace engine {
 			}
 
 
-			m_GraphicsCommandBufferQueue.m_Mutex.unlock();
+			m_GraphicsCommandBufferQueue.Unlock();
 
 			VkPipelineStageFlags graphicsWaitStages[1] { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 
@@ -1774,57 +2001,7 @@ namespace engine {
 				return;
 			}
 
-			m_GpuInFlightGraphicsFences[m_CurrentFrame].state = Fence::State::Resettable;
-
-			m_TransferCommandBufferQueue.m_Mutex.lock();
-
-			if (m_TransferCommandBufferQueue.m_Size) {
-
-				Stack::Array<VkCommandBuffer> transferCommandBuffers 
-					= m_SingleThreadStack.Allocate<VkCommandBuffer>(m_TransferCommandBufferQueue.m_Size);
-
-				if (!transferCommandBuffers.m_Data) {
-					m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
-						"single thread stack was out of memory (in function EndFrame)!", VK_SUCCESS);
-				}
-
-				for (size_t i = 0; i < m_TransferCommandBufferQueue.m_Size; i++) {
-					CommandBuffer<Queue::Transfer>& commandBuffer = m_TransferCommandBufferQueue.m_Data[i];
-					graphicsCommandBuffers[i] = commandBuffer.m_GpuCommandBuffer;
-					if (commandBuffer.m_AfterSubmit == CommandBuffer<Queue::Transfer>::AfterSubmit::Free) {
-						if (commandBuffer.m_Thread) {
-							commandBuffer.m_Thread->m_TransferCommandBufferFreeList.Push(commandBuffer.m_GpuCommandBuffer, m_CurrentFrame);
-						}
-						else {
-							m_TransferCommandBufferFreeList.Push(commandBuffer.m_GpuCommandBuffer, m_CurrentFrame);
-						}
-					}
-				}
-
-				VkPipelineStageFlags transferWaitStages[1] { VK_PIPELINE_STAGE_TRANSFER_BIT };
-
-				VkSubmitInfo transferSubmit {
-					.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-					.pNext = nullptr,
-					.waitSemaphoreCount = 1,
-					.pWaitSemaphores = &m_GpuTransferWaitSemaphores[m_CurrentFrame],
-					.pWaitDstStageMask = graphicsWaitStages,
-					.commandBufferCount = (uint32_t)transferCommandBuffers.m_Size,
-					.pCommandBuffers = transferCommandBuffers.m_Data,
-					.signalSemaphoreCount = 1,
-					.pSignalSemaphores = &m_GpuTransferFinishedSemaphores[m_CurrentFrame],
-				};
-
-				if (VkCheck(vkQueueSubmit(m_GpuTransferQueue, 1, &transferSubmit, 
-						m_GpuInFlightTransferFences[m_CurrentFrame].fence), 
-						"failed to submit to transfer queue (function vkQueueSubmit in function EndFrame)!")) {
-					m_GpuInFlightGraphicsFences[m_CurrentFrame].state = Fence::State::Resettable;
-				}
-
-				m_SingleThreadStack.Clear();
-			}
-
-			m_TransferCommandBufferQueue.m_Mutex.unlock();
+			m_GpuInFlightGraphicsFences[m_CurrentFrame].state = Fence::State::Resettable;	
 
 			VkPresentInfoKHR presentInfo {
 				.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,

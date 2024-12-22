@@ -1,3 +1,5 @@
+#pragma once
+
 #include "renderer.hpp"
 #include "math.hpp"
 #include "vulkan/vulkan_core.h"
@@ -7,18 +9,7 @@
 #include <cstring>
 #include <utility>
 
-namespace engine {
-
-	constexpr inline uint64_t StringHash(const char* str) noexcept {
-		if (!str) {
-			return 0;
-		}
-		uint64_t res = 37;
-		for (char c = str[0]; c; c++) {
-			res = (res * 54059) ^ ((uint64_t)c * 76963);
-		}
-		return res;
-	}
+namespace engine {	
 
 	class Engine {
 	public:
@@ -37,7 +28,7 @@ namespace engine {
 
 		enum class ErrorOrigin {
 			Uncategorized = 0,
-			Vulkan = 1,
+			Renderer = 1,
 			Entity = 2,
 			DynamicArray = 3,
 			FileParsing = 4,
@@ -47,7 +38,7 @@ namespace engine {
 		static const char* ErrorOriginString(ErrorOrigin origin) {
 			const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
 				"Uncategorized",
-				"Vulkan",
+				"Renderer",
 				"Entity",
 				"DynamicArray",
 				"FileParsing",
@@ -563,12 +554,26 @@ namespace engine {
 			}
 
 			uint64_t operator()() {
-				return StringHash(m_Data);
+				if (!m_Length) {
+					return 0;
+				}
+				uint64_t res = 37;
+				for (size_t i = 0; i < m_Length; i++) {
+					res = (res * 54059) ^ ((uint64_t)m_Data[i] * 76963);
+				}
+				return res;
 			}
 
 			struct Hash {
 				uint64_t operator()(const char* str) {
-					return StringHash(str);
+					if (!str) {
+						return 0;
+					}
+					uint64_t res = 37;
+					for (char c = str[0]; c; c++) {
+						res = (res * 54059) ^ ((uint64_t)c * 76963);
+					}
+					return res;
 				}
 			};	
 
@@ -582,6 +587,76 @@ namespace engine {
 					return strcmp(a, b);
 				}
 			};
+		};
+
+		struct Vertex {
+			static void GetVertexAttributes(uint32_t& outCount, const VkVertexInputAttributeDescription** outAttributes) {
+				static constexpr uint32_t attribute_count = 5;
+				static constexpr VkVertexInputAttributeDescription attributes[attribute_count] {
+					{ .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Position) },
+					{ .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Normal) },
+					{ .location = 2, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, m_UV) },
+					{ .location = 3, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Tangent) },
+					{ .location = 4, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Bitangent) },
+				};
+				*outAttributes = attributes;
+				outCount = attribute_count;
+			}
+			Vec3 m_Position;
+			Vec3 m_Normal;
+			Vec2 m_UV;
+			Vec3 m_Tangent;
+			Vec3 m_Bitangent;
+		};
+
+		enum class MeshType {
+			Static = 0,
+			Dynamic = 1,
+		};
+
+		template<MeshType mesh_type_T>
+		class Mesh {};
+
+		template<>
+		class Mesh<MeshType::Static> {
+		public:
+
+			Engine& m_Engine;
+			Renderer::Buffer m_VertexBuffer;
+			Renderer::Buffer m_IndexBuffer;
+
+			Mesh(Engine& engine) noexcept 
+				: m_Engine(engine), m_VertexBuffer(engine.m_Renderer), m_IndexBuffer(engine.m_Renderer) {}
+
+			Mesh(Mesh&& other) noexcept : m_Engine(other.m_Engine), 
+					m_VertexBuffer(std::move(other.m_VertexBuffer)), m_IndexBuffer(std::move(other.m_IndexBuffer)) {}
+
+			void Terminate() {
+				m_VertexBuffer.Terminate();
+				m_IndexBuffer.Terminate();
+			}
+
+			bool CreateBuffers(uint32_t vertexCount, Vertex* pVertices, uint32_t indexCount, uint32_t* pIndices) {
+				if (m_VertexBuffer.m_BufferSize || m_IndexBuffer.m_BufferSize) {
+					PrintError(ErrorOrigin::Renderer, 
+					"attempting to create vertex and index buffers when the buffers have already been created (in function Mesh::CreateBuffers)!");
+					return false;
+				}
+				if (!m_VertexBuffer.CreateWithData(vertexCount * sizeof(Vertex), pVertices, 
+						VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+						VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+					PrintError(ErrorOrigin::Renderer, "failed to create vertex buffer (in function Mesh::CreateBuffers)!");
+					return false;
+				}
+				if (!m_IndexBuffer.CreateWithData(indexCount * sizeof(uint32_t), pIndices, 
+						VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+						VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+					PrintError(ErrorOrigin::Renderer, "failed to create index buffer (in function Mesh::CreateBuffers)!");
+					m_VertexBuffer.Terminate();
+					return false;
+				}
+				return true;
+			}
 		};
 
 		struct CameraData1 {
@@ -670,7 +745,7 @@ namespace engine {
 
 			struct Hash {
 				uint64_t operator()(Entity* entity) {
-					return StringHash(entity->m_Name) ^ entity->m_UID;
+					return String::Hash()(entity->m_Name) ^ entity->m_UID;
 				}
 			};
 		};
@@ -781,14 +856,8 @@ namespace engine {
 			exit(EXIT_FAILURE);
 		}
 
-		template<typename VertexType>
-		void CreateVertexBuffer(size_t vertexCount, VertexType* pVertices, Renderer::Buffer& outVertexBuffer) {
-		}
-
-		void CreateIndexBuffer(size_t indexCount, uint32_t* pIndices, Renderer::Buffer& outIndexBuffer) {
-		}
-
-		GraphicsPipeline& AddGraphicsPipeline(VkPipeline pipeline, VkPipelineLayout pipelineLayout, uint32_t descriptorSetCount, size_t entityReserve) {
+		GraphicsPipeline& AddGraphicsPipeline(VkPipeline pipeline, VkPipelineLayout pipelineLayout, 
+			uint32_t descriptorSetCount, size_t entityReserve) {
 			if (pipeline == VK_NULL_HANDLE || pipelineLayout == VK_NULL_HANDLE) {
 				CriticalError(ErrorOrigin::Uncategorized, "attempting to add graphics pipeline that's null (function AddGraphicsPipeline)!");
 			}
@@ -819,7 +888,8 @@ namespace engine {
 									VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_GpuPipelineLayout, 0, pipeline.m_DescriptorSetCount, pDescriptorSets, 
 									0, nullptr);
 								if (meshCount && !meshes) {
-									PrintError(ErrorOrigin::Entity, "Entity::RenderUpdate returned a non zero mesh count but meshes pointer was null (in function DrawLooLoopp)!");
+									PrintError(ErrorOrigin::Entity, 
+										"Entity::RenderUpdate returned a non zero mesh count but meshes pointer was null (in function DrawLooLoopp)!");
 									continue;
 								}
 								for (size_t i = 0; i < meshCount; i++) {
