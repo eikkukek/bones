@@ -19,6 +19,13 @@ add_subdirectory(libraries/glslang)
 add_library(engine STATIC
 	src/engine.cpp
 	src/renderer.cpp
+
+	src/imgui/imgui.cpp
+	src/imgui/imgui_draw.cpp
+	src/imgui/imgui_impl_glfw.cpp
+	src/imgui/imgui_impl_vulkan.cpp
+	src/imgui/imgui_tables.cpp
+	src/imgui/imgui_widgets.cpp
 )
 
 target_link_libraries(engine vulkan glfw glslang)
