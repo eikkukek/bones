@@ -674,7 +674,7 @@ namespace engine {
 			VkDescriptorPool m_DescriptorPool{};
 		};
 
-		struct MeshBufferData {
+		struct MeshData {
 			size_t vertexBufferCount;
 			VkBuffer* vertexBuffers;
 			VkDeviceSize* vertexBufferOffsets;
@@ -692,11 +692,11 @@ namespace engine {
 			char m_Name[name_max_length + 1];
 			size_t m_NameLength;
 			const UID m_UID;
-			Engine* const m_pEngine;
+			Engine& m_Engine;
 			DynamicArray<GraphicsPipeline> m_GraphicsPipelines;
 
-			Entity(Engine* pEngine, const char* name, UID UID, size_t classSize) noexcept 
-				: m_pEngine(pEngine), c_ClassSize(classSize), m_UID(UID) {
+			Entity(Engine& engine, const char* name, UID UID, size_t classSize) noexcept 
+				: m_Engine(engine), c_ClassSize(classSize), m_UID(UID) {
 				size_t len = strlen(name);
 				if (len > name_max_length) {
 					PrintError(ErrorOrigin::Entity, "given entity name is longer than entity name max size (in Entity constructor)!");
@@ -709,7 +709,7 @@ namespace engine {
 				m_NameLength = i;
 			}
 
-			Entity(Engine* pEngine, FILE* file, UID UID, size_t classSize) noexcept : m_pEngine(pEngine), c_ClassSize(classSize), m_UID(UID) {
+			Entity(Engine& engine, FILE* file, UID UID, size_t classSize) noexcept : m_Engine(engine), c_ClassSize(classSize), m_UID(UID) {
 				char c = fgetchar();
 				size_t i = 0;
 				for (; i < name_max_length && c != '\n'; i++) {
@@ -726,12 +726,12 @@ namespace engine {
 				}
 			}
 
-			virtual void LogicUpdate(Engine* pEngine, bool& outTerminate) {};
-			virtual void RenderUpdate(const GraphicsPipeline& pipeline, const CameraData1& camera, const size_t desciptorCount, VkDescriptorSet** outDescriptorSets,
-				size_t& meshCount, MeshBufferData** meshes) {};
-			virtual void EditorUpdate(Engine* pEngine) = 0;
+			virtual bool LogicUpdate() = 0;
+			virtual void RenderUpdate(const GraphicsPipeline& pipeline, const CameraData1& camera, const uint32_t desciptorCount, 
+				VkDescriptorSet** outDescriptorSets, uint32_t& meshCount, MeshData** meshes) = 0;
+			virtual void EditorUpdate() {};
 			virtual void WriteToFile(FILE* file) = 0;
-			virtual void OnTerminate() = 0;
+			virtual void OnTerminate() {};
 
 			void Terminate() {
 				for (GraphicsPipeline& graphicsPipeline : m_GraphicsPipelines) {
@@ -833,9 +833,10 @@ namespace engine {
 			return true;
 		}	
 
-		Engine(const char* appName, GLFWwindow* window, size_t entityConstructorCount, EntityConstructor* pEntityConstructors, size_t entityReservation)
+		Engine(const char* appName, GLFWwindow* window, bool includeImGui, size_t entityConstructorCount, EntityConstructor* pEntityConstructors, size_t entityReservation)
 			: m_Initialized(UpdateEngineInstance(this)), 
-				m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, RendererCriticalErrorCallback, RendererErrorCallback, SwapchainCreateCallback),
+				m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, 
+					includeImGui, RendererCriticalErrorCallback, RendererErrorCallback, SwapchainCreateCallback),
 				m_EntityAllocator(), m_EntityConstructorCount(entityConstructorCount), m_pEntityConstructors(pEntityConstructors) {
 			m_Entities.Reserve(entityReservation);
 		}
@@ -869,41 +870,87 @@ namespace engine {
 			return res;
 		}
 
-		void DrawLoop() {
+		void AddEntity() {
+		}
+
+		void Render() {
 			Renderer::DrawData drawData;
 			if (m_Renderer.BeginFrame(drawData)) {
+				VkViewport viewport {
+					.x = 0.0f,
+					.y = 0.0f,
+					.width = (float)m_Renderer.m_GpuSwapchainExtent.width,
+					.height = (float)m_Renderer.m_GpuSwapchainExtent.height,
+					.minDepth = 0.0f,
+					.maxDepth = 1.0f,
+				};
+				VkRect2D scissor {
+					.offset = { 0, 0 },
+					.extent = { m_Renderer.m_GpuSwapchainExtent.width, m_Renderer.m_GpuSwapchainExtent.height },
+				};
+				vkCmdSetViewport(drawData.commandBuffer, 0, 1, &viewport);
+				vkCmdSetScissor(drawData.commandBuffer, 0, 1, &scissor);
+				VkRenderingAttachmentInfo colorAttachment{
+					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+					.pNext = nullptr,
+					.imageView = drawData.swapchainImageView,
+					.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+					.resolveMode = VK_RESOLVE_MODE_NONE,
+					.resolveImageView = VK_NULL_HANDLE,
+					.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+					.clearValue = { .color { .float32 { 0.0f, 0.0f, 0.0f, 1.0f } } },
+				};
+				VkRenderingInfo renderingInfo {
+					.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.renderArea = scissor,
+					.layerCount = 1,
+					.viewMask = 0,
+					.colorAttachmentCount = 1,
+					.pColorAttachments = &colorAttachment,
+					.pDepthAttachment = nullptr,
+				};
+				vkCmdBeginRendering(drawData.commandBuffer, &renderingInfo);
 				CameraData1* cameras[2] = { &m_GameCamera, &m_DebugCamera };
-				for (size_t i = 0; i < 2; i++) {
+				for (size_t i = 0; i < 1; i++) {
 					for (GraphicsPipeline& pipeline : m_GraphicsPipelines) {
 						vkCmdBindPipeline(drawData.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_GpuPipeline);
 						for (Entity* entity : pipeline.m_Entites) {
 							VkDescriptorSet* pDescriptorSets = nullptr;
-							VkBuffer* pVertexBuffer = nullptr;
-							VkBuffer* pIndexBuffer = nullptr;
-							size_t meshCount = 0;
-							MeshBufferData* meshes = nullptr;
+							uint32_t meshCount = 0;
+							MeshData* meshes = nullptr;
 							entity->RenderUpdate(pipeline, *cameras[i], pipeline.m_DescriptorSetCount, &pDescriptorSets, meshCount, &meshes);
 							if (pDescriptorSets) {
 								vkCmdBindDescriptorSets(drawData.commandBuffer, 
 									VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_GpuPipelineLayout, 0, pipeline.m_DescriptorSetCount, pDescriptorSets, 
 									0, nullptr);
-								if (meshCount && !meshes) {
-									PrintError(ErrorOrigin::Entity, 
-										"Entity::RenderUpdate returned a non zero mesh count but meshes pointer was null (in function DrawLooLoopp)!");
-									continue;
-								}
-								for (size_t i = 0; i < meshCount; i++) {
-									vkCmdBindVertexBuffers(drawData.commandBuffer, 
-										0, meshes[i].vertexBufferCount, meshes[i].vertexBuffers, meshes[i].vertexBufferOffsets);
-									vkCmdBindIndexBuffer(drawData.commandBuffer, meshes[i].indexBuffer, 
-										0, VK_INDEX_TYPE_UINT32);
-								}
+							}
+							if (meshCount && !meshes) {
+								PrintError(ErrorOrigin::Entity, 
+									"Entity::RenderUpdate returned a non zero mesh count but meshes pointer was null (in function Render)!");
+								continue;
+							}
+							for (uint32_t j = 0; j < meshCount; j++) {
+								vkCmdBindVertexBuffers(drawData.commandBuffer, 
+									0, meshes[j].vertexBufferCount, meshes[j].vertexBuffers, meshes[j].vertexBufferOffsets);
+								vkCmdBindIndexBuffer(drawData.commandBuffer, meshes[j].indexBuffer, 
+									0, VK_INDEX_TYPE_UINT32);
+								vkCmdDrawIndexed(drawData.commandBuffer, 3, 1, 0, 0, 0);
 							}
 						}
 					}
 				}
+				vkCmdEndRendering(drawData.commandBuffer);
 				m_Renderer.EndFrame();
 			}
 		}
 	};
+
+	typedef Engine::Mesh<Engine::MeshType::Static> StaticMesh;
+	typedef Engine::Entity Entity;
+	typedef Engine::GraphicsPipeline GraphicsPipeline;
+	typedef Engine::CameraData1 CameraData;
+	typedef Engine::MeshData MeshData;
 }

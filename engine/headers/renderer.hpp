@@ -5,6 +5,10 @@
 #define GLFW_INCLUDE_VULKAN
 #include "GLFW/glfw3.h"
 #include "glslang_c_interface.h"
+#include "imgui.h"
+#include "imgui_internal.h"
+#include "imgui_impl_vulkan.h"
+#include "imgui_impl_glfw.h"
 #include <assert.h>
 #include <cstdint>
 #include <cstdlib>
@@ -246,6 +250,14 @@ namespace engine {
 
 				const glslang_resource_t resource {
 					.max_draw_buffers = (int)m_Renderer.m_GpuMaxFragmentOutputAttachments,
+					.limits {
+						.general_uniform_indexing = true,
+						.general_attribute_matrix_vector_indexing = true,
+						.general_varying_indexing = true,
+						.general_sampler_indexing = true,
+						.general_variable_indexing = true,
+						.general_constant_matrix_vector_indexing = true,
+					},
 				};
 
 				const glslang_input_t input = {
@@ -1018,8 +1030,6 @@ namespace engine {
 		Stack::Array<VkSemaphore> m_GpuRenderFinishedSemaphores { 0, nullptr };
 		Stack::Array<VkSemaphore> m_GpuRenderWaitSemaphores { 0, nullptr };
 		Stack::Array<Fence> m_GpuInFlightGraphicsFences { 0, nullptr };
-		Stack::Array<VkSemaphore> m_GpuTransferFinishedSemaphores { 0, nullptr };
-		Stack::Array<VkSemaphore> m_GpuTransferWaitSemaphores { 0, nullptr };
 		Stack::Array<Fence> m_GpuInFlightTransferFences { 0, nullptr };
 
 		Stack::Array<VkImageView> m_GpuSwapchainImageViews { 0, nullptr };
@@ -1034,6 +1044,9 @@ namespace engine {
 		uint32_t m_GpuGraphicsQueueFamilyIndex = 0;
 		uint32_t m_GpuTransferQueueFamilyIndex = 0;
 		uint32_t m_GpuPresentQueueFamilyIndex = 0;
+
+		ImGuiContext* m_ImGuiContext = nullptr;
+		VkDescriptorPool m_ImGuiGpuDecriptorPool = VK_NULL_HANDLE;
 
 		GLFWwindow* m_Window = nullptr;
 		VkSwapchainKHR m_GpuSwapchain = VK_NULL_HANDLE;
@@ -1071,7 +1084,8 @@ namespace engine {
 			return ptr;
 		}
 
-		Renderer(const char* appName, uint32_t appVersion, GLFWwindow* window, ErrorCallback criticalErrorCallback, ErrorCallback errorCallback, 
+		Renderer(const char* appName, uint32_t appVersion, GLFWwindow* window, bool includeImGui, 
+			ErrorCallback criticalErrorCallback, ErrorCallback errorCallback, 
 			SwapchainCreateCallback swapchainCreateCallback)
 			: m_SingleThreadStack(single_thread_stack_size, (uint8_t*)malloc(single_thread_stack_size)), 
 				m_InFlightRenderStack(in_flight_render_stack_size, (uint8_t*)malloc(in_flight_render_stack_size)), m_Window(window),
@@ -1348,6 +1362,56 @@ namespace engine {
 			};
 
 			m_ModelDescriptorPool.CreatePool(1, &modelPoolSize);
+
+			if (includeImGui) {
+				IMGUI_CHECKVERSION();
+				m_ImGuiContext = ImGui::CreateContext();
+
+				ImGuiIO imguiIO = ImGui::GetIO();
+				imguiIO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+
+				VkDescriptorPoolSize imguiPoolSize {
+					.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+					.descriptorCount = 1,
+				};
+
+				VkDescriptorPoolCreateInfo imguiPoolInfo {
+					.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+					.maxSets = 1,
+					.poolSizeCount = 1,
+					.pPoolSizes = &imguiPoolSize,
+				};
+
+				VkAssert(vkCreateDescriptorPool(m_GpuDevice, &imguiPoolInfo, m_GpuAllocationCallbacks, &m_ImGuiGpuDecriptorPool), 
+					"failed to create descriptor pool for ImGui (function vkCreateDescriptorPool in Renderer constructor)!");
+
+				ImGui_ImplVulkan_InitInfo imguiVulkanInfo {
+					.Instance = m_GpuInstance,
+					.PhysicalDevice = m_Gpu,
+					.Device = m_GpuDevice,
+					.QueueFamily = m_GpuGraphicsQueueFamilyIndex,
+					.Queue = m_GpuGraphicsQueue,
+					.DescriptorPool = m_ImGuiGpuDecriptorPool,
+					.RenderPass = VK_NULL_HANDLE,
+					.MinImageCount = m_FramesInFlight,
+					.ImageCount = m_FramesInFlight,
+					.MSAASamples = VK_SAMPLE_COUNT_1_BIT,
+					.PipelineCache = VK_NULL_HANDLE,
+					.Subpass = 0,
+					.UseDynamicRendering = true,
+					.PipelineRenderingCreateInfo {
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+						.pNext = nullptr,
+						.viewMask = 0,
+						.colorAttachmentCount = 1,
+						.pColorAttachmentFormats = &m_GpuSwapchainSurfaceFormat.format,
+						.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
+						.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+					},
+				};
+			}
 		}	
 
 		~Renderer() {
@@ -1365,8 +1429,6 @@ namespace engine {
 					vkDestroySemaphore(m_GpuDevice, m_GpuRenderFinishedSemaphores[i], m_GpuAllocationCallbacks);
 					vkDestroySemaphore(m_GpuDevice, m_GpuRenderWaitSemaphores[i], m_GpuAllocationCallbacks);
 					vkDestroyFence(m_GpuDevice, m_GpuInFlightGraphicsFences[i].fence, m_GpuAllocationCallbacks);
-					vkDestroySemaphore(m_GpuDevice, m_GpuTransferFinishedSemaphores[i], m_GpuAllocationCallbacks);
-					vkDestroySemaphore(m_GpuDevice, m_GpuTransferWaitSemaphores[i], m_GpuAllocationCallbacks);
 					vkDestroyFence(m_GpuDevice, m_GpuInFlightTransferFences[i].fence, m_GpuAllocationCallbacks);
 				}
 				vkDestroySwapchainKHR(m_GpuDevice, m_GpuSwapchain, m_GpuAllocationCallbacks);
@@ -1526,8 +1588,6 @@ namespace engine {
 				vkDestroySemaphore(m_GpuDevice, m_GpuRenderFinishedSemaphores[i], m_GpuAllocationCallbacks);
 				vkDestroySemaphore(m_GpuDevice, m_GpuRenderWaitSemaphores[i], m_GpuAllocationCallbacks);
 				vkDestroyFence(m_GpuDevice, m_GpuInFlightGraphicsFences[i].fence, m_GpuAllocationCallbacks);
-				vkDestroySemaphore(m_GpuDevice, m_GpuTransferFinishedSemaphores[i], m_GpuAllocationCallbacks);
-				vkDestroySemaphore(m_GpuDevice, m_GpuTransferWaitSemaphores[i], m_GpuAllocationCallbacks);
 				vkDestroyFence(m_GpuDevice, m_GpuInFlightTransferFences[i].fence, m_GpuAllocationCallbacks);
 			}
 
@@ -1544,8 +1604,6 @@ namespace engine {
 				!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_GpuRenderFinishedSemaphores) ||
 				!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_GpuRenderWaitSemaphores) ||
 				!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_GpuInFlightGraphicsFences) ||
-				!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_GpuTransferFinishedSemaphores) ||
-				!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_GpuTransferWaitSemaphores) ||
 				!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_GpuInFlightTransferFences) ||
 				!m_InFlightRenderStack.Allocate<VkCommandBuffer>(m_FramesInFlight, &m_GpuRenderCommandBuffers)) {
 				m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
@@ -1624,10 +1682,6 @@ namespace engine {
 						"failed to create render wait semaphore (function vkCreateSemaphore in function CreateSwapchain)");
 				VkAssert(vkCreateFence(m_GpuDevice, &fenceInfo, m_GpuAllocationCallbacks, &m_GpuInFlightGraphicsFences[i].fence), 
 						"failed to create in flight graphis fence (function vkCreateFence in function CreateSwapchain)");
-				VkAssert(vkCreateSemaphore(m_GpuDevice, &semaphoreInfo, m_GpuAllocationCallbacks, &m_GpuTransferFinishedSemaphores[i]), 
-						"failed to create render finished semaphore (function vkCreateSemaphore in function CreateSwapchain)");
-				VkAssert(vkCreateSemaphore(m_GpuDevice, &semaphoreInfo, m_GpuAllocationCallbacks, &m_GpuTransferWaitSemaphores[i]), 
-						"failed to create render wait semaphore (function vkCreateSemaphore in function CreateSwapchain)");
 				VkAssert(vkCreateFence(m_GpuDevice, &fenceInfo, m_GpuAllocationCallbacks, &m_GpuInFlightTransferFences[i].fence), 
 						"failed to create in flight transfer fence (function vkCreateFence in function CreateSwapchain)");
 				VkSubmitInfo dummySubmitInfo {
@@ -1934,10 +1988,55 @@ namespace engine {
 				"failed to begin render command buffer (function vkBeginCommandBuffer in function BeginFrame)")) {
 				return false;
 			}
+			/*
+			VkImageMemoryBarrier imageMemoryBarrier{
+				.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+				.pNext = nullptr,
+				.srcAccessMask = 0,
+				.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+				.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+				.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				.image = m_GpuSwapchainImages[m_CurrentFrame],
+				.subresourceRange {
+					.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+					.baseMipLevel = 0,
+					.levelCount = 1,
+					.baseArrayLayer = 0,
+					.layerCount = 1,
+				},
+			};
+			vkCmdPipelineBarrier(m_GpuRenderCommandBuffers[m_CurrentFrame], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+			*/
 			return true;
 		}
 
 		void EndFrame() {
+
+			/*
+			VkImageMemoryBarrier imageMemoryBarrier{
+				.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+				.pNext = nullptr,
+				.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+				.dstAccessMask = 0,
+				.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+				.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				.image = m_GpuSwapchainImages[m_CurrentFrame],
+				.subresourceRange {
+					.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+					.baseMipLevel = 0,
+					.levelCount = 1,
+					.baseArrayLayer = 0,
+					.layerCount = 1,
+				},
+			};
+			vkCmdPipelineBarrier(m_GpuRenderCommandBuffers[m_CurrentFrame], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+			*/
 
 			vkEndCommandBuffer(m_GpuRenderCommandBuffers[m_CurrentFrame]);
 
@@ -1988,6 +2087,7 @@ namespace engine {
 				},
 				{
 					.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+					.pNext = nullptr,
 					.commandBufferCount = (uint32_t)graphicsCommandBuffers.m_Size,
 					.pCommandBuffers = graphicsCommandBuffers.m_Data,
 				}

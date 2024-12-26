@@ -1,10 +1,8 @@
 #include "engine.hpp"
 
-using namespace engine;
-
 struct TestPipeline {
 
-	Renderer& m_Renderer;
+	engine::Renderer& m_Renderer;
 	VkPipelineLayout m_GpuPipelineLayout;
 	VkPipeline m_GpuPipeline;
 
@@ -17,10 +15,16 @@ layout(location = 2) in vec2 inUV;
 layout(location = 3) in vec3 inTangent;
 layout(location = 4) in vec3 inBitangent;
 
-layout(location = 0) out vec3 outPosition;
+layout(location = 0) out vec3 outColor;
+
+vec3 colors[3] = vec3[](
+	vec3(1.0, 0.0, 0.0),
+	vec3(0.0, 1.0, 0.0),
+	vec3(0.0, 0.0, 1.0)
+);
 
 void main() {
-	outPosition = inPosition;
+	outColor = colors[gl_VertexIndex];
 	gl_Position = vec4(inPosition, 1.0f);
 }
 	)";
@@ -28,24 +32,24 @@ void main() {
 	static constexpr const char* cexpr_fragment_shader = R"(
 #version 450
 
-layout(location = 0) in vec3 inPosition;
+layout(location = 0) in vec3 inColor;
 
 layout(location = 0) out vec4 outColor;
 
 void main() {
-	outColor = vec4(inPosition, 1.0f);
+	outColor = vec4(inColor, 1.0);
 }
 	)";
 
-	TestPipeline(Renderer& renderer) 
+	TestPipeline(engine::Renderer& renderer) 
 		: m_Renderer(renderer), m_GpuPipelineLayout(VK_NULL_HANDLE),
 			m_GpuPipeline(VK_NULL_HANDLE) {
 
 		m_GpuPipelineLayout = m_Renderer.CreatePipelineLayout(0, nullptr, 0, nullptr);
 		assert(m_GpuPipelineLayout != VK_NULL_HANDLE);
 
-		Renderer::Shader vertexShader(m_Renderer);
-		Renderer::Shader fragmentShader(m_Renderer);
+		engine::Renderer::Shader vertexShader(m_Renderer);
+		engine::Renderer::Shader fragmentShader(m_Renderer);
 
 		vertexShader.Compile(cexpr_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT);
 		fragmentShader.Compile(cexpr_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -73,7 +77,7 @@ void main() {
 
 		VkVertexInputBindingDescription vertexBinding {
 			.binding = 0,
-			.stride = sizeof(Engine::Vertex),
+			.stride = sizeof(engine::Engine::Vertex),
 			.inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
 		};
 
@@ -85,7 +89,7 @@ void main() {
 			.pVertexBindingDescriptions = &vertexBinding,
 		};
 
-		Engine::Vertex::GetVertexAttributes(vertexInputStateInfo.vertexAttributeDescriptionCount, &vertexInputStateInfo.pVertexAttributeDescriptions);
+		engine::Engine::Vertex::GetVertexAttributes(vertexInputStateInfo.vertexAttributeDescriptionCount, &vertexInputStateInfo.pVertexAttributeDescriptions);
 
 		VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateInfo {
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -93,13 +97,6 @@ void main() {
 			.flags = 0,
 			.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
 			.primitiveRestartEnable = VK_FALSE,
-		};
-
-		VkPipelineTessellationStateCreateInfo tessellationStateInfo {
-			.sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO,
-			.pNext = nullptr,
-			.flags = 0,
-			.patchControlPoints = 1,
 		};
 
 		VkPipelineViewportStateCreateInfo viewPortStateInfo {
@@ -119,8 +116,9 @@ void main() {
 			.depthClampEnable = VK_FALSE,
 			.rasterizerDiscardEnable = VK_FALSE,
 			.polygonMode = VK_POLYGON_MODE_FILL,
-			.cullMode = VK_CULL_MODE_BACK_BIT,
+			.cullMode = VK_CULL_MODE_NONE,
 			.frontFace = VK_FRONT_FACE_CLOCKWISE,
+			.depthBiasClamp = VK_FALSE,
 			.lineWidth = 1.0f,
 		};
 
@@ -130,7 +128,7 @@ void main() {
 			.flags = 0,
 			.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
 			.sampleShadingEnable = VK_FALSE,
-			.minSampleShading = 0.0f,
+			.minSampleShading = 0.2f,
 			.pSampleMask = nullptr,
 			.alphaToCoverageEnable = VK_FALSE,
 			.alphaToOneEnable = VK_FALSE,
@@ -140,19 +138,25 @@ void main() {
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
 			.pNext = nullptr,
 			.flags = 0,
-			.depthTestEnable = VK_TRUE,
-			.depthWriteEnable = VK_TRUE,
-			.depthCompareOp = VK_COMPARE_OP_LESS,
+			.depthTestEnable = VK_FALSE,
+			.depthWriteEnable = VK_FALSE,
+			.depthCompareOp = VK_COMPARE_OP_NEVER,
 			.depthBoundsTestEnable = VK_FALSE,
 			.stencilTestEnable = VK_FALSE,
-			.front = {},
-			.back = {},
+			.front {},
+			.back {},
 			.minDepthBounds = 0.0f,
 			.maxDepthBounds = 1.0f,
 		};
 
 		VkPipelineColorBlendAttachmentState colorAttachment {
-			.blendEnable = VK_FALSE,
+			.blendEnable = VK_TRUE,
+			.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+			.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+			.colorBlendOp = VK_BLEND_OP_ADD,
+			.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+			.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+			.alphaBlendOp = VK_BLEND_OP_ADD,
 			.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
 		};
 
@@ -160,7 +164,7 @@ void main() {
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
 			.pNext = nullptr,
 			.flags = 0,
-			.logicOpEnable = VK_TRUE,
+			.logicOpEnable = VK_FALSE,
 			.logicOp = VK_LOGIC_OP_COPY,
 			.attachmentCount = 1,
 			.pAttachments = &colorAttachment,
@@ -180,19 +184,30 @@ void main() {
 			.pDynamicStates = dynamicStates,
 		};
 
+		VkPipelineRenderingCreateInfo renderingInfo{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+			.pNext = nullptr,
+			.viewMask = 0,
+			.colorAttachmentCount = 1,
+			.pColorAttachmentFormats = &m_Renderer.m_GpuSwapchainSurfaceFormat.format,
+			.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
+			.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+		};
+
 		VkGraphicsPipelineCreateInfo pipelineInfo {
 			.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-			.pNext = nullptr,
+			.pNext = &renderingInfo,
 			.flags = 0,
 			.stageCount = 2,
 			.pStages = shaderStages,
 			.pVertexInputState = &vertexInputStateInfo,
 			.pInputAssemblyState = &inputAssemblyStateInfo,
-			.pTessellationState = &tessellationStateInfo,
+			.pTessellationState = nullptr,
 			.pViewportState = &viewPortStateInfo,
 			.pRasterizationState = &rasterizationStateInfo,
 			.pMultisampleState = &multisampleStateInfo,
 			.pDepthStencilState = &depthStencilState,
+			.pColorBlendState = &colorBlendStateInfo,
 			.pDynamicState = &dynamicStateInfo,
 			.layout = m_GpuPipelineLayout,
 			.renderPass = VK_NULL_HANDLE,
@@ -213,24 +228,58 @@ void main() {
 	}
 };
 
+class TestEntity : public engine::Entity {
+
+public:
+
+	VkDeviceSize vertexOffset = 0;
+	engine::MeshData meshData{};
+	engine::StaticMesh mesh;
+
+	TestEntity(engine::Engine& engine) : Entity(engine, "Test", 0, sizeof(TestEntity)), mesh(engine) {
+		engine::Engine::Vertex vertices[3]{};
+		uint32_t indices[3] { 0, 1, 2 };
+		vertices[0].m_Position = { 0.0f, -0.5f, 0.0f };
+		vertices[1].m_Position = { 0.5f, 0.5f, 0.0f };
+		vertices[2].m_Position = { -0.5f, 0.5f, 0.0f };
+		mesh.CreateBuffers(3, vertices, 3, indices);
+		meshData.vertexBufferCount = 1;
+		meshData.vertexBuffers = &mesh.m_VertexBuffer.m_GpuBuffer;
+		meshData.vertexBufferOffsets = &vertexOffset;
+		meshData.indexBuffer = mesh.m_IndexBuffer.m_GpuBuffer;
+	}
+
+	bool LogicUpdate() {
+		return true;
+	}
+
+	void RenderUpdate(const engine::GraphicsPipeline& pipeline, const engine::CameraData& camera, const uint32_t descriptorCount,
+		VkDescriptorSet** outDescriptorSets, uint32_t& meshCount, engine::MeshData** meshes) {
+		*meshes = &meshData;
+		meshCount = 1;
+	}
+
+	void WriteToFile(FILE* file) {}
+
+	void OnTerminate() {}
+};
+
 int main() {
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
-	Engine engine("Test", pWindow, 0, nullptr, 1000);
+	engine::Engine engine("Test", pWindow, false, 0, nullptr, 1000);
 	TestPipeline testPipeline(engine.m_Renderer);
-	engine.AddGraphicsPipeline(testPipeline.m_GpuPipeline, testPipeline.m_GpuPipelineLayout, 0, 1000);
-	Engine::Mesh<Engine::MeshType::Static> mesh(engine);
-	Engine::Vertex vertices[3]{};
-	uint32_t indices[3]{ 0, 1, 2 };
-	mesh.CreateBuffers(3, vertices, 3, indices);
+	engine::Engine::GraphicsPipeline& testPipelineData =
+			engine.AddGraphicsPipeline(testPipeline.m_GpuPipeline, testPipeline.m_GpuPipelineLayout, 0, 1000);
+	TestEntity testEntity(engine);
+	testPipelineData.m_Entites.Insert(&testEntity);
 	while (!glfwWindowShouldClose(pWindow)) {
 		glfwPollEvents();
-		engine.DrawLoop();
+		engine.Render();
 	}
 	vkDeviceWaitIdle(engine.m_Renderer.m_GpuDevice);	
-	mesh.Terminate();
 	testPipeline.Terminate();
 	glfwTerminate();
 }
