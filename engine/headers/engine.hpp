@@ -51,10 +51,16 @@ namespace engine {
 		}
 
 		static void PrintError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS) {
-			printf("Engine called an error!\nError origin: %s\nError: %s\n", ErrorOriginString(origin), err);
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
+				"Engine called an error!\nError origin: {}s\nError: {}\n", ErrorOriginString(origin), err);
 			if (vkErr != VK_SUCCESS) {
-				printf("Vulkan error code: %i\n", (int)vkErr);
+				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "Vulkan error code: {}\n", (int)vkErr);
 			}
+		}
+
+		static void PrintWarning(const char* warn) {
+			fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold, 
+				"Engine called a warning:\n {}\n", warn);
 		}
 
 		template<typename T>
@@ -334,7 +340,7 @@ namespace engine {
 					size_t& bucketSize = tempBucketSizes[index];
 					Bucket& bucket = tempBuckets[index];
 					if (bucketSize) {
-						printf("bad hash (in Engine::Set::Reserve)!");
+						PrintWarning("bad hash (in Engine::Set::Reserve)!");
 					}
 					new(&bucket[bucketSize++]) T(std::move(value));
 					tempBucketIndices.PushBack(index);
@@ -378,7 +384,7 @@ namespace engine {
 							}
 						}
 					}
-					printf("bad hash (in function Engine::Set::Insert)!");
+					PrintWarning("bad hash (in function Engine::Set::Insert)!");
 					if (bucketSize == BucketCapacity) {
 						return nullptr;
 					}
@@ -421,7 +427,7 @@ namespace engine {
 							}
 						}
 					}
-					printf("bad hash (in function Engine::Set::Emplace)!");
+					PrintWarning("bad hash (in function Engine::Set::Emplace)!");
 					if (bucketSize == BucketCapacity) {
 						return nullptr;
 					}
@@ -806,6 +812,7 @@ namespace engine {
 		const uint32_t m_Initialized;
 
 		Renderer m_Renderer;
+		TextRenderer m_TextRenderer;
 
 		EntityAllocator m_EntityAllocator;
 		const size_t m_EntityConstructorCount;
@@ -821,23 +828,33 @@ namespace engine {
 
 		Mesh<MeshType::Static> m_StaticQuadMesh;
 
-		static void RendererCriticalErrorCallback(const Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkFlags vkErr) {
-			printf("Renderer called a critical error!\nError origin: %s\nError: %s\n", Renderer::ErrorOriginString(origin), err);
+		static void RendererCriticalErrorCallback(const Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkResult vkErr) {
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+				"Renderer called a critical error!\nError origin: {}\nError: {}\n", Renderer::ErrorOriginString(origin), err);
 			if (vkErr != VK_SUCCESS) {
-				printf("Vulkan error code: %i\n", (int)vkErr); 
+				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+					"Vulkan error code: {}\n", (int)vkErr);
 			}
 			if (s_engine_instance != nullptr) {
 				s_engine_instance->~Engine();
 			}
-			printf("Stopping program execution...\n");
+			fmt::print(fmt::emphasis::bold, "Stopping program execution...\n");
 			exit(EXIT_FAILURE);
 		}
 
-		static void RendererErrorCallback(const Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkFlags vkErr) {
-			printf("Renderer called an error!\nError origin: %s\nError: %s\n", Renderer::ErrorOriginString(origin), err);
-			if (vkErr != VK_SUCCESS) {
-				printf("Vulkan error code: %i\n", (int)vkErr); 
+		static void TextRendererCriticalErrorCallback(const TextRenderer* renderer, 
+			TextRenderer::ErrorOrigin origin, const char* err, FT_Error ftErr) {
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+				"Text renderer called a critical error!\nError origin: {}\nError: {}\n", TextRenderer::ErrorOriginString(origin), err);
+			if (ftErr != VK_SUCCESS) {
+				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+					"FreeType error code: {}\n", ftErr);
 			}
+			if (s_engine_instance != nullptr) {
+				s_engine_instance->~Engine();
+			}
+			fmt::print(fmt::emphasis::bold, "Stopping program execution...\n");
+			exit(EXIT_FAILURE);
 		}
 
 		static void SwapchainCreateCallback(const Renderer* renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews) {
@@ -845,17 +862,20 @@ namespace engine {
 
 		static inline bool UpdateEngineInstance(Engine* engine) {
 			if (s_engine_instance) {
-				printf("attempting to initialize engine twice (only one engine allowed)!");
+				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+					"attempting to initialize engine twice (only one engine allowed)!");
 				exit(EXIT_FAILURE);
 			}
 			s_engine_instance = engine;
 			return true;
 		}	
 
-		Engine(const char* appName, GLFWwindow* window, bool includeImGui, size_t entityConstructorCount, EntityConstructor* pEntityConstructors, size_t entityReservation)
+		Engine(const char* appName, GLFWwindow* window, bool includeImGui, size_t maxFontCount, size_t entityConstructorCount, 
+			EntityConstructor* pEntityConstructors, size_t entityReservation)
 			: m_Initialized(UpdateEngineInstance(this)), 
 				m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, 
-					includeImGui, RendererCriticalErrorCallback, RendererErrorCallback, SwapchainCreateCallback),
+					includeImGui, RendererCriticalErrorCallback, SwapchainCreateCallback),
+				m_TextRenderer(m_Renderer, maxFontCount, TextRendererCriticalErrorCallback),
 				m_EntityAllocator(), m_EntityConstructorCount(entityConstructorCount), m_pEntityConstructors(pEntityConstructors),
 				m_StaticQuadMesh(*this) {
 			m_Entities.Reserve(entityReservation);
@@ -899,9 +919,10 @@ namespace engine {
 		}
 
 		void CriticalError(ErrorOrigin origin, const char* err) {
-			printf("Engine called a critical error!\nError origin: %s\nError: %s\n", ErrorOriginString(origin), err);
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
+				"Engine called a critical error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
 			this->~Engine();
-			printf("Stopping program execution...\n");
+			fmt::print(fmt::emphasis::bold, "Stopping program execution...\n");
 			exit(EXIT_FAILURE);
 		}
 
