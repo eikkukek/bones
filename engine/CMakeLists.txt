@@ -15,10 +15,14 @@ add_subdirectory(libraries/vulkan/Vulkan-Headers-main)
 add_subdirectory(libraries/vulkan/Vulkan-Loader-main)
 add_subdirectory(libraries/glfw/glfw-3.3.9)
 add_subdirectory(libraries/glslang)
+add_subdirectory(libraries/freetype)
+add_subdirectory(libraries/fmt)
 
 add_library(engine STATIC
+
 	src/engine.cpp
 	src/renderer.cpp
+	src/text_renderer.cpp
 
 	src/imgui/imgui.cpp
 	src/imgui/imgui_draw.cpp
@@ -28,7 +32,7 @@ add_library(engine STATIC
 	src/imgui/imgui_widgets.cpp
 )
 
-target_link_libraries(engine vulkan glfw glslang)
+target_link_libraries(engine vulkan glfw glslang freetype fmt)
 
 target_include_directories(engine
 	PUBLIC headers 
@@ -36,4 +40,6 @@ target_include_directories(engine
 	PUBLIC libraries/vulkan/Vulkan-Headers-main/include
 	PUBLIC libraries/glfw/glfw-3.3.9/include
 	PUBLIC libraries/glslang/glslang/include
+	PUBLIC libraries/freetype/include
+	PUBLIC libraries/fmt/include
 )
