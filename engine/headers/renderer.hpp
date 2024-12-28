@@ -44,7 +44,8 @@ namespace engine {
 			IndexOutOfBounds = 5,
 			Shader = 6,
 			Buffer = 7,
-			Threading = 8,
+			Image = 8,
+			Threading = 9,
 			MaxEnum,
 		};
 
@@ -58,6 +59,7 @@ namespace engine {
 				"IndexOutOfBounds",
 				"Shader",
 				"Buffer",
+				"Image",
 				"Threading",
 			};
 			if (origin == ErrorOrigin::MaxEnum) {
@@ -66,7 +68,7 @@ namespace engine {
 			return strings[(size_t)origin];
 		}
 
-		typedef void (*CriticalErrorCallback)(const Renderer* renderer, ErrorOrigin origin, const char* err, VkFlags vkErr);
+		typedef void (*CriticalErrorCallback)(const Renderer* renderer, ErrorOrigin origin, const char* err, VkResult vkErr);
 
 		enum class Queue {
 			Graphics = 0,
@@ -570,6 +572,8 @@ namespace engine {
 			Buffer(Renderer& renderer) noexcept 
 				: m_Renderer(renderer), m_Buffer(VK_NULL_HANDLE), m_VulkanDeviceMemory(VK_NULL_HANDLE), m_BufferSize(0) {}
 
+			Buffer(const Buffer&) = delete;
+
 			Buffer(Buffer&& other) 
 				: m_Renderer(other.m_Renderer), m_Buffer(other.m_Buffer), m_VulkanDeviceMemory(other.m_VulkanDeviceMemory),
 					m_BufferSize(other.m_BufferSize) {
@@ -827,7 +831,8 @@ namespace engine {
 			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
 				"Renderer called an error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
 			if (vkErr != VK_SUCCESS) {
-				fmt::print("Vulkan error code: {}\n", (int)vkErr); 
+				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+					"Vulkan error code: {}\n", (int)vkErr); 
 			}
 		}
 
@@ -1391,7 +1396,7 @@ namespace engine {
 					!m_InFlightRenderStack.Allocate<VkImage>(m_FramesInFlight, &m_SwapchainImages))
 				{
 					m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
-						"in flight stack was out of memory (in function CreateSwapchain)!", 0);
+						"in flight stack was out of memory (in function CreateSwapchain)!", VK_SUCCESS);
 				}
 
 				vkGetSwapchainImagesKHR(m_VulkanDevice, m_Swapchain, &m_FramesInFlight, m_SwapchainImages.m_Data);
