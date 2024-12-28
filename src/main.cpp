@@ -15,16 +15,10 @@ layout(location = 2) in vec2 inUV;
 layout(location = 3) in vec3 inTangent;
 layout(location = 4) in vec3 inBitangent;
 
-layout(location = 0) out vec3 outColor;
-
-vec3 colors[3] = vec3[](
-	vec3(1.0, 0.0, 0.0),
-	vec3(0.0, 1.0, 0.0),
-	vec3(0.0, 0.0, 1.0)
-);
+layout(location = 0) out vec2 outUV;
 
 void main() {
-	outColor = colors[gl_VertexIndex];
+	outUV = inUV;
 	gl_Position = vec4(inPosition, 1.0f);
 }
 	)";
@@ -32,12 +26,12 @@ void main() {
 	static constexpr const char* cexpr_fragment_shader = R"(
 #version 450
 
-layout(location = 0) in vec3 inColor;
+layout(location = 0) in vec2 inUV;
 
 layout(location = 0) out vec4 outColor;
 
 void main() {
-	outColor = vec4(inColor, 1.0);
+	outColor = vec4(inUV, 0.0f, 1.0f);
 }
 	)";
 
@@ -189,7 +183,7 @@ void main() {
 			.pNext = nullptr,
 			.viewMask = 0,
 			.colorAttachmentCount = 1,
-			.pColorAttachmentFormats = &m_Renderer.m_GpuSwapchainSurfaceFormat.format,
+			.pColorAttachmentFormats = &m_Renderer.m_SwapchainSurfaceFormat.format,
 			.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
 			.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
 		};
@@ -218,13 +212,13 @@ void main() {
 
 		m_Renderer.CreateGraphicsPipelines(1, &pipelineInfo, &m_GpuPipeline);
 
-		vkDestroyShaderModule(m_Renderer.m_GpuDevice, shaderStages[0].module, m_Renderer.m_GpuAllocationCallbacks);
-		vkDestroyShaderModule(m_Renderer.m_GpuDevice, shaderStages[1].module, m_Renderer.m_GpuAllocationCallbacks);
+		vkDestroyShaderModule(m_Renderer.m_VulkanDevice, shaderStages[0].module, m_Renderer.m_VulkanAllocationCallbacks);
+		vkDestroyShaderModule(m_Renderer.m_VulkanDevice, shaderStages[1].module, m_Renderer.m_VulkanAllocationCallbacks);
 	}
 
 	void Terminate() {
-		vkDestroyPipelineLayout(m_Renderer.m_GpuDevice, m_GpuPipelineLayout, m_Renderer.m_GpuAllocationCallbacks);
-		vkDestroyPipeline(m_Renderer.m_GpuDevice, m_GpuPipeline, m_Renderer.m_GpuAllocationCallbacks);
+		vkDestroyPipelineLayout(m_Renderer.m_VulkanDevice, m_GpuPipelineLayout, m_Renderer.m_VulkanAllocationCallbacks);
+		vkDestroyPipeline(m_Renderer.m_VulkanDevice, m_GpuPipeline, m_Renderer.m_VulkanAllocationCallbacks);
 	}
 };
 
@@ -234,19 +228,9 @@ public:
 
 	VkDeviceSize vertexOffset = 0;
 	engine::MeshData meshData{};
-	engine::StaticMesh mesh;
 
-	TestEntity(engine::Engine& engine) : Entity(engine, "Test", 0, sizeof(TestEntity)), mesh(engine) {
-		engine::Engine::Vertex vertices[3]{};
-		uint32_t indices[3] { 0, 1, 2 };
-		vertices[0].m_Position = { 0.0f, -0.5f, 0.0f };
-		vertices[1].m_Position = { 0.5f, 0.5f, 0.0f };
-		vertices[2].m_Position = { -0.5f, 0.5f, 0.0f };
-		mesh.CreateBuffers(3, vertices, 3, indices);
-		meshData.vertexBufferCount = 1;
-		meshData.vertexBuffers = &mesh.m_VertexBuffer.m_GpuBuffer;
-		meshData.vertexBufferOffsets = &vertexOffset;
-		meshData.indexBuffer = mesh.m_IndexBuffer.m_GpuBuffer;
+	TestEntity(engine::Engine& engine) : Entity(engine, "Test", 0, sizeof(TestEntity)) {
+		meshData = engine.m_StaticQuadMesh.GetMeshData();
 	}
 
 	bool LogicUpdate() {
@@ -279,7 +263,7 @@ int main() {
 		glfwPollEvents();
 		engine.Render();
 	}
-	vkDeviceWaitIdle(engine.m_Renderer.m_GpuDevice);	
+	vkDeviceWaitIdle(engine.m_Renderer.m_VulkanDevice);	
 	testPipeline.Terminate();
 	glfwTerminate();
 }
