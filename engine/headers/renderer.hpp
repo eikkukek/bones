@@ -9,11 +9,12 @@
 #include "imgui_internal.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_impl_glfw.h"
+#include "fmt/printf.h"
+#include "fmt/color.h"
 #include <assert.h>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <cstdio>
 #include <new>
 #include <thread>
 #include <mutex>
@@ -24,6 +25,8 @@ namespace engine {
 #ifndef BOOL_RENDERER_DEBUG 
 #define BOOL_RENDERER_DEBUG true 
 #endif
+
+	static_assert(sizeof(size_t) >= 4, "size of size_t isn't big enough!");
 
 	class Renderer {
 	public:
@@ -45,7 +48,25 @@ namespace engine {
 			MaxEnum,
 		};
 
-		typedef void (*ErrorCallback)(const Renderer* renderer, ErrorOrigin origin, const char* err, VkFlags vkErr);
+		static const char* ErrorOriginString(ErrorOrigin origin) {
+			static constexpr const char* strings[(size_t)ErrorOrigin::MaxEnum] {
+				"Uncategorized",
+				"InitializationFailed",
+				"Vulkan",
+				"OutOfMemory",
+				"NullDereference",
+				"IndexOutOfBounds",
+				"Shader",
+				"Buffer",
+				"Threading",
+			};
+			if (origin == ErrorOrigin::MaxEnum) {
+				return strings[0];
+			}
+			return strings[(size_t)origin];
+		}
+
+		typedef void (*CriticalErrorCallback)(const Renderer* renderer, ErrorOrigin origin, const char* err, VkFlags vkErr);
 
 		enum class Queue {
 			Graphics = 0,
@@ -95,7 +116,7 @@ namespace engine {
 
 				T& operator[](size_t index) {
 					if (index >= m_Size) {
-						PrintError("index out of bounds (engine::Renderer::Stack::Array::operator[])!", ErrorOrigin::IndexOutOfBounds);
+						PrintError(ErrorOrigin::IndexOutOfBounds, "index out of bounds (engine::Renderer::Stack::Array::operator[])!");
 						assert(false);
 					}
 					return m_Data[index];
@@ -117,18 +138,17 @@ namespace engine {
 			T* AllocateSingle(Args&&... args) {
 				T* res = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T)) > m_MaxSize) {
-					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::OutOfMemory);
+					PrintError(ErrorOrigin::OutOfMemory, "stack out of memory (function engine::Renderer::Stack::Allocate)!");
 					return nullptr;
 				}
-				new(res) T(std::forward<Args>(args)...);
-				return res;
+				return new(res) T(std::forward<Args>(args)...);
 			}
 
 			template<typename T>
 			Array<T> Allocate(size_t count) {
 				T* res = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T) * count) > m_MaxSize) {
-					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::OutOfMemory);
+					PrintError(ErrorOrigin::OutOfMemory, "stack out of memory (function engine::Renderer::Stack::Allocate)!");
 					return Array<T>(0, nullptr);
 				}
 				T* iter = res;
@@ -143,7 +163,7 @@ namespace engine {
 			bool Allocate(size_t count, Array<T>* out) {
 				T* res = (T*)(m_Data + m_UsedSize);
 				if ((m_UsedSize += sizeof(T) * count) > m_MaxSize) {
-					PrintError("stack out of memory (function engine::Renderer::Stack::Allocate)!", ErrorOrigin::OutOfMemory);
+					PrintError(ErrorOrigin::OutOfMemory, "stack out of memory (function engine::Renderer::Stack::Allocate)!");
 					return false;
 				}
 				T* iter = res;
@@ -157,12 +177,12 @@ namespace engine {
 
 			bool Allocate(size_t size, void** const out) {
 				if (out == nullptr) {
-					PrintError("pointer passed to stack was null (function Stack::Allocate)!", ErrorOrigin::NullDereference);
+					PrintError(ErrorOrigin::NullDereference, "pointer passed to stack was null (function Stack::Allocate)!");
 					return false;
 				}
 				*out = m_Data + m_UsedSize;
 				if ((m_UsedSize += size) > m_MaxSize) {
-					PrintError("stack out of memory (function Stack::Allocate)!", ErrorOrigin::OutOfMemory);
+					PrintError(ErrorOrigin::OutOfMemory, "stack out of memory (function Stack::Allocate)!");
 					return false;
 				}
 				return true;
@@ -176,6 +196,43 @@ namespace engine {
 
 			void Clear() {
 				m_UsedSize = 0;
+			}
+		};
+
+		template<typename T, uint32_t max_count_T>
+		struct OneTypeStack {
+
+			typedef T* Iterator;
+			typedef T* const ConstItererator;
+
+			T* const m_Data;
+			uint32_t m_Count;
+
+			OneTypeStack() noexcept : m_Count(0), m_Data((T*)malloc(max_count_T * sizeof(T))) {}
+
+			~OneTypeStack() {
+				free(m_Data);
+			}
+
+			template<typename... Args>
+			T* New(Args&&... args) {
+				if (m_Count >= max_count_T) {
+					PrintError(ErrorOrigin::OutOfMemory, "one type stack was out of memory (function OneTypeStack::New)!");
+					return nullptr;
+				}
+				return new(&m_Data[m_Count++]) T(std::forward<Args>(args)...);
+			}
+
+			void Clear() {
+				m_Count = 0;
+			}
+
+			Iterator begin() const {
+				return m_Data;
+			}
+
+			ConstItererator end() const {
+				return &m_Data[m_Count];
 			}
 		};
 
@@ -202,8 +259,8 @@ namespace engine {
 
 			bool CreatePool(uint32_t poolSizeCount, VkDescriptorPoolSize* pPoolSizes) {
 				if (m_DescriptorPool != VK_NULL_HANDLE) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Uncategorized, 
-						"attempting to create descriptor pool (in function DescriptorPool::CreatePool) that has already been created!", VK_SUCCESS);
+					PrintError(ErrorOrigin::Uncategorized, 
+						"attempting to create descriptor pool (in function DescriptorPool::CreatePool) that has already been created!");
 					return false;
 				}
 				VkDescriptorPoolCreateInfo createInfo {
@@ -214,9 +271,12 @@ namespace engine {
 					.poolSizeCount = poolSizeCount,
 					.pPoolSizes = pPoolSizes,
 				};
-				VkResult vkRes = vkCreateDescriptorPool(m_Renderer.m_VulkanDevice, &createInfo, m_Renderer.m_VulkanAllocationCallbacks, &m_DescriptorPool);
+				VkResult vkRes = vkCreateDescriptorPool(m_Renderer.m_VulkanDevice, &createInfo, 
+					m_Renderer.m_VulkanAllocationCallbacks, &m_DescriptorPool);
 				if (vkRes != VK_SUCCESS) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Vulkan, "failed to create descriptor pool (function vkCreateDescriptorPool in function DescriptorPool::CreatePool)!", vkRes);
+					PrintError(ErrorOrigin::Vulkan, 
+						"failed to create descriptor pool (function vkCreateDescriptorPool in function DescriptorPool::CreatePool)!",
+						vkRes);
 					m_DescriptorPool = VK_NULL_HANDLE;
 					return false;
 				}
@@ -243,6 +303,10 @@ namespace engine {
 
 			Shader(Renderer& renderer) noexcept 
 				: m_Renderer(renderer), m_GlslangShader(nullptr), m_GlslangProgram(nullptr) {}
+
+			static void PrintShaderMessage(const char* log, const char* dLog) {
+				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "{}\n{}", log, dLog);
+			}
 
 			bool NotCompiled() const {
 				return !m_GlslangShader || !m_GlslangProgram;
@@ -279,8 +343,7 @@ namespace engine {
 				};
 
 				if (!glslang_initialize_process()) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, 
-						"failed to initialize glslang process (in Shader constructor)!", VK_SUCCESS);
+					PrintError(ErrorOrigin::Shader, "failed to initialize glslang process (in Shader constructor)!");
 					return false;
 				}
 
@@ -289,8 +352,7 @@ namespace engine {
 				if (!glslang_shader_preprocess(m_GlslangShader, &input)) {
 					const char* log = glslang_shader_get_info_log(m_GlslangShader);
 					const char* dLog = glslang_shader_get_info_debug_log(m_GlslangShader);
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, log, VK_SUCCESS);
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, dLog, VK_SUCCESS);
+					PrintShaderMessage(log, dLog);
 					glslang_shader_delete(m_GlslangShader);
 					m_GlslangShader = nullptr;
 					return false;
@@ -299,8 +361,7 @@ namespace engine {
 				if (!glslang_shader_parse(m_GlslangShader, &input)) {
 					const char* log = glslang_shader_get_info_log(m_GlslangShader);
 					const char* dLog = glslang_shader_get_info_debug_log(m_GlslangShader);
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, log, VK_SUCCESS);
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, dLog, VK_SUCCESS);
+					PrintShaderMessage(log, dLog);
 					glslang_shader_delete(m_GlslangShader);
 					m_GlslangShader = nullptr;
 					return false;
@@ -312,8 +373,7 @@ namespace engine {
 				if (!glslang_program_link(m_GlslangProgram, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT)) {
 					const char* log = glslang_program_get_info_log(m_GlslangProgram);
 					const char* dLog = glslang_program_get_info_debug_log(m_GlslangProgram);
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, log, VK_SUCCESS);
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, dLog, VK_SUCCESS);
+					PrintShaderMessage(log, dLog);
 					glslang_shader_delete(m_GlslangShader);
 					glslang_program_delete(m_GlslangProgram);
 					m_GlslangShader = nullptr;
@@ -326,6 +386,7 @@ namespace engine {
 				if (glslang_program_SPIRV_get_messages(m_GlslangProgram)) {
 					PrintMessage(glslang_program_SPIRV_get_messages(m_GlslangProgram));
 				}
+				return true;
 			}
 
 			uint32_t GetCodeSize() const noexcept {
@@ -344,8 +405,8 @@ namespace engine {
 
 			VkShaderModule CreateShaderModule() {
 				if (NotCompiled()) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Shader, 
-						"attempting to create shader module with a shader (in function CreateShaderModule) with a shader that hasn't been compiled", VK_SUCCESS);
+					PrintError(ErrorOrigin::Shader, 
+						"attempting to create shader module with a shader (in function CreateShaderModule) with a shader that hasn't been compiled");
 					return VK_NULL_HANDLE;
 				}
 				VkShaderModuleCreateInfo createInfo {
@@ -395,9 +456,8 @@ namespace engine {
 
 			void Initialize(VkCommandPool commandPool) {
 				if (m_FramesInFlight != 0) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::InitializationFailed, 
-						"attempting to initialize command buffer free list more than once (function CommandBufferFreeList::Initialize)!",
-						VK_SUCCESS);
+					PrintError(ErrorOrigin::InitializationFailed, 
+						"attempting to initialize command buffer free list more than once (function CommandBufferFreeList::Initialize)!");
 					return;
 				}
 				m_CommandPool = commandPool;
@@ -421,15 +481,13 @@ namespace engine {
 
 			void Push(VkCommandBuffer commandBuffer, uint32_t currentFrame) {
 				if (currentFrame >= m_FramesInFlight) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::IndexOutOfBounds, 
-						"current frame goes out of bounds of command buffer free list frames in flight (function CommandBufferFreeList::Push)!", 
-						VK_SUCCESS);
+					PrintError(ErrorOrigin::IndexOutOfBounds, 
+						"current frame goes out of bounds of command buffer free list frames in flight (function CommandBufferFreeList::Push)!");
 					return;
 				}
 				uint32_t& count = m_Counts[currentFrame];
 				if (count >= max_command_buffers_per_frame) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::OutOfMemory, 
-						"command buffer free list was out of memory (function CommandBufferFreeList::Push)!", VK_SUCCESS);
+					PrintError(ErrorOrigin::OutOfMemory, "command buffer free list was out of memory (function CommandBufferFreeList::Push)!");
 					return;
 				}
 				m_Data[currentFrame][count++] = commandBuffer;
@@ -437,9 +495,8 @@ namespace engine {
 
 			void Free(uint32_t currentFrame) {
 				if (currentFrame >= m_FramesInFlight) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::IndexOutOfBounds, 
-						"given frame goes out of bounds of command buffer free list frames in flight (function CommandBufferFreeList::Free)!", 
-						VK_SUCCESS);
+					PrintError(ErrorOrigin::IndexOutOfBounds, 
+						"given frame goes out of bounds of command buffer free list frames in flight (function CommandBufferFreeList::Free)!");
 					return;
 				}
 				uint32_t& count = m_Counts[currentFrame];
@@ -462,66 +519,45 @@ namespace engine {
 			}
 		};
 
-		struct Buffer;
-
 		template<Queue queue_T>
 		struct CommandPool {
 			VkCommandPool m_CommandPool{};
 		};
 
-		template<Queue queue_T>
-		struct CommandBuffer {
-			VkCommandBuffer m_CommandBuffer{};
-			VkCommandPool m_CommandPool{};
-			Bool32 m_Free{};
+		enum CommandBufferFlag {
+			CommandBufferFlag_FreeAfterSubmit = 1,
+			CommandBufferFlag_SubmitCallback = 2,
+			CommandBufferFlag_MultiThreaded = 4,
 		};
 
-		template<Queue queue_T, uint32_t max_buffers_T>
-		struct CommandBufferQueue {
+		typedef uint32_t CommandBufferFlags;
 
-			typedef CommandBuffer<queue_T> CommandBuffer;
-			typedef CommandBuffer* Iterator;
-			typedef CommandBuffer* const ConstItererator;
+		struct CommandBufferSubmitCallback {
 
-			const Renderer& m_Renderer;
-			std::mutex m_Mutex{};
-			CommandBuffer* const m_Data;
-			uint32_t m_Size;
+			struct BufferData {
+				VkBuffer m_Buffer{};
+				VkDeviceMemory m_DeviceMemory{};
+			};
 
-			CommandBufferQueue(Renderer& renderer) noexcept : m_Renderer(renderer), m_Size(0), 
-				m_Data((CommandBuffer*)malloc(max_buffers_T * sizeof(CommandBuffer))) {}
+			union Data {
+				BufferData u_BufferData{};
+			};
 
-			~CommandBufferQueue() {
-				free(m_Data);
-			}
+			void (*m_Callback)(const Renderer& renderer, const CommandBufferSubmitCallback&){};
+			Data m_Data{};
 
-			CommandBuffer& New() {
-				if (m_Size >= max_buffers_T) {
-					m_Renderer.m_CriticalErrorCallback(&m_Renderer, ErrorOrigin::OutOfMemory, 
-						"command buffer queue was full (in function CommandBufferQueue::New)!", VK_SUCCESS);
+			void Callback(const Renderer& renderer) const {
+				if (m_Callback) {
+					m_Callback(renderer, *this);
 				}
-				return *new(&m_Data[m_Size++]) CommandBuffer();
 			}
+		};
 
-			void Clear() {
-				m_Size = 0;
-			}
-
-			void Lock() {
-				m_Mutex.lock();
-			}
-
-			void Unlock() {
-				m_Mutex.unlock();
-			}
-
-			Iterator begin() const {
-				return m_Data;
-			}
-
-			ConstItererator end() const {
-				return m_Data[m_Size];
-			}
+		template<Queue queue_T>
+		struct CommandBuffer {
+			CommandBufferFlags m_Flags{};
+			VkCommandBuffer m_CommandBuffer{};
+			CommandBufferSubmitCallback m_SubmitCallback{};
 		};
 
 		struct Buffer {
@@ -547,6 +583,9 @@ namespace engine {
 			}
 
 			void Terminate() {
+				if (m_Renderer.m_VulkanDevice == VK_NULL_HANDLE) {
+					return;
+				}
 				vkFreeMemory(m_Renderer.m_VulkanDevice, m_VulkanDeviceMemory, m_Renderer.m_VulkanAllocationCallbacks);
 				m_VulkanDeviceMemory = VK_NULL_HANDLE;
 				vkDestroyBuffer(m_Renderer.m_VulkanDevice, m_Buffer, m_Renderer.m_VulkanAllocationCallbacks);
@@ -558,8 +597,8 @@ namespace engine {
 				VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE, uint32_t queueFamilyIndexCount = 0, 
 				const uint32_t* pQueueFamilyIndices = nullptr) {
 				if (m_Buffer != VK_NULL_HANDLE || m_VulkanDeviceMemory != VK_NULL_HANDLE) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Uncategorized, 
-						"attempting to create buffer (in function Buffer::Create) when the buffer has already been created!", VK_SUCCESS);
+					PrintError(ErrorOrigin::Uncategorized, 
+						"attempting to create buffer (in function Buffer::Create) when the buffer has already been created!");
 					return false;
 				}
 				VkBufferCreateInfo bufferInfo {
@@ -585,14 +624,13 @@ namespace engine {
 					.allocationSize = memRequirements.size,
 				};
 				if (!m_Renderer.FindMemoryTypeIndex(memRequirements.memoryTypeBits, bufferProperties, allocInfo.memoryTypeIndex)) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Vulkan,
-						"failed to find memory type index when creating buffer (function FindMemoryTypeIndex in function Buffer::Create)!", 
-						VK_SUCCESS);
+					PrintError(ErrorOrigin::Vulkan, 
+						"failed to find memory type index when creating buffer (function FindMemoryTypeIndex in function Buffer::Create)!");
 					Terminate();
 					return {};
 				}
-				if (!m_Renderer.VkCheck(
-						vkAllocateMemory(m_Renderer.m_VulkanDevice, &allocInfo, m_Renderer.m_VulkanAllocationCallbacks, &m_VulkanDeviceMemory),
+				if (!m_Renderer.VkCheck(vkAllocateMemory(m_Renderer.m_VulkanDevice, &allocInfo, 
+						m_Renderer.m_VulkanAllocationCallbacks, &m_VulkanDeviceMemory),
 						"failed to allocate memory for buffer (function vkAllocateMemory in function Buffer::Create)!")) {
 					Terminate();
 					return {};
@@ -605,7 +643,7 @@ namespace engine {
 				return true;
 			}
 
-			bool CreateWithData(CommandPool<Queue::Transfer> commandPool, VkDeviceSize size, const void* data,
+			bool CreateWithData(VkDeviceSize size, const void* data,
 				VkBufferUsageFlags bufferUsage, VkMemoryPropertyFlags bufferProperties,
 				VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE, uint32_t queueFamilyIndexCount = 0, 
 				const uint32_t* pQueueFamilyIndices = nullptr) {
@@ -613,8 +651,8 @@ namespace engine {
 				Buffer stagingBuffer(m_Renderer);
 				if (!stagingBuffer.Create(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
 						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Buffer, 
-						"failed to create buffer (function Buffer::Create in function Buffer::CreateWithData)!", VK_SUCCESS);
+					PrintError(ErrorOrigin::Buffer, 
+						"failed to create buffer (function Buffer::Create in function Buffer::CreateWithData)!");
 				}
 
 				void* stagingMap;
@@ -624,29 +662,28 @@ namespace engine {
 
 				if (!Create(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | bufferUsage, 
 						bufferProperties, sharingMode, queueFamilyIndexCount, pQueueFamilyIndices)) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Buffer, 
-						"failed to create buffer (function Buffer::Create in function Buffer::CreateWithData)!", VK_SUCCESS);
+					PrintError(ErrorOrigin::Buffer, 
+						"failed to create buffer (function Buffer::Create in function Buffer::CreateWithData)!");
 					return false;
 				}
 
 				VkCommandBufferAllocateInfo commandBufferAllocInfo {
 					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 					.pNext = nullptr,
-					.commandPool = commandPool.m_CommandPool,
+					.commandPool = m_Renderer.m_TransferCommandPool,
 					.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
 					.commandBufferCount = 1,
 				};
-				if (commandBufferAllocInfo.commandPool == VK_NULL_HANDLE) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Threading, 
-						"couldn't find command pool for thread (function GetThisThreadCommandPool in function Buffer::CreateWithData)!", 
-						VK_SUCCESS);
+				m_Renderer.m_TransferCommandBufferQueueMutex.lock();
+				CommandBuffer<Queue::Transfer>* commandBuffer = m_Renderer.m_TransferCommandBufferQueue.New();
+				if (!commandBuffer) {
+					PrintError(ErrorOrigin::OutOfMemory, 
+						"transfer command buffer queue was out of memory (function OneTypeStack::New in function Buffer::CopyBuffer)!");
 					Terminate();
 					return false;
 				}
-				m_Renderer.m_TransferCommandBufferQueue.Lock();
-				CommandBuffer<Queue::Transfer>& commandBuffer = m_Renderer.m_TransferCommandBufferQueue.New();
 				if (!m_Renderer.VkCheck(vkAllocateCommandBuffers(m_Renderer.m_VulkanDevice, 
-						&commandBufferAllocInfo, &commandBuffer.m_CommandBuffer),
+						&commandBufferAllocInfo, &commandBuffer->m_CommandBuffer),
 						"failed to allocate command buffer for staging transfer (function vkAllocateCommandBuffers in function Buffer::CreateWithData)!"
 					)) {
 					Terminate();
@@ -658,7 +695,7 @@ namespace engine {
 					.flags = 0,
 					.pInheritanceInfo = nullptr,
 				};
-				if (!m_Renderer.VkCheck(vkBeginCommandBuffer(commandBuffer.m_CommandBuffer, &commandBufferBeginInfo), 
+				if (!m_Renderer.VkCheck(vkBeginCommandBuffer(commandBuffer->m_CommandBuffer, &commandBufferBeginInfo), 
 						"failed to begin command buffer for staging transfer (function vkBeginCommandBuffer in function Buffer::CreateWithData)!"
 				)) {
 					Terminate();
@@ -669,46 +706,59 @@ namespace engine {
 					.dstOffset = 0,
 					.size = size,
 				};
-				vkCmdCopyBuffer(commandBuffer.m_CommandBuffer, stagingBuffer.m_Buffer, m_Buffer, 1, &copyRegion);
-				if (!m_Renderer.VkCheck(vkEndCommandBuffer(commandBuffer.m_CommandBuffer),
+				vkCmdCopyBuffer(commandBuffer->m_CommandBuffer, stagingBuffer.m_Buffer, m_Buffer, 1, &copyRegion);
+				if (!m_Renderer.VkCheck(vkEndCommandBuffer(commandBuffer->m_CommandBuffer),
 						"failed to end command buffer (function vkEndCommandBuffer in function Buffer::CreateWithData)")) {
 					return false;
 				}
-				commandBuffer.m_Free = true;
-				m_Renderer.m_TransferCommandBufferQueue.Unlock();
+				commandBuffer->m_Flags = CommandBufferFlag_FreeAfterSubmit | CommandBufferFlag_SubmitCallback;
+				commandBuffer->m_SubmitCallback.m_Data = {
+					.u_BufferData {
+						.m_Buffer = stagingBuffer.m_Buffer,
+						.m_DeviceMemory = stagingBuffer.m_VulkanDeviceMemory,
+					}
+				};
+				stagingBuffer.m_Buffer = VK_NULL_HANDLE;
+				stagingBuffer.m_VulkanDeviceMemory = VK_NULL_HANDLE;
+				commandBuffer->m_SubmitCallback.m_Callback = [](const Renderer& renderer, const CommandBufferSubmitCallback& callback) {
+					vkDestroyBuffer(renderer.m_VulkanDevice, callback.m_Data.u_BufferData.m_Buffer, renderer.m_VulkanAllocationCallbacks);
+					vkFreeMemory(renderer.m_VulkanDevice, callback.m_Data.u_BufferData.m_DeviceMemory, renderer.m_VulkanAllocationCallbacks);
+				};
+				m_Renderer.m_TransferCommandBufferQueueMutex.unlock();
 				return true;
 			}
 
-			bool CopyBuffer(CommandPool<Queue::Transfer> commandPool, 
-				Buffer& dst, VkDeviceSize srcOffset, VkDeviceSize dstOffset, VkDeviceSize size) const {
+			bool CopyBuffer(Buffer& dst, VkDeviceSize srcOffset, VkDeviceSize dstOffset, VkDeviceSize size) const {
 				if (m_Buffer == VK_NULL_HANDLE || dst.m_Buffer == VK_NULL_HANDLE) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Buffer, 
-						"attempting to copy buffer when the size + srcOffset is larger than source size (in function Buffer::CopyBuffer)!", 
-						VK_SUCCESS);
+					PrintError(ErrorOrigin::Buffer, 
+						"attempting to copy buffer when the size + srcOffset is larger than source size (in function Buffer::CopyBuffer)!");
 				}
 				if (m_BufferSize < size + srcOffset) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Buffer, 
-						"attempting to copy buffer when the size + srcOffset is larger than source size (in function Buffer::CopyBuffer)!", 
-						VK_SUCCESS);
+					PrintError(ErrorOrigin::Buffer, 
+						"attempting to copy buffer when the size + srcOffset is larger than source size (in function Buffer::CopyBuffer)!");
 					return false;
 				}
 				if (dst.m_BufferSize < size + dstOffset) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::Buffer, 
-						"attempting to copy buffer when the size + dstOffset is larger than destination size (in function Buffer::CopyBuffer)!", 
-						VK_SUCCESS);
+					PrintError(ErrorOrigin::Buffer, 
+						"attempting to copy buffer when the size + dstOffset is larger than destination size (in function Buffer::CopyBuffer)!");
 					return false;
 				}
-				m_Renderer.m_TransferCommandBufferQueue.Lock();
-				CommandBuffer<Queue::Transfer> commandBuffer = m_Renderer.m_TransferCommandBufferQueue.New();
+				m_Renderer.m_TransferCommandBufferQueueMutex.lock();
+				CommandBuffer<Queue::Transfer>* commandBuffer = m_Renderer.m_TransferCommandBufferQueue.New();
+				if (!commandBuffer) {
+					PrintError(ErrorOrigin::OutOfMemory, 
+						"transfer command buffer queue was out of memory (function OneTypeStack::New in function Buffer::CopyBuffer)!");
+					return false;
+				}
 				VkCommandBufferAllocateInfo commandBufferAllocInfo {
 					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 					.pNext = nullptr,
-					.commandPool = commandPool.m_CommandPool,
+					.commandPool = m_Renderer.m_TransferCommandPool,
 					.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
 					.commandBufferCount = 1,
 				};
 				if (!m_Renderer.VkCheck(vkAllocateCommandBuffers(m_Renderer.m_VulkanDevice, &commandBufferAllocInfo, 
-						&commandBuffer.m_CommandBuffer), 
+						&commandBuffer->m_CommandBuffer), 
 						"failed to allocate command buffer (function vkAllocateCommandBuffers in function Buffer::CopyBuffer)!")) {
 					return false;
 				}
@@ -718,7 +768,7 @@ namespace engine {
 					.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
 					.pInheritanceInfo = nullptr,
 				};
-				if (!m_Renderer.VkCheck(vkBeginCommandBuffer(commandBuffer.m_CommandBuffer, &commandBufferBeginInfo), 
+				if (!m_Renderer.VkCheck(vkBeginCommandBuffer(commandBuffer->m_CommandBuffer, &commandBufferBeginInfo), 
 						"failed to begin command buffer (function vkBeginCommandBuffer in function Buffer::CopyBuffer)!")) {
 					return false;
 				}
@@ -727,110 +777,13 @@ namespace engine {
 					.dstOffset = dstOffset,
 					.size = size,
 				};
-				vkCmdCopyBuffer(commandBuffer.m_CommandBuffer, m_Buffer, dst.m_Buffer, 1, &copyRegion);
-				if (!m_Renderer.VkCheck(vkEndCommandBuffer(commandBuffer.m_CommandBuffer),
+				vkCmdCopyBuffer(commandBuffer->m_CommandBuffer, m_Buffer, dst.m_Buffer, 1, &copyRegion);
+				if (!m_Renderer.VkCheck(vkEndCommandBuffer(commandBuffer->m_CommandBuffer),
 						"failed to end command buffer (function vkEndCommandBuffer in function Buffer::CopyBuffer)")) {
 					return false;
 				}
-				m_Renderer.m_TransferCommandBufferQueue.Unlock();
+				m_Renderer.m_TransferCommandBufferQueueMutex.unlock();
 				return true;
-			}
-		};
-
-		struct StagingBufferDestroyList {
-
-			struct BufferData {
-				VkBuffer m_Buffer{};
-				VkDeviceMemory m_VulkanDeviceMemory{};
-			};
-			
-			static constexpr size_t max_buffers_per_frame = 1000;
-
-			const Renderer& m_Renderer;
-			uint32_t m_FramesInFlight;
-			BufferData(*m_Data)[max_buffers_per_frame];
-			size_t* m_Counts;
-
-			StagingBufferDestroyList(Renderer& renderer) 
-				: m_Renderer(renderer), m_FramesInFlight(0), m_Data(nullptr), m_Counts(nullptr) {}
-
-			void Terminate() {
-				DestroyAll();
-			}
-
-			~StagingBufferDestroyList() {
-				free(m_Data);
-				delete[] m_Counts;
-			}
-
-			void Initialize() {
-				if (m_FramesInFlight != 0) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::InitializationFailed, 
-						"attempting to initialize command buffer free list more than once (function CommandBufferFreeList::Initialize)!",
-						VK_SUCCESS);
-					return;
-				}
-				m_FramesInFlight = m_Renderer.m_FramesInFlight;
-				m_Data = (BufferData(*)[max_buffers_per_frame])malloc(m_FramesInFlight 
-					* sizeof(BufferData[max_buffers_per_frame]));
-				m_Counts = new size_t [m_FramesInFlight]{};
-			}
-
-			void Push(uint32_t currentFrame, VkBuffer buffer, VkDeviceMemory deviceMemory) {
-				if (currentFrame >= m_FramesInFlight) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::IndexOutOfBounds, 
-					"current frame goes out of bounds of staging buffer destroy list frames in flight (function StagingBufferDestroyList::Push)!", 
-						VK_SUCCESS);
-					return;
-				}
-				size_t& count = m_Counts[currentFrame];
-				if (count >= max_buffers_per_frame) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::OutOfMemory, 
-						"staging buffer destroy list was out of memory (function StagingBufferDestroyList::Push)!", VK_SUCCESS);
-					return;
-				}
-				m_Data[currentFrame][count++] = { buffer, deviceMemory };
-			}
-
-			void Destroy(uint32_t currentFrame) {
-				if (currentFrame >= m_FramesInFlight) {
-					m_Renderer.m_ErrorCallback(&m_Renderer, ErrorOrigin::IndexOutOfBounds, 
-					"given frame goes out of bounds of staging buffer destroy list frames in flight (function StagingBufferDestroyList::Destroy)!", 
-						VK_SUCCESS);
-					return;
-				}
-				size_t& count = m_Counts[currentFrame];
-				BufferData(&buffers)[max_buffers_per_frame] = m_Data[currentFrame];
-				for (size_t i = 0; i < count; i++) {
-					BufferData& data = buffers[i];
-					vkDestroyBuffer(m_Renderer.m_VulkanDevice, data.m_Buffer, m_Renderer.m_VulkanAllocationCallbacks);
-					vkFreeMemory(m_Renderer.m_VulkanDevice, data.m_VulkanDeviceMemory, m_Renderer.m_VulkanAllocationCallbacks);
-				}
-				count = 0;
-			}
-
-			void DestroyAll() {
-				for (uint32_t i = 0; i < m_FramesInFlight; i++) {
-					size_t& count = m_Counts[i];
-					for (size_t j = 0; j < count; j++) {
-						BufferData& data = m_Data[i][j];
-						vkDestroyBuffer(m_Renderer.m_VulkanDevice, data.m_Buffer, m_Renderer.m_VulkanAllocationCallbacks);
-						vkFreeMemory(m_Renderer.m_VulkanDevice, data.m_VulkanDeviceMemory, m_Renderer.m_VulkanAllocationCallbacks);
-					}
-					count = 0;
-				}
-			}	
-
-			void Reallocate() {
-				DestroyAll();
-				if (m_FramesInFlight != m_Renderer.m_FramesInFlight) {
-					m_FramesInFlight = m_Renderer.m_FramesInFlight;
-					free(m_Data);
-					delete[] m_Counts;
-					m_Data = (BufferData(*)[max_buffers_per_frame])malloc(m_FramesInFlight 
-						* sizeof(BufferData[max_buffers_per_frame]));
-					m_Counts = new size_t[m_FramesInFlight]{};
-				}
 			}
 		};
 
@@ -860,35 +813,22 @@ namespace engine {
 			= sizeof(CommandBuffer<Queue::Transfer>) * max_pending_transfer_command_buffer_count;
 		static constexpr size_t in_flight_render_stack_size = 512;
 
-		static constexpr size_t max_model_descriptor_sets = 250000;
-
-		static const char* ErrorOriginString(ErrorOrigin origin) {
-			static constexpr const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
-				"Uncategorized",
-				"InitializationFailed",
-				"Vulkan",
-				"OutOfMemory",
-				"NullDereference",
-				"IndexOutOfBounds",
-				"Shader",
-				"Buffer",
-			};
-			if (origin == ErrorOrigin::MaxEnum) {
-				return strings[0];
-			}
-			return strings[(size_t)origin];
-		}
+		static constexpr size_t max_model_descriptor_sets = 250000;	
 
 		static void PrintMessage(const char* msg) {
-			printf("Renderer message: %s\n", msg);
+			fmt::print(fmt::emphasis::bold, "Renderer message: {}\n", msg);
 		}
 
 		static void PrintWarning(const char* warn) {
-			printf("Renderer warning: %s\n", warn);
+			fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold, "Renderer warning: %s\n", warn);
 		}
 
-		static void PrintError(const char* err, ErrorOrigin origin) {
-			printf("Renderer error: %s\n Error origin: %s\n", err, Renderer::ErrorOriginString(origin));
+		static void PrintError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS) {
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
+				"Renderer called an error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
+			if (vkErr != VK_SUCCESS) {
+				fmt::print("Vulkan error code: {}\n", (int)vkErr); 
+			}
 		}
 
 		Stack m_SingleThreadStack;
@@ -900,12 +840,14 @@ namespace engine {
 		const std::thread::id m_MainThreadID;
 		CommandBufferFreeList m_GraphicsCommandBufferFreeList;
 		CommandBufferFreeList m_TransferCommandBufferFreeList;
-		StagingBufferDestroyList m_StagingBufferDestroyList;
 		VkCommandPool m_GraphicsCommandPool = VK_NULL_HANDLE;
 		VkCommandPool m_TransferCommandPool = VK_NULL_HANDLE;
 
-		CommandBufferQueue<Queue::Graphics, 100000> m_GraphicsCommandBufferQueue;
-		CommandBufferQueue<Queue::Transfer, 100000> m_TransferCommandBufferQueue;
+		OneTypeStack<CommandBuffer<Queue::Graphics>, 100000> m_GraphicsCommandBufferQueue;
+		std::mutex m_GraphicsCommandBufferQueueMutex;
+		OneTypeStack<CommandBuffer<Queue::Transfer>, 100000> m_TransferCommandBufferQueue;
+		std::mutex m_TransferCommandBufferQueueMutex;
+		Stack::Array<OneTypeStack<CommandBufferSubmitCallback, 100000>> m_CommandBufferSubmitCallbacks { 0, nullptr };
 
 		VkSampleCountFlags m_ColorMsaaSamples = 1;
 		VkSampleCountFlags m_DepthMsaaSamples = 1;
@@ -946,50 +888,40 @@ namespace engine {
 
 		VkInstance m_VulkanInstance = VK_NULL_HANDLE;
 
-		ErrorCallback m_ErrorCallback;
-		ErrorCallback m_CriticalErrorCallback;
+		const CriticalErrorCallback m_CriticalErrorCallback;
 
-		bool VkAssert(VkResult result, const char* err) const {
+		void Assert(bool expression, ErrorOrigin origin, const char* err) const {
+			if (!expression) {
+				m_CriticalErrorCallback(this, origin, err, VK_SUCCESS);
+			}
+		}
+
+		void VkAssert(VkResult result, const char* err) const {
 			if (result != VK_SUCCESS) {
 				m_CriticalErrorCallback(this, ErrorOrigin::Vulkan, err, result);
-				return false;
 			}
-			return true;
 		}
 
 		bool VkCheck(VkResult result, const char* err) const {
 			if (result != VK_SUCCESS) {
-				m_ErrorCallback(this, ErrorOrigin::Vulkan, err, result);
+				PrintError(ErrorOrigin::Vulkan, err, result);
 				return false;
 			}
 			return true;
 		}
 
-		template<typename T>
-		T* PtrAssert(T* ptr, const char* err) const {
-			if (!ptr) {
-				m_CriticalErrorCallback(this, ErrorOrigin::NullDereference, err, VK_SUCCESS);
-			}
-			return ptr;
-		}
-
 		Renderer(const char* appName, uint32_t appVersion, GLFWwindow* window, bool includeImGui, 
-			ErrorCallback criticalErrorCallback, ErrorCallback errorCallback, 
-			SwapchainCreateCallback swapchainCreateCallback)
+			CriticalErrorCallback criticalErrorCallback, SwapchainCreateCallback swapchainCreateCallback)
 			: m_SingleThreadStack(single_thread_stack_size, (uint8_t*)malloc(single_thread_stack_size)), 
 				m_InFlightRenderStack(in_flight_render_stack_size, (uint8_t*)malloc(in_flight_render_stack_size)), m_Window(window),
-				m_GraphicsCommandBufferQueue(*this),
-				m_TransferCommandBufferQueue(*this),
+				m_GraphicsCommandBufferQueue(),
+				m_TransferCommandBufferQueue(),
 				m_GraphicsCommandBufferFreeList(*this),
 				m_TransferCommandBufferFreeList(*this),
-				m_StagingBufferDestroyList(*this),
 				m_MainThreadID(std::this_thread::get_id()),
-				m_CriticalErrorCallback(criticalErrorCallback), m_ErrorCallback(errorCallback), m_SwapchainCreateCallback(swapchainCreateCallback) {
-
-			static_assert(sizeof(size_t) >= 4, "size of size_t isn't big enough!");
+				m_CriticalErrorCallback(criticalErrorCallback), m_SwapchainCreateCallback(swapchainCreateCallback) {
 
 			assert(m_CriticalErrorCallback && "critical error callback was null (renderer)!");
-			assert(m_ErrorCallback && "error callback was null (renderer)!");
 			assert(m_SwapchainCreateCallback && "swapchain create callback was null (renderer)!");
 
 			uint32_t instanceExtensionCount;
@@ -1052,15 +984,11 @@ namespace engine {
 				.ppEnabledExtensionNames = instanceExtensions,
 			};
 
-			if (!VkAssert(vkCreateInstance(&instanceCreateInfo, m_VulkanAllocationCallbacks, &m_VulkanInstance), 
-					"failed to create vulkan instance (function vkCreateInstance in Renderer constructor)!")) {
-				return;
-			}
+			VkAssert(vkCreateInstance(&instanceCreateInfo, m_VulkanAllocationCallbacks, &m_VulkanInstance), 
+					"failed to create vulkan instance (function vkCreateInstance in Renderer constructor)!");
 
-			if (!VkAssert(glfwCreateWindowSurface(m_VulkanInstance, m_Window, m_VulkanAllocationCallbacks, &m_Surface), 
-					"failed to create window surface (function glfwCreateWindowSurface in Renderer constructor)!")) {
-				return;
-			}
+			VkAssert(glfwCreateWindowSurface(m_VulkanInstance, m_Window, m_VulkanAllocationCallbacks, &m_Surface), 
+					"failed to create window surface (function glfwCreateWindowSurface in Renderer constructor)!");
 
 			uint32_t gpuCount;
 			vkEnumeratePhysicalDevices(m_VulkanInstance, &gpuCount, nullptr);
@@ -1207,10 +1135,8 @@ namespace engine {
 				.pEnabledFeatures = &gpuFeatures,
 			};
 
-			if (!VkAssert(vkCreateDevice(m_Gpu, &deviceInfo, m_VulkanAllocationCallbacks, &m_VulkanDevice), 
-					"failed to create vulkan device (function vkCreateDevice in Renderer constructor)!")) {
-				return;
-			}
+			VkAssert(vkCreateDevice(m_Gpu, &deviceInfo, m_VulkanAllocationCallbacks, &m_VulkanDevice), 
+					"failed to create vulkan device (function vkCreateDevice in Renderer constructor)!");
 
 			vkGetDeviceQueue(m_VulkanDevice, m_GraphicsQueueFamilyIndex, 0, &m_GraphicsQueue);
 			vkGetDeviceQueue(m_VulkanDevice, m_TransferQueueFamilyIndex, 0, &m_TransferQueue);
@@ -1242,7 +1168,6 @@ namespace engine {
 
 			m_GraphicsCommandBufferFreeList.Initialize(m_GraphicsCommandPool);
 			m_TransferCommandBufferFreeList.Initialize(m_TransferCommandPool);
-			m_StagingBufferDestroyList.Initialize();
 
 			VkDescriptorPoolSize modelPoolSize {
 				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -1322,7 +1247,6 @@ namespace engine {
 				vkDestroySwapchainKHR(m_VulkanDevice, m_Swapchain, m_VulkanAllocationCallbacks);
 				vkDestroyCommandPool(m_VulkanDevice, m_GraphicsCommandPool, m_VulkanAllocationCallbacks);
 				vkDestroyCommandPool(m_VulkanDevice, m_TransferCommandPool, m_VulkanAllocationCallbacks);
-				m_StagingBufferDestroyList.Terminate();
 				vkDestroyDevice(m_VulkanDevice, m_VulkanAllocationCallbacks);
 				m_VulkanDevice = VK_NULL_HANDLE;
 			}
@@ -1404,6 +1328,8 @@ namespace engine {
 				m_SwapchainExtent = actualExtent;
 			}
 
+			uint32_t oldFramesInFlight = m_FramesInFlight;
+
 			m_FramesInFlight = clamp(desired_frames_in_flight, surfaceCapabilities.minImageCount, surfaceCapabilities.maxImageCount);
 
 			uint32_t queueFamilyIndices[2] {
@@ -1432,130 +1358,162 @@ namespace engine {
 				.oldSwapchain = VK_NULL_HANDLE,
 			};
 
-			if (!VkAssert(vkCreateSwapchainKHR(m_VulkanDevice, &swapchainInfo, m_VulkanAllocationCallbacks, &m_Swapchain), 
-					"failed to create vulkan swapchain (function vkCreateSwapchainKHR in function CreateSwapchain)!")) {
-				return;
-			}
+			VkAssert(vkCreateSwapchainKHR(m_VulkanDevice, &swapchainInfo, m_VulkanAllocationCallbacks, &m_Swapchain), 
+					"failed to create vulkan swapchain (function vkCreateSwapchainKHR in function CreateSwapchain)!");
 
 			vkQueueWaitIdle(m_GraphicsQueue);
 			vkQueueWaitIdle(m_TransferQueue);
 
-			for (size_t i = 0; i < m_SwapchainImageViews.m_Size; i++) {
-				vkDestroyImageView(m_VulkanDevice, m_SwapchainImageViews[i], m_VulkanAllocationCallbacks);
-				vkDestroySemaphore(m_VulkanDevice, m_RenderFinishedSemaphores[i], m_VulkanAllocationCallbacks);
-				vkDestroySemaphore(m_VulkanDevice, m_RenderWaitSemaphores[i], m_VulkanAllocationCallbacks);
-				vkDestroyFence(m_VulkanDevice, m_InFlightGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
-				vkDestroyFence(m_VulkanDevice, m_InFlightTransferFences[i].fence, m_VulkanAllocationCallbacks);
-			}
+			vkGetSwapchainImagesKHR(m_VulkanDevice, m_Swapchain, &m_FramesInFlight, nullptr);	
 
-			m_InFlightRenderStack.Clear();
+			if (m_FramesInFlight != oldFramesInFlight) {
 
-			vkGetSwapchainImagesKHR(m_VulkanDevice, m_Swapchain, &m_FramesInFlight, nullptr);
-			if (!m_InFlightRenderStack.Allocate<VkImage>(m_FramesInFlight, &m_SwapchainImages)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, "in flight stack was out of memory (in function CreateSwapchain)!", 0);
-				return;
-			}
-			vkGetSwapchainImagesKHR(m_VulkanDevice, m_Swapchain, &m_FramesInFlight, m_SwapchainImages.m_Data);
+				for (size_t i = 0; i < m_SwapchainImageViews.m_Size; i++) {
+					vkDestroyImageView(m_VulkanDevice, m_SwapchainImageViews[i], m_VulkanAllocationCallbacks);
+					vkDestroySemaphore(m_VulkanDevice, m_RenderFinishedSemaphores[i], m_VulkanAllocationCallbacks);
+					vkDestroySemaphore(m_VulkanDevice, m_RenderWaitSemaphores[i], m_VulkanAllocationCallbacks);
+					vkDestroyFence(m_VulkanDevice, m_InFlightGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
+					vkDestroyFence(m_VulkanDevice, m_InFlightTransferFences[i].fence, m_VulkanAllocationCallbacks);
+					for (const CommandBufferSubmitCallback& callback : m_CommandBufferSubmitCallbacks[i]) {
+						callback.Callback(*this);
+					}
+					(&m_CommandBufferSubmitCallbacks[i])->~OneTypeStack();
+				}
 
-			if (!m_InFlightRenderStack.Allocate<VkImageView>(m_FramesInFlight, &m_SwapchainImageViews) ||
-				!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_RenderFinishedSemaphores) ||
-				!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_RenderWaitSemaphores) ||
-				!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightGraphicsFences) ||
-				!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightTransferFences) ||
-				!m_InFlightRenderStack.Allocate<VkCommandBuffer>(m_FramesInFlight, &m_RenderCommandBuffers)) {
-				m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
-					"in flight stack was out of memory (in function CreateSwapchain)!", 0);
-			}
+				if (!m_InFlightRenderStack.Allocate<VkImageView>(m_FramesInFlight, &m_SwapchainImageViews) ||
+					!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_RenderFinishedSemaphores) ||
+					!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_RenderWaitSemaphores) ||
+					!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightGraphicsFences) ||
+					!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightTransferFences) ||
+					!m_InFlightRenderStack.Allocate<VkCommandBuffer>(m_FramesInFlight, &m_RenderCommandBuffers) ||
+					!m_InFlightRenderStack.Allocate<OneTypeStack<CommandBufferSubmitCallback, 100000>>(m_FramesInFlight, 
+						&m_CommandBufferSubmitCallbacks) ||
+					!m_InFlightRenderStack.Allocate<VkImage>(m_FramesInFlight, &m_SwapchainImages))
+				{
+					m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
+						"in flight stack was out of memory (in function CreateSwapchain)!", 0);
+				}
 
-			VkCommandBufferAllocateInfo renderCommandBufferAllocInfo {
-				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-				.pNext = nullptr,
-				.commandPool = m_GraphicsCommandPool,
-				.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-				.commandBufferCount = m_FramesInFlight,
-			};
+				vkGetSwapchainImagesKHR(m_VulkanDevice, m_Swapchain, &m_FramesInFlight, m_SwapchainImages.m_Data);
 
-			if(!VkAssert(vkAllocateCommandBuffers(m_VulkanDevice, &renderCommandBufferAllocInfo, m_RenderCommandBuffers.m_Data), 
-					"failed to allocate render command buffers (function vkAllocateCommandBuffers in function CreateSwapchain!)")) {
-				return;
-			}
+				VkCommandBufferAllocateInfo renderCommandBufferAllocInfo {
+					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+					.pNext = nullptr,
+					.commandPool = m_GraphicsCommandPool,
+					.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+					.commandBufferCount = m_FramesInFlight,
+				};
 
-			/*
+				VkAssert(vkAllocateCommandBuffers(m_VulkanDevice, &renderCommandBufferAllocInfo, m_RenderCommandBuffers.m_Data), 
+						"failed to allocate render command buffers (function vkAllocateCommandBuffers in function CreateSwapchain!)");
 
-			VkSemaphoreTypeCreateInfo timelineSemaphoreTypeInfo {
-				.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
-				.pNext = nullptr,
-				.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE_KHR,
-				.initialValue = 0,
-			};
-
-			VkSemaphoreCreateInfo timelineSemaphoreInfo {
-				.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-				.pNext = &timelineSemaphoreTypeInfo,
-				.flags = 0,
-			};
-
-			*/
-
-			VkSemaphoreCreateInfo semaphoreInfo {
-				.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-				.pNext = nullptr,
-				.flags = 0,
-			};
-
-			VkFenceCreateInfo fenceInfo {
-				.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-				.pNext = nullptr,
-				.flags = 0,
-			};
-
-			for (size_t i = 0; i < m_FramesInFlight; i++) {
-				VkImageViewCreateInfo imageViewInfo {
-					.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+				VkSemaphoreCreateInfo semaphoreInfo {
+					.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
 					.pNext = nullptr,
 					.flags = 0,
-					.image = m_SwapchainImages[i],
-					.viewType = VK_IMAGE_VIEW_TYPE_2D,
-					.format = m_SwapchainSurfaceFormat.format,
-					.components {
-						.r = VK_COMPONENT_SWIZZLE_IDENTITY,
-						.g = VK_COMPONENT_SWIZZLE_IDENTITY,
-						.b = VK_COMPONENT_SWIZZLE_IDENTITY,
-						.a = VK_COMPONENT_SWIZZLE_IDENTITY,
-					},
-					.subresourceRange {
-						.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-						.baseMipLevel = 0,
-						.levelCount = 1,
-						.baseArrayLayer = 0,
-						.layerCount = 1,
-					},
 				};
-				VkAssert(vkCreateImageView(m_VulkanDevice, &imageViewInfo, m_VulkanAllocationCallbacks, &m_SwapchainImageViews[i]), 
-						"failed to create swapchain image view (function vkCreateImageView in function CreateSwapchain)!");
-				VkAssert(vkCreateSemaphore(m_VulkanDevice, &semaphoreInfo, m_VulkanAllocationCallbacks, &m_RenderFinishedSemaphores[i]), 
-						"failed to create render finished semaphore (function vkCreateSemaphore in function CreateSwapchain)");
-				VkAssert(vkCreateSemaphore(m_VulkanDevice, &semaphoreInfo, m_VulkanAllocationCallbacks, &m_RenderWaitSemaphores[i]), 
-						"failed to create render wait semaphore (function vkCreateSemaphore in function CreateSwapchain)");
-				VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, &m_InFlightGraphicsFences[i].fence), 
-						"failed to create in flight graphis fence (function vkCreateFence in function CreateSwapchain)");
-				VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, &m_InFlightTransferFences[i].fence), 
-						"failed to create in flight transfer fence (function vkCreateFence in function CreateSwapchain)");
-				VkSubmitInfo dummySubmitInfo {
-					.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-					.commandBufferCount = 0,
-					.pCommandBuffers = nullptr,
+
+				VkFenceCreateInfo fenceInfo {
+					.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
 				};
-				vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightGraphicsFences[i].fence);
-				vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightTransferFences[i].fence);
-				m_InFlightGraphicsFences[i].state = Fence::State::Resettable;
-				m_InFlightTransferFences[i].state = Fence::State::Resettable;
+
+				for (size_t i = 0; i < m_FramesInFlight; i++) {
+					VkImageViewCreateInfo imageViewInfo {
+						.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.image = m_SwapchainImages[i],
+						.viewType = VK_IMAGE_VIEW_TYPE_2D,
+						.format = m_SwapchainSurfaceFormat.format,
+						.components {
+							.r = VK_COMPONENT_SWIZZLE_IDENTITY,
+							.g = VK_COMPONENT_SWIZZLE_IDENTITY,
+							.b = VK_COMPONENT_SWIZZLE_IDENTITY,
+							.a = VK_COMPONENT_SWIZZLE_IDENTITY,
+						},
+						.subresourceRange {
+							.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+							.baseMipLevel = 0,
+							.levelCount = 1,
+							.baseArrayLayer = 0,
+							.layerCount = 1,
+						},
+					};
+					VkAssert(vkCreateImageView(m_VulkanDevice, &imageViewInfo, m_VulkanAllocationCallbacks, &m_SwapchainImageViews[i]), 
+							"failed to create swapchain image view (function vkCreateImageView in function CreateSwapchain)!");
+					VkAssert(vkCreateSemaphore(m_VulkanDevice, &semaphoreInfo, m_VulkanAllocationCallbacks, &m_RenderFinishedSemaphores[i]), 
+							"failed to create render finished semaphore (function vkCreateSemaphore in function CreateSwapchain)");
+					VkAssert(vkCreateSemaphore(m_VulkanDevice, &semaphoreInfo, m_VulkanAllocationCallbacks, &m_RenderWaitSemaphores[i]), 
+							"failed to create render wait semaphore (function vkCreateSemaphore in function CreateSwapchain)");
+					VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, &m_InFlightGraphicsFences[i].fence), 
+							"failed to create in flight graphis fence (function vkCreateFence in function CreateSwapchain)");
+					VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, &m_InFlightTransferFences[i].fence), 
+							"failed to create in flight transfer fence (function vkCreateFence in function CreateSwapchain)");
+					VkSubmitInfo dummySubmitInfo {
+						.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+						.commandBufferCount = 0,
+						.pCommandBuffers = nullptr,
+					};
+					vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightGraphicsFences[i].fence);
+					vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightTransferFences[i].fence);
+					m_InFlightGraphicsFences[i].state = Fence::State::Resettable;
+					m_InFlightTransferFences[i].state = Fence::State::Resettable;
+				}
+				m_CurrentFrame = 0;
 			}
-			m_CurrentFrame = 0;
+			else {
+
+				vkGetSwapchainImagesKHR(m_VulkanDevice, m_Swapchain, &m_FramesInFlight, m_SwapchainImages.m_Data);
+
+				Stack::Array<VkFence> resetFences = m_SingleThreadStack.Allocate<VkFence>(m_FramesInFlight * 2);
+				uint32_t fenceCount = 0;
+
+				for (size_t i = 0; i < m_FramesInFlight; i++) {
+					vkDestroyImageView(m_VulkanDevice, m_SwapchainImageViews[i], m_VulkanAllocationCallbacks);
+					VkImageViewCreateInfo imageViewInfo{
+						.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.image = m_SwapchainImages[i],
+						.viewType = VK_IMAGE_VIEW_TYPE_2D,
+						.format = m_SwapchainSurfaceFormat.format,
+						.components {
+							.r = VK_COMPONENT_SWIZZLE_IDENTITY,
+							.g = VK_COMPONENT_SWIZZLE_IDENTITY,
+							.b = VK_COMPONENT_SWIZZLE_IDENTITY,
+							.a = VK_COMPONENT_SWIZZLE_IDENTITY,
+						},
+						.subresourceRange {
+							.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+							.baseMipLevel = 0,
+							.levelCount = 1,
+							.baseArrayLayer = 0,
+							.layerCount = 1,
+						},
+					};
+					VkAssert(vkCreateImageView(m_VulkanDevice, &imageViewInfo, m_VulkanAllocationCallbacks, &m_SwapchainImageViews[i]), 
+							"failed to create swapchain image view (function vkCreateImageView in function CreateSwapchain)!");
+					if (m_InFlightGraphicsFences[i].state == Fence::State::Resettable) {
+						resetFences[fenceCount++] = m_InFlightGraphicsFences[i].fence;
+						m_InFlightGraphicsFences[i].state = Fence::State::None;
+					}
+					if (m_InFlightTransferFences[i].state == Fence::State::Resettable) {
+						resetFences[fenceCount++] = m_InFlightTransferFences[i].fence;
+						m_InFlightTransferFences[i].state = Fence::State::None;
+					}
+				}
+				vkResetFences(m_VulkanDevice, fenceCount, resetFences.m_Data);
+			}
+
 			m_SwapchainCreateCallback(this, m_SwapchainExtent, m_FramesInFlight, m_SwapchainImageViews.m_Data);
 
-			m_GraphicsCommandBufferQueue.Lock();
-			CommandBuffer<Queue::Graphics>& transitionCommandBuffer = m_GraphicsCommandBufferQueue.New();
+			m_GraphicsCommandBufferQueueMutex.lock();
+			CommandBuffer<Queue::Graphics>* transitionCommandBuffer = m_GraphicsCommandBufferQueue.New();
+
+			Assert(transitionCommandBuffer, ErrorOrigin::OutOfMemory, 
+				"failed to allocate graphics command buffer (function OneTypeStack::New in function CreateSwapchain)!");
 
 			VkCommandBufferAllocateInfo transitionCommandBuffersAllocInfo{
 				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -1565,7 +1523,7 @@ namespace engine {
 				.commandBufferCount = 1,
 			};
 
-			VkAssert(vkAllocateCommandBuffers(m_VulkanDevice, &transitionCommandBuffersAllocInfo, &transitionCommandBuffer.m_CommandBuffer),
+			VkAssert(vkAllocateCommandBuffers(m_VulkanDevice, &transitionCommandBuffersAllocInfo, &transitionCommandBuffer->m_CommandBuffer),
 				"failed to allocate command buffer for swapchain image view layout transition (function vkAllocateCommandBuffers in function CreateSwapchain)!");
 
 			VkCommandBufferBeginInfo transitionBeginInfo {
@@ -1575,7 +1533,7 @@ namespace engine {
 				.pInheritanceInfo = nullptr,
 			};
 
-			VkAssert(vkBeginCommandBuffer(transitionCommandBuffer.m_CommandBuffer, &transitionBeginInfo),
+			VkAssert(vkBeginCommandBuffer(transitionCommandBuffer->m_CommandBuffer, &transitionBeginInfo),
 				"failed to begin swapchain image view layout transition command buffer (function vkBeginCommandBuffer in function CreateSwapchain)");
 
 			Stack::Array<VkImageMemoryBarrier> imageMemoryBarriers = m_SingleThreadStack.Allocate<VkImageMemoryBarrier>(m_FramesInFlight);
@@ -1604,18 +1562,19 @@ namespace engine {
 				};
 			}
 
-			vkCmdPipelineBarrier(transitionCommandBuffer.m_CommandBuffer,
+			vkCmdPipelineBarrier(transitionCommandBuffer->m_CommandBuffer,
 				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 
 				imageMemoryBarriers.m_Size, imageMemoryBarriers.m_Data);
 
-			VkAssert(vkEndCommandBuffer(transitionCommandBuffer.m_CommandBuffer),
+			VkAssert(vkEndCommandBuffer(transitionCommandBuffer->m_CommandBuffer),
 				"failed to end swapchain image view layout transition command buffer (function vkEndCommandBuffer in function CreateSwapchain)");
 
-			transitionCommandBuffer.m_Free = true;
+			transitionCommandBuffer->m_Flags = CommandBufferFlag_FreeAfterSubmit;
 
-			m_GraphicsCommandBufferQueue.Unlock();
+			m_GraphicsCommandBufferQueueMutex.unlock();
 
 			m_SingleThreadStack.Clear();
+			m_CurrentFrame = 0;
 		}
 
 		void RecreateSwapchain() {
@@ -1623,7 +1582,6 @@ namespace engine {
 			CreateSwapchain();
 			m_GraphicsCommandBufferFreeList.Reallocate();
 			m_TransferCommandBufferFreeList.Reallocate();
-			m_StagingBufferDestroyList.Reallocate();
 		}
 
 		VkDescriptorSetLayout CreateDescriptorSetLayout(uint32_t bindingCount, VkDescriptorSetLayoutBinding* pBindings) const {
@@ -1645,7 +1603,8 @@ namespace engine {
 		bool AllocateDescriptorSets(const DescriptorPool& descriptorPool, uint32_t setCount, 
 			VkDescriptorSetLayout* pLayouts, VkDescriptorSet outSets[]) {
 			if (descriptorPool.m_DescriptorPool == VK_NULL_HANDLE) {
-				m_ErrorCallback(this, ErrorOrigin::Vulkan, "attempting to allocate descriptor sets with a descriptor pool that's null!", VK_SUCCESS);
+				PrintError(ErrorOrigin::Vulkan, 
+					"attempting to allocate descriptor sets with a descriptor pool that's null!");
 				return false;
 			}
 			VkDescriptorSetAllocateInfo allocInfo {
@@ -1657,7 +1616,7 @@ namespace engine {
 			};
 			VkResult vkRes = vkAllocateDescriptorSets(m_VulkanDevice, &allocInfo, outSets);
 			if (vkRes == VK_ERROR_OUT_OF_POOL_MEMORY) {
-				m_ErrorCallback(this, ErrorOrigin::Vulkan, 
+				PrintError(ErrorOrigin::Vulkan, 
 					"failed to allocate descriptor sets (function vkAllocateDescriptorSets in function AllocateDescriptorSets) because descriptor pool is out of memory!", 
 					vkRes);
 				return false;
@@ -1757,33 +1716,38 @@ namespace engine {
 			m_GraphicsCommandBufferFreeList.Free(m_CurrentFrame);
 			m_TransferCommandBufferFreeList.Free(m_CurrentFrame);
 
-			m_StagingBufferDestroyList.Destroy(m_CurrentFrame);
+			for (const CommandBufferSubmitCallback& callback : m_CommandBufferSubmitCallbacks[m_CurrentFrame]) {
+				callback.Callback(*this);
+			}
 
-			m_TransferCommandBufferQueue.Lock();
+			m_CommandBufferSubmitCallbacks[m_CurrentFrame].Clear();
 
-			if (m_TransferCommandBufferQueue.m_Size) {
+			m_TransferCommandBufferQueueMutex.lock();
+
+			if (m_TransferCommandBufferQueue.m_Count) {
 
 				Stack::Array<VkCommandBuffer> transferCommandBuffers 
-					= m_SingleThreadStack.Allocate<VkCommandBuffer>(m_TransferCommandBufferQueue.m_Size);
+					= m_SingleThreadStack.Allocate<VkCommandBuffer>(m_TransferCommandBufferQueue.m_Count);
 
 				if (!transferCommandBuffers.m_Data) {
 					m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
 						"single thread stack was out of memory (in function EndFrame)!", VK_SUCCESS);
 				}
 
-				for (size_t i = 0; i < m_TransferCommandBufferQueue.m_Size; i++) {
+				for (size_t i = 0; i < m_TransferCommandBufferQueue.m_Count; i++) {
 					CommandBuffer<Queue::Transfer>& commandBuffer = m_TransferCommandBufferQueue.m_Data[i];
 					transferCommandBuffers[i] = commandBuffer.m_CommandBuffer;
-					if (commandBuffer.m_Flags & (uint32_t)CommandBufferUsage::Free) {
-						if (commandBuffer.m_Thread) {
-							commandBuffer.m_Thread->m_TransferCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
+					if (commandBuffer.m_Flags & CommandBufferFlag_FreeAfterSubmit) {
+						if (commandBuffer.m_Flags & CommandBufferFlag_MultiThreaded) [[unlikely]] {
+							PrintError(ErrorOrigin::Uncategorized, 
+								"transfer command buffer had simultaneously FreeAfterSubmit and MultiThreaded flags set (in function BeginFrame)!");
 						}
-						else {
+						else [[likely]] {
 							m_TransferCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
 						}
 					}
-					if (commandBuffer.m_Flags & (uint32_t)CommandBufferUsage::DestroyStagingBuffer) {
-						m_StagingBufferDestroyList.Push(m_CurrentFrame, commandBuffer.m_Buffer, commandBuffer.m_VulkanDeviceMemory);
+					if (commandBuffer.m_Flags & CommandBufferFlag_SubmitCallback) {
+						m_CommandBufferSubmitCallbacks[m_CurrentFrame].New(commandBuffer.m_SubmitCallback);
 					}
 				}
 
@@ -1804,7 +1768,7 @@ namespace engine {
 				m_SingleThreadStack.Clear();
 			}
 
-			m_TransferCommandBufferQueue.Unlock();
+			m_TransferCommandBufferQueueMutex.unlock();
 
 			uint32_t imageIndex;
 			VkResult result = vkAcquireNextImageKHR(m_VulkanDevice, m_Swapchain, frame_timeout, 
@@ -1814,7 +1778,7 @@ namespace engine {
 				return false;
 			}
 			else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-				m_ErrorCallback(this, ErrorOrigin::Vulkan, "failed to acquire next swapchain image (in function BeginFrame)!", result);
+				PrintError(ErrorOrigin::Vulkan, "failed to acquire next swapchain image (in function BeginFrame)!", result);
 				return false;
 			}
 			if (imageIndex != m_CurrentFrame) {
@@ -1834,80 +1798,39 @@ namespace engine {
 				"failed to begin render command buffer (function vkBeginCommandBuffer in function BeginFrame)")) {
 				return false;
 			}
-			/*
-			VkImageMemoryBarrier imageMemoryBarrier{
-				.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-				.pNext = nullptr,
-				.srcAccessMask = 0,
-				.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-				.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-				.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-				.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-				.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-				.image = m_SwapchainImages[m_CurrentFrame],
-				.subresourceRange {
-					.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-					.baseMipLevel = 0,
-					.levelCount = 1,
-					.baseArrayLayer = 0,
-					.layerCount = 1,
-				},
-			};
-			vkCmdPipelineBarrier(m_RenderCommandBuffers[m_CurrentFrame], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
-			*/
 			return true;
 		}
 
 		void EndFrame() {
 
-			/*
-			VkImageMemoryBarrier imageMemoryBarrier{
-				.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-				.pNext = nullptr,
-				.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-				.dstAccessMask = 0,
-				.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-				.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-				.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-				.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-				.image = m_SwapchainImages[m_CurrentFrame],
-				.subresourceRange {
-					.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-					.baseMipLevel = 0,
-					.levelCount = 1,
-					.baseArrayLayer = 0,
-					.layerCount = 1,
-				},
-			};
-			vkCmdPipelineBarrier(m_RenderCommandBuffers[m_CurrentFrame], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
-			*/
-
 			vkEndCommandBuffer(m_RenderCommandBuffers[m_CurrentFrame]);
 
 			Stack::Array<VkCommandBuffer> graphicsCommandBuffers { 0, nullptr };
 
-			m_GraphicsCommandBufferQueue.Lock();
+			m_GraphicsCommandBufferQueueMutex.lock();
 
-			if (m_GraphicsCommandBufferQueue.m_Size) {
+			if (m_GraphicsCommandBufferQueue.m_Count) {
 
-				m_SingleThreadStack.Allocate<VkCommandBuffer>(m_GraphicsCommandBufferQueue.m_Size, &graphicsCommandBuffers);
+				m_SingleThreadStack.Allocate<VkCommandBuffer>(m_GraphicsCommandBufferQueue.m_Count, &graphicsCommandBuffers);
 
 				if (!graphicsCommandBuffers.m_Data) {
 					m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
 						"single thread stack was out of memory (in function EndFrame)!", VK_SUCCESS);
 				}
 
-				for (size_t i = 0; i < m_GraphicsCommandBufferQueue.m_Size; i++) {
+				for (size_t i = 0; i < m_GraphicsCommandBufferQueue.m_Count; i++) {
 					CommandBuffer<Queue::Graphics>& commandBuffer = m_GraphicsCommandBufferQueue.m_Data[i];
 					graphicsCommandBuffers[i] = commandBuffer.m_CommandBuffer;
-					if (commandBuffer.m_Flags & (uint32_t)CommandBufferUsage::Free) {
-						if (commandBuffer.m_Thread) {
-							commandBuffer.m_Thread->m_GraphicsCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
+					if (commandBuffer.m_Flags & CommandBufferFlag_FreeAfterSubmit) {
+						if (commandBuffer.m_Flags & CommandBufferFlag_MultiThreaded) [[unlikely]] {
+							PrintError(ErrorOrigin::Uncategorized, 
+								"transfer command buffer had simultaneously FreeAfterSubmit and MultiThreaded flags set (in function BeginFrame)!");
 						}
-						else {
+						else [[likely]] {
 							m_GraphicsCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
+						}
+						if (commandBuffer.m_Flags & CommandBufferFlag_SubmitCallback) {
+							m_CommandBufferSubmitCallbacks[m_CurrentFrame].New(commandBuffer.m_SubmitCallback);
 						}
 					}
 				}
@@ -1915,7 +1838,7 @@ namespace engine {
 			}
 
 
-			m_GraphicsCommandBufferQueue.Unlock();
+			m_GraphicsCommandBufferQueueMutex.unlock();
 
 			VkPipelineStageFlags graphicsWaitStages[1] { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 
