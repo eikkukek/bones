@@ -253,7 +253,7 @@ int main() {
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
-	engine::Engine engine("Test", pWindow, false, 0, nullptr, 1000);
+	engine::Engine engine("Test", pWindow, false, 100, 0, nullptr, 1000);
 	TestPipeline testPipeline(engine.m_Renderer);
 	engine::Engine::GraphicsPipeline& testPipelineData =
 			engine.AddGraphicsPipeline(testPipeline.m_GpuPipeline, testPipeline.m_GpuPipelineLayout, 0, 1000);
