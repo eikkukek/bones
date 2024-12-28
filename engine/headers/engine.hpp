@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer.hpp"
+#include "text_renderer.hpp"
 #include "math.hpp"
 #include "vulkan/vulkan_core.h"
 #include <assert.h>
@@ -614,6 +615,14 @@ namespace engine {
 			Dynamic = 1,
 		};
 
+		struct MeshData {
+			uint32_t m_VertexBufferCount;
+			const VkBuffer* m_VertexBuffers;
+			const VkDeviceSize* m_VertexBufferOffsets;
+			VkBuffer m_IndexBuffer;
+			uint32_t m_IndexCount;
+		};
+
 		template<MeshType mesh_type_T>
 		class Mesh {};
 
@@ -622,21 +631,35 @@ namespace engine {
 		public:
 
 			Engine& m_Engine;
+			uint32_t m_IndexCount;
 			Renderer::Buffer m_VertexBuffer;
 			Renderer::Buffer m_IndexBuffer;
 
 			Mesh(Engine& engine) noexcept 
-				: m_Engine(engine), m_VertexBuffer(engine.m_Renderer), m_IndexBuffer(engine.m_Renderer) {}
+				: m_Engine(engine), m_VertexBuffer(engine.m_Renderer), m_IndexBuffer(engine.m_Renderer), m_IndexCount(0) {}
 
 			Mesh(Mesh&& other) noexcept : m_Engine(other.m_Engine), 
-					m_VertexBuffer(std::move(other.m_VertexBuffer)), m_IndexBuffer(std::move(other.m_IndexBuffer)) {}
+					m_VertexBuffer(std::move(other.m_VertexBuffer)), m_IndexBuffer(std::move(other.m_IndexBuffer)), m_IndexCount(0) {}
+
+			MeshData GetMeshData() {
+				constexpr static VkDeviceSize offset = 0;
+				MeshData data {
+					.m_VertexBufferCount = 1,
+					.m_VertexBuffers = &m_VertexBuffer.m_Buffer,
+					.m_VertexBufferOffsets = &offset,
+					.m_IndexBuffer = m_IndexBuffer.m_Buffer,
+					.m_IndexCount = m_IndexCount,
+				};
+				return data;
+			}
 
 			void Terminate() {
+				m_IndexCount = 0;
 				m_VertexBuffer.Terminate();
 				m_IndexBuffer.Terminate();
 			}
 
-			bool CreateBuffers(uint32_t vertexCount, Vertex* pVertices, uint32_t indexCount, uint32_t* pIndices) {
+			bool CreateBuffers(uint32_t vertexCount, const Vertex* pVertices, uint32_t indexCount, const uint32_t* pIndices) {
 				if (m_VertexBuffer.m_BufferSize || m_IndexBuffer.m_BufferSize) {
 					PrintError(ErrorOrigin::Renderer, 
 					"attempting to create vertex and index buffers when the buffers have already been created (in function Mesh::CreateBuffers)!");
@@ -655,6 +678,7 @@ namespace engine {
 					m_VertexBuffer.Terminate();
 					return false;
 				}
+				m_IndexCount = indexCount;
 				return true;
 			}
 		};
@@ -672,13 +696,6 @@ namespace engine {
 			VkDeviceMemory m_ProjectionMatrixDeviceMemory{};
 			VkDeviceMemory m_ViewMatrixDeviceMemory{};
 			VkDescriptorPool m_DescriptorPool{};
-		};
-
-		struct MeshData {
-			size_t vertexBufferCount;
-			VkBuffer* vertexBuffers;
-			VkDeviceSize* vertexBufferOffsets;
-			VkBuffer indexBuffer;
 		};
 
 		struct GraphicsPipeline;
@@ -786,7 +803,9 @@ namespace engine {
 
 		inline static Engine* s_engine_instance = nullptr;
 
-		const bool m_Initialized;
+		const uint32_t m_Initialized;
+
+		Renderer m_Renderer;
 
 		EntityAllocator m_EntityAllocator;
 		const size_t m_EntityConstructorCount;
@@ -795,12 +814,12 @@ namespace engine {
 		Set<Entity*, Entity::Hash> m_Entities{};
 		DynamicArray<GraphicsPipeline> m_GraphicsPipelines{};
 
-		Renderer m_Renderer;
-
 		CameraData1 m_GameCamera{};
 		CameraData1 m_DebugCamera{};
 		CameraData2 m_GameCameraData2{};
 		CameraData2 m_DebugCameraData2{};
+
+		Mesh<MeshType::Static> m_StaticQuadMesh;
 
 		static void RendererCriticalErrorCallback(const Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkFlags vkErr) {
 			printf("Renderer called a critical error!\nError origin: %s\nError: %s\n", Renderer::ErrorOriginString(origin), err);
@@ -837,11 +856,40 @@ namespace engine {
 			: m_Initialized(UpdateEngineInstance(this)), 
 				m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, 
 					includeImGui, RendererCriticalErrorCallback, RendererErrorCallback, SwapchainCreateCallback),
-				m_EntityAllocator(), m_EntityConstructorCount(entityConstructorCount), m_pEntityConstructors(pEntityConstructors) {
+				m_EntityAllocator(), m_EntityConstructorCount(entityConstructorCount), m_pEntityConstructors(pEntityConstructors),
+				m_StaticQuadMesh(*this) {
 			m_Entities.Reserve(entityReservation);
+			static constexpr Vertex quadVertices[4] {
+				{
+					.m_Position { -1.0f, 1.0f, 0.0f },
+					.m_Normal { 0.0f, 0.0f, 1.0f },
+					.m_UV { 0.0f, 1.0f },
+				},
+				{
+					.m_Position { 1.0f, 1.0f, 0.0f },
+					.m_Normal { 0.0f, 0.0f, 1.0f },
+					.m_UV { 1.0f, 1.0f },
+				},
+				{
+					.m_Position { -1.0f, -1.0f, 0.0f },
+					.m_Normal { 0.0f, 0.0f, 1.0f },
+					.m_UV { 0.0f, 0.0f },
+				},
+				{
+					.m_Position { 1.0f, -1.0f, 0.0f },
+					.m_Normal { 0.0f, 0.0f, 1.0f },
+					.m_UV { 1.0f, 0.0f },
+				},
+			};
+			static constexpr uint32_t quadIndices[6] {
+				3, 2, 0,
+				1, 3, 0,
+			};
+			m_StaticQuadMesh.CreateBuffers(4, quadVertices, 6, quadIndices);
 		}
 
 		~Engine() {
+			m_StaticQuadMesh.Terminate();
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
 			for (Entity* entity : m_Entities) {
@@ -870,23 +918,20 @@ namespace engine {
 			return res;
 		}
 
-		void AddEntity() {
-		}
-
 		void Render() {
 			Renderer::DrawData drawData;
 			if (m_Renderer.BeginFrame(drawData)) {
 				VkViewport viewport {
 					.x = 0.0f,
 					.y = 0.0f,
-					.width = (float)m_Renderer.m_GpuSwapchainExtent.width,
-					.height = (float)m_Renderer.m_GpuSwapchainExtent.height,
+					.width = (float)m_Renderer.m_SwapchainExtent.width,
+					.height = (float)m_Renderer.m_SwapchainExtent.height,
 					.minDepth = 0.0f,
 					.maxDepth = 1.0f,
 				};
 				VkRect2D scissor {
 					.offset = { 0, 0 },
-					.extent = { m_Renderer.m_GpuSwapchainExtent.width, m_Renderer.m_GpuSwapchainExtent.height },
+					.extent = { m_Renderer.m_SwapchainExtent.width, m_Renderer.m_SwapchainExtent.height },
 				};
 				vkCmdSetViewport(drawData.commandBuffer, 0, 1, &viewport);
 				vkCmdSetScissor(drawData.commandBuffer, 0, 1, &scissor);
@@ -934,10 +979,10 @@ namespace engine {
 							}
 							for (uint32_t j = 0; j < meshCount; j++) {
 								vkCmdBindVertexBuffers(drawData.commandBuffer, 
-									0, meshes[j].vertexBufferCount, meshes[j].vertexBuffers, meshes[j].vertexBufferOffsets);
-								vkCmdBindIndexBuffer(drawData.commandBuffer, meshes[j].indexBuffer, 
+									0, meshes[j].m_VertexBufferCount, meshes[j].m_VertexBuffers, meshes[j].m_VertexBufferOffsets);
+								vkCmdBindIndexBuffer(drawData.commandBuffer, meshes[j].m_IndexBuffer, 
 									0, VK_INDEX_TYPE_UINT32);
-								vkCmdDrawIndexed(drawData.commandBuffer, 3, 1, 0, 0, 0);
+								vkCmdDrawIndexed(drawData.commandBuffer, meshes[j].m_IndexCount, 1, 0, 0, 0);
 							}
 						}
 					}
