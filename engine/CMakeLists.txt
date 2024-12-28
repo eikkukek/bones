@@ -32,7 +32,7 @@ add_library(engine STATIC
 	src/imgui/imgui_widgets.cpp
 )
 
-target_link_libraries(engine vulkan glfw glslang freetype fmt)
+target_link_libraries(engine vulkan glfw glslang freetype fmt::fmt)
 
 target_include_directories(engine
 	PUBLIC headers 
