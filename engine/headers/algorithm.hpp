@@ -31,13 +31,13 @@ namespace engine {
 	}
 
 	template<typename T>
-	inline const T& Max(const T& t0, const T& t1) {
-		return t0 > t1 ? t0 : t1;
+	inline const T& Max(T a, T b) {
+		return a > b ? a : b;
 	}
 
 	template<typename T>
-	inline const T& Min(const T& t0, const T& t1) {
-		return t0 < t1 ? t0 : t1;
+	inline const T& Min(T a, T b) {
+		return a < b ? a : b;
 	}
 
 	template<typename T, typename Iter, typename ConstIter>
