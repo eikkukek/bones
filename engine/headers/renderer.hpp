@@ -481,18 +481,19 @@ namespace engine {
 				}
 			}
 
-			void Push(VkCommandBuffer commandBuffer, uint32_t currentFrame) {
+			bool Push(VkCommandBuffer commandBuffer, uint32_t currentFrame) {
 				if (currentFrame >= m_FramesInFlight) {
 					PrintError(ErrorOrigin::IndexOutOfBounds, 
 						"current frame goes out of bounds of command buffer free list frames in flight (function CommandBufferFreeList::Push)!");
-					return;
+					return false;
 				}
 				uint32_t& count = m_Counts[currentFrame];
 				if (count >= max_command_buffers_per_frame) {
 					PrintError(ErrorOrigin::OutOfMemory, "command buffer free list was out of memory (function CommandBufferFreeList::Push)!");
-					return;
+					return false;
 				}
 				m_Data[currentFrame][count++] = commandBuffer;
+				return true;
 			}
 
 			void Free(uint32_t currentFrame) {
@@ -521,15 +522,71 @@ namespace engine {
 			}
 		};
 
-		template<Queue queue_T>
-		struct CommandPool {
-			VkCommandPool m_CommandPool{};
-		};
+		struct Thread {
 
-		enum CommandBufferFlag {
-			CommandBufferFlag_FreeAfterSubmit = 1,
-			CommandBufferFlag_SubmitCallback = 2,
-			CommandBufferFlag_MultiThreaded = 4,
+			enum class State {
+				Inactive = 0,
+				Active = 1,
+			};
+
+			struct Guard {
+				Thread& m_Thread;
+				Guard(Thread& thread) noexcept : m_Thread(thread) {
+					if (thread.m_GraphicsCommandPool == VK_NULL_HANDLE) {
+						thread.m_State = State::Inactive;
+						return;
+					}
+					m_Thread.m_State = State::Active;
+				}
+				~Guard() noexcept {
+					m_Thread.m_State = State::Inactive;
+				}
+			};
+
+			static constexpr size_t in_flight_render_stack_size = sizeof(VkCommandPool) * 5 * 5;
+
+			Renderer& m_Renderer;
+			const std::thread::id m_ThreadID;
+			std::atomic<State> m_State;
+			VkCommandPool m_GraphicsCommandPool;
+			VkCommandPool m_TransferCommandPool;
+			CommandBufferFreeList m_TransferCommandBufferFreeList;
+			CommandBufferFreeList m_GraphicsCommandBufferFreeList;
+
+			Thread(Renderer& renderer, std::thread::id threadID) noexcept : m_Renderer(renderer), m_ThreadID(threadID),
+				m_State(State::Inactive),
+				m_GraphicsCommandPool(VK_NULL_HANDLE), m_TransferCommandPool(VK_NULL_HANDLE), 
+				m_GraphicsCommandBufferFreeList(m_Renderer), m_TransferCommandBufferFreeList(m_Renderer) {
+				VkCommandPoolCreateInfo graphicsPoolInfo {
+					.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.queueFamilyIndex = m_Renderer.m_GraphicsQueueFamilyIndex,
+				};
+				m_Renderer.VkAssert(vkCreateCommandPool(m_Renderer.m_VulkanDevice, 
+					&graphicsPoolInfo, m_Renderer.m_VulkanAllocationCallbacks, &m_GraphicsCommandPool),
+					"failed to create graphics command pool for thread (function vkCreateCommandPool in Thread constructor)!");
+				VkCommandPoolCreateInfo transferPoolInfo {
+					.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.queueFamilyIndex = m_Renderer.m_TransferQueueFamilyIndex,
+				};
+				m_Renderer.VkAssert(vkCreateCommandPool(m_Renderer.m_VulkanDevice, 
+					&transferPoolInfo, m_Renderer.m_VulkanAllocationCallbacks, &m_TransferCommandPool),
+					"failed to create transfer command pool for thread (function vkCreateCommandPool in Thread constructor)!");
+				m_TransferCommandBufferFreeList.Initialize(m_TransferCommandPool);
+				m_GraphicsCommandBufferFreeList.Initialize(m_GraphicsCommandPool);
+			}
+
+			void Terminate() {
+				m_GraphicsCommandBufferFreeList.FreeAll();
+				vkDestroyCommandPool(m_Renderer.m_VulkanDevice, m_GraphicsCommandPool, m_Renderer.m_VulkanAllocationCallbacks);
+				m_GraphicsCommandPool = VK_NULL_HANDLE;
+				m_TransferCommandBufferFreeList.FreeAll();
+				vkDestroyCommandPool(m_Renderer.m_VulkanDevice, m_TransferCommandPool, m_Renderer.m_VulkanAllocationCallbacks);
+				m_TransferCommandPool = VK_NULL_HANDLE;
+			}
 		};
 
 		typedef uint32_t CommandBufferFlags;
@@ -538,7 +595,7 @@ namespace engine {
 
 			struct BufferData {
 				VkBuffer m_Buffer{};
-				VkDeviceMemory m_DeviceMemory{};
+				VkDeviceMemory m_VulkanDeviceMemory{};
 			};
 
 			union Data {
@@ -555,8 +612,15 @@ namespace engine {
 			}
 		};
 
+		enum CommandBufferFlag {
+			CommandBufferFlag_SubmitCallback = 1,
+			CommandBufferFlag_FreeAfterSubmit = 2,
+		};
+
 		template<Queue queue_T>
 		struct CommandBuffer {
+			CommandBuffer(std::thread::id threadID = std::this_thread::get_id()) : m_ThreadID(threadID) {}
+			const std::thread::id m_ThreadID;
 			CommandBufferFlags m_Flags{};
 			VkCommandBuffer m_CommandBuffer{};
 			CommandBufferSubmitCallback m_SubmitCallback{};
@@ -574,7 +638,7 @@ namespace engine {
 
 			Buffer(const Buffer&) = delete;
 
-			Buffer(Buffer&& other) 
+			Buffer(Buffer&& other) noexcept
 				: m_Renderer(other.m_Renderer), m_Buffer(other.m_Buffer), m_VulkanDeviceMemory(other.m_VulkanDeviceMemory),
 					m_BufferSize(other.m_BufferSize) {
 				other.m_Buffer = VK_NULL_HANDLE;
@@ -615,7 +679,8 @@ namespace engine {
 					.queueFamilyIndexCount = queueFamilyIndexCount,
 					.pQueueFamilyIndices = pQueueFamilyIndices,
 				};
-				if (!m_Renderer.VkCheck(vkCreateBuffer(m_Renderer.m_VulkanDevice, &bufferInfo, m_Renderer.m_VulkanAllocationCallbacks, &m_Buffer),
+				if (!m_Renderer.VkCheck(vkCreateBuffer(m_Renderer.m_VulkanDevice, &bufferInfo, 
+						m_Renderer.m_VulkanAllocationCallbacks, &m_Buffer),
 						"failed to create buffer (function vkCreateBuffer in function Buffer::Create)!")) {
 					m_Buffer = VK_NULL_HANDLE;
 					return {};
@@ -674,12 +739,15 @@ namespace engine {
 				VkCommandBufferAllocateInfo commandBufferAllocInfo {
 					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 					.pNext = nullptr,
-					.commandPool = m_Renderer.m_TransferCommandPool,
+					.commandPool = m_Renderer.GetCommandPool<Queue::Transfer>(),
 					.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
 					.commandBufferCount = 1,
 				};
-				m_Renderer.m_TransferCommandBufferQueueMutex.lock();
-				CommandBuffer<Queue::Transfer>* commandBuffer = m_Renderer.m_TransferCommandBufferQueue.New();
+
+				LockGuard lockGuard(m_Renderer.m_TransferCommandBufferQueueMutex);
+
+				CommandBuffer<Queue::Transfer>* commandBuffer 
+					= m_Renderer.m_TransferCommandBufferQueue.New(std::this_thread::get_id());
 				if (!commandBuffer) {
 					PrintError(ErrorOrigin::OutOfMemory, 
 						"transfer command buffer queue was out of memory (function OneTypeStack::New in function Buffer::CopyBuffer)!");
@@ -716,19 +784,22 @@ namespace engine {
 					return false;
 				}
 				commandBuffer->m_Flags = CommandBufferFlag_FreeAfterSubmit | CommandBufferFlag_SubmitCallback;
-				commandBuffer->m_SubmitCallback.m_Data = {
-					.u_BufferData {
-						.m_Buffer = stagingBuffer.m_Buffer,
-						.m_DeviceMemory = stagingBuffer.m_VulkanDeviceMemory,
+				commandBuffer->m_SubmitCallback= {
+					.m_Callback = [](const Renderer& renderer, const CommandBufferSubmitCallback& callback) {
+						vkDestroyBuffer(renderer.m_VulkanDevice, callback.m_Data.u_BufferData.m_Buffer, 
+							renderer.m_VulkanAllocationCallbacks);
+						vkFreeMemory(renderer.m_VulkanDevice, callback.m_Data.u_BufferData.m_VulkanDeviceMemory, 
+							renderer.m_VulkanAllocationCallbacks);
+					},
+					.m_Data {
+						.u_BufferData {
+							.m_Buffer = stagingBuffer.m_Buffer,
+							.m_VulkanDeviceMemory = stagingBuffer.m_VulkanDeviceMemory,
+						}
 					}
 				};
 				stagingBuffer.m_Buffer = VK_NULL_HANDLE;
 				stagingBuffer.m_VulkanDeviceMemory = VK_NULL_HANDLE;
-				commandBuffer->m_SubmitCallback.m_Callback = [](const Renderer& renderer, const CommandBufferSubmitCallback& callback) {
-					vkDestroyBuffer(renderer.m_VulkanDevice, callback.m_Data.u_BufferData.m_Buffer, renderer.m_VulkanAllocationCallbacks);
-					vkFreeMemory(renderer.m_VulkanDevice, callback.m_Data.u_BufferData.m_DeviceMemory, renderer.m_VulkanAllocationCallbacks);
-				};
-				m_Renderer.m_TransferCommandBufferQueueMutex.unlock();
 				return true;
 			}
 
@@ -747,7 +818,7 @@ namespace engine {
 						"attempting to copy buffer when the size + dstOffset is larger than destination size (in function Buffer::CopyBuffer)!");
 					return false;
 				}
-				m_Renderer.m_TransferCommandBufferQueueMutex.lock();
+				LockGuard lockGuard(m_Renderer.m_TransferCommandBufferQueueMutex);
 				CommandBuffer<Queue::Transfer>* commandBuffer = m_Renderer.m_TransferCommandBufferQueue.New();
 				if (!commandBuffer) {
 					PrintError(ErrorOrigin::OutOfMemory, 
@@ -757,7 +828,7 @@ namespace engine {
 				VkCommandBufferAllocateInfo commandBufferAllocInfo {
 					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 					.pNext = nullptr,
-					.commandPool = m_Renderer.m_TransferCommandPool,
+					.commandPool = m_Renderer.GetCommandPool<Queue::Transfer>(),
 					.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
 					.commandBufferCount = 1,
 				};
@@ -786,7 +857,6 @@ namespace engine {
 						"failed to end command buffer (function vkEndCommandBuffer in function Buffer::CopyBuffer)")) {
 					return false;
 				}
-				m_Renderer.m_TransferCommandBufferQueueMutex.unlock();
 				return true;
 			}
 		};
@@ -809,13 +879,12 @@ namespace engine {
 		static constexpr const char* gpu_swapchain_extension_name = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 
 		static constexpr size_t single_thread_stack_size = 524288;
+		static constexpr size_t max_thread_count = 256;
 		static constexpr size_t max_pending_graphics_command_buffer_count = 250000;
 		static constexpr size_t max_pending_transfer_command_buffer_count = 250000;
-		static constexpr size_t graphics_command_buffer_stack_size 
-			= sizeof(CommandBuffer<Queue::Graphics>) * max_pending_graphics_command_buffer_count;
-		static constexpr size_t transfer_command_buffer_stack_size 
-			= sizeof(CommandBuffer<Queue::Transfer>) * max_pending_transfer_command_buffer_count;
-		static constexpr size_t in_flight_render_stack_size = 512;
+		static constexpr size_t max_command_buffer_submit_callbacks 
+			= max_pending_graphics_command_buffer_count + max_pending_transfer_command_buffer_count;
+		static constexpr size_t in_flight_render_stack_size = 1024;
 
 		static constexpr size_t max_model_descriptor_sets = 250000;	
 
@@ -843,16 +912,22 @@ namespace engine {
 		VkAllocationCallbacks* m_VulkanAllocationCallbacks = nullptr;
 		VkPhysicalDevice m_Gpu = VK_NULL_HANDLE;
 		const std::thread::id m_MainThreadID;
-		CommandBufferFreeList m_GraphicsCommandBufferFreeList;
-		CommandBufferFreeList m_TransferCommandBufferFreeList;
 		VkCommandPool m_GraphicsCommandPool = VK_NULL_HANDLE;
 		VkCommandPool m_TransferCommandPool = VK_NULL_HANDLE;
+		OneTypeStack<Thread, max_thread_count> m_Threads;
+		std::mutex m_ThreadsMutex;
 
-		OneTypeStack<CommandBuffer<Queue::Graphics>, 100000> m_GraphicsCommandBufferQueue;
-		std::mutex m_GraphicsCommandBufferQueueMutex;
-		OneTypeStack<CommandBuffer<Queue::Transfer>, 100000> m_TransferCommandBufferQueue;
-		std::mutex m_TransferCommandBufferQueueMutex;
-		Stack::Array<OneTypeStack<CommandBufferSubmitCallback, 100000>> m_CommandBufferSubmitCallbacks { 0, nullptr };
+		OneTypeStack<CommandBuffer<Queue::Graphics>, max_pending_graphics_command_buffer_count / 2> m_GraphicsCommandBufferQueue;
+		std::mutex m_GraphicsCommandBufferQueueMutex{};
+		OneTypeStack<CommandBuffer<Queue::Graphics>, max_pending_graphics_command_buffer_count / 2> m_EarlyGraphicsCommandBufferQueue;
+		std::mutex m_EarlyGraphicsCommandBufferQueueMutex{};
+		OneTypeStack<CommandBuffer<Queue::Transfer>, max_pending_graphics_command_buffer_count> m_TransferCommandBufferQueue;
+		std::mutex m_TransferCommandBufferQueueMutex{};
+		Stack::Array<OneTypeStack<CommandBufferSubmitCallback, max_command_buffer_submit_callbacks>> 
+			m_CommandBufferSubmitCallbacks { 0, nullptr };
+
+		CommandBufferFreeList m_TransferCommandBufferFreeList;
+		CommandBufferFreeList m_GraphicsCommandBufferFreeList;
 
 		VkSampleCountFlags m_ColorMsaaSamples = 1;
 		VkSampleCountFlags m_DepthMsaaSamples = 1;
@@ -862,14 +937,18 @@ namespace engine {
 		VkDescriptorSetLayout m_ModelDescriptorSetLayout;
 		DescriptorPool m_ModelDescriptorPool { *this, max_model_descriptor_sets };
 
+		Stack::Array<Fence> m_InFlightEarlyGraphicsFences { 0, nullptr };
+		Stack::Array<Fence> m_InFlightTransferFences { 0, nullptr };
+		Stack::Array<Fence> m_InFlightGraphicsFences { 0, nullptr };
+		Stack::Array<VkSemaphore> m_EarlyGraphicsSignalSemaphores { 0, nullptr };
 		Stack::Array<VkCommandBuffer> m_RenderCommandBuffers { 0, nullptr };
 		Stack::Array<VkSemaphore> m_RenderFinishedSemaphores { 0, nullptr };
 		Stack::Array<VkSemaphore> m_RenderWaitSemaphores { 0, nullptr };
-		Stack::Array<Fence> m_InFlightGraphicsFences { 0, nullptr };
-		Stack::Array<Fence> m_InFlightTransferFences { 0, nullptr };
 
 		Stack::Array<VkImageView> m_SwapchainImageViews { 0, nullptr };
+		std::mutex m_GraphicsQueueMutex{};
 		VkQueue m_GraphicsQueue = VK_NULL_HANDLE;
+		std::mutex m_TransferQueueMutex{};
 		VkQueue m_TransferQueue = VK_NULL_HANDLE;
 
 		VkQueue m_PresentQueue = VK_NULL_HANDLE;
@@ -1244,14 +1323,20 @@ namespace engine {
 				vkDeviceWaitIdle(m_VulkanDevice);
 				for (size_t i = 0; i < m_FramesInFlight; i++) {
 					vkDestroyImageView(m_VulkanDevice, m_SwapchainImageViews[i], m_VulkanAllocationCallbacks);
+					vkDestroySemaphore(m_VulkanDevice, m_EarlyGraphicsSignalSemaphores[i], m_VulkanAllocationCallbacks);
 					vkDestroySemaphore(m_VulkanDevice, m_RenderFinishedSemaphores[i], m_VulkanAllocationCallbacks);
 					vkDestroySemaphore(m_VulkanDevice, m_RenderWaitSemaphores[i], m_VulkanAllocationCallbacks);
-					vkDestroyFence(m_VulkanDevice, m_InFlightGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
+					vkDestroyFence(m_VulkanDevice, m_InFlightEarlyGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
 					vkDestroyFence(m_VulkanDevice, m_InFlightTransferFences[i].fence, m_VulkanAllocationCallbacks);
+					vkDestroyFence(m_VulkanDevice, m_InFlightGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
 				}
 				vkDestroySwapchainKHR(m_VulkanDevice, m_Swapchain, m_VulkanAllocationCallbacks);
 				vkDestroyCommandPool(m_VulkanDevice, m_GraphicsCommandPool, m_VulkanAllocationCallbacks);
 				vkDestroyCommandPool(m_VulkanDevice, m_TransferCommandPool, m_VulkanAllocationCallbacks);
+				for (Thread& thread : m_Threads) {
+					vkDestroyCommandPool(m_VulkanDevice, thread.m_GraphicsCommandPool, m_VulkanAllocationCallbacks);
+					vkDestroyCommandPool(m_VulkanDevice, thread.m_TransferCommandPool, m_VulkanAllocationCallbacks);
+				}
 				vkDestroyDevice(m_VulkanDevice, m_VulkanAllocationCallbacks);
 				m_VulkanDevice = VK_NULL_HANDLE;
 			}
@@ -1287,7 +1372,8 @@ namespace engine {
 			vkGetPhysicalDeviceSurfaceFormatsKHR(m_Gpu, m_Surface, &surfaceFormatCount, surfaceFormats.m_Data);
 
 			if (!surfaceFormatCount) {
-				m_CriticalErrorCallback(this, ErrorOrigin::Vulkan, "vulkan surface format count was 0 (in function CreateSwapchain)!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, ErrorOrigin::Vulkan, "vulkan surface format count was 0 (in function CreateSwapchain)!", 
+					VK_SUCCESS);
 				return;
 			}
 
@@ -1366,19 +1452,21 @@ namespace engine {
 			VkAssert(vkCreateSwapchainKHR(m_VulkanDevice, &swapchainInfo, m_VulkanAllocationCallbacks, &m_Swapchain), 
 					"failed to create vulkan swapchain (function vkCreateSwapchainKHR in function CreateSwapchain)!");
 
+			vkGetSwapchainImagesKHR(m_VulkanDevice, m_Swapchain, &m_FramesInFlight, nullptr);
+
 			vkQueueWaitIdle(m_GraphicsQueue);
 			vkQueueWaitIdle(m_TransferQueue);
 
-			vkGetSwapchainImagesKHR(m_VulkanDevice, m_Swapchain, &m_FramesInFlight, nullptr);	
-
 			if (m_FramesInFlight != oldFramesInFlight) {
 
-				for (size_t i = 0; i < m_SwapchainImageViews.m_Size; i++) {
+				for (size_t i = 0; i < oldFramesInFlight; i++) {
 					vkDestroyImageView(m_VulkanDevice, m_SwapchainImageViews[i], m_VulkanAllocationCallbacks);
+					vkDestroySemaphore(m_VulkanDevice, m_EarlyGraphicsSignalSemaphores[i], m_VulkanAllocationCallbacks);
 					vkDestroySemaphore(m_VulkanDevice, m_RenderFinishedSemaphores[i], m_VulkanAllocationCallbacks);
 					vkDestroySemaphore(m_VulkanDevice, m_RenderWaitSemaphores[i], m_VulkanAllocationCallbacks);
-					vkDestroyFence(m_VulkanDevice, m_InFlightGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
+					vkDestroyFence(m_VulkanDevice, m_InFlightEarlyGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
 					vkDestroyFence(m_VulkanDevice, m_InFlightTransferFences[i].fence, m_VulkanAllocationCallbacks);
+					vkDestroyFence(m_VulkanDevice, m_InFlightGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
 					for (const CommandBufferSubmitCallback& callback : m_CommandBufferSubmitCallbacks[i]) {
 						callback.Callback(*this);
 					}
@@ -1386,13 +1474,15 @@ namespace engine {
 				}
 
 				if (!m_InFlightRenderStack.Allocate<VkImageView>(m_FramesInFlight, &m_SwapchainImageViews) ||
+					!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_EarlyGraphicsSignalSemaphores) ||
 					!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_RenderFinishedSemaphores) ||
 					!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_RenderWaitSemaphores) ||
-					!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightGraphicsFences) ||
+					!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightEarlyGraphicsFences) ||
 					!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightTransferFences) ||
+					!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightGraphicsFences) ||
 					!m_InFlightRenderStack.Allocate<VkCommandBuffer>(m_FramesInFlight, &m_RenderCommandBuffers) ||
-					!m_InFlightRenderStack.Allocate<OneTypeStack<CommandBufferSubmitCallback, 100000>>(m_FramesInFlight, 
-						&m_CommandBufferSubmitCallbacks) ||
+					!m_InFlightRenderStack.Allocate<OneTypeStack<CommandBufferSubmitCallback, max_command_buffer_submit_callbacks>>(
+						m_FramesInFlight, &m_CommandBufferSubmitCallbacks) ||
 					!m_InFlightRenderStack.Allocate<VkImage>(m_FramesInFlight, &m_SwapchainImages))
 				{
 					m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
@@ -1447,24 +1537,33 @@ namespace engine {
 						},
 					};
 					VkAssert(vkCreateImageView(m_VulkanDevice, &imageViewInfo, m_VulkanAllocationCallbacks, &m_SwapchainImageViews[i]), 
-							"failed to create swapchain image view (function vkCreateImageView in function CreateSwapchain)!");
-					VkAssert(vkCreateSemaphore(m_VulkanDevice, &semaphoreInfo, m_VulkanAllocationCallbacks, &m_RenderFinishedSemaphores[i]), 
-							"failed to create render finished semaphore (function vkCreateSemaphore in function CreateSwapchain)");
+						"failed to create swapchain image view (function vkCreateImageView in function CreateSwapchain)!");
+					VkAssert(vkCreateSemaphore(m_VulkanDevice, &semaphoreInfo, m_VulkanAllocationCallbacks, 
+						&m_EarlyGraphicsSignalSemaphores[i]),
+						"failed to create early graphics semaphores (function vkCreateSemaphore in function CreateSwapchain)!");
+					VkAssert(vkCreateSemaphore(m_VulkanDevice, &semaphoreInfo, m_VulkanAllocationCallbacks, 
+						&m_RenderFinishedSemaphores[i]), 
+						"failed to create render finished semaphore (function vkCreateSemaphore in function CreateSwapchain)!");
 					VkAssert(vkCreateSemaphore(m_VulkanDevice, &semaphoreInfo, m_VulkanAllocationCallbacks, &m_RenderWaitSemaphores[i]), 
-							"failed to create render wait semaphore (function vkCreateSemaphore in function CreateSwapchain)");
-					VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, &m_InFlightGraphicsFences[i].fence), 
-							"failed to create in flight graphis fence (function vkCreateFence in function CreateSwapchain)");
+						"failed to create render wait semaphore (function vkCreateSemaphore in function CreateSwapchain)!");
+					VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, 
+						&m_InFlightEarlyGraphicsFences[i].fence),
+						"failed to create in flight early graphics fence (function vkCreateFence in function CreateSwapchain)!");
 					VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, &m_InFlightTransferFences[i].fence), 
-							"failed to create in flight transfer fence (function vkCreateFence in function CreateSwapchain)");
+						"failed to create in flight transfer fence (function vkCreateFence in function CreateSwapchain)!");
+					VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, &m_InFlightGraphicsFences[i].fence), 
+						"failed to create in flight graphis fence (function vkCreateFence in function CreateSwapchain)!");
 					VkSubmitInfo dummySubmitInfo {
 						.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
 						.commandBufferCount = 0,
 						.pCommandBuffers = nullptr,
 					};
-					vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightGraphicsFences[i].fence);
+					vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightEarlyGraphicsFences[i].fence);
 					vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightTransferFences[i].fence);
-					m_InFlightGraphicsFences[i].state = Fence::State::Resettable;
+					vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightGraphicsFences[i].fence);
+					m_InFlightEarlyGraphicsFences[i].state = Fence::State::Resettable;
 					m_InFlightTransferFences[i].state = Fence::State::Resettable;
+					m_InFlightGraphicsFences[i].state = Fence::State::Resettable;
 				}
 				m_CurrentFrame = 0;
 			}
@@ -1472,8 +1571,8 @@ namespace engine {
 
 				vkGetSwapchainImagesKHR(m_VulkanDevice, m_Swapchain, &m_FramesInFlight, m_SwapchainImages.m_Data);
 
-				Stack::Array<VkFence> resetFences = m_SingleThreadStack.Allocate<VkFence>(m_FramesInFlight * 2);
-				uint32_t fenceCount = 0;
+				Stack::Array<VkFence> resetFences = m_SingleThreadStack.Allocate<VkFence>(m_FramesInFlight * 3);
+				uint32_t resetFenceCount = 0;
 
 				for (size_t i = 0; i < m_FramesInFlight; i++) {
 					vkDestroyImageView(m_VulkanDevice, m_SwapchainImageViews[i], m_VulkanAllocationCallbacks);
@@ -1501,15 +1600,19 @@ namespace engine {
 					VkAssert(vkCreateImageView(m_VulkanDevice, &imageViewInfo, m_VulkanAllocationCallbacks, &m_SwapchainImageViews[i]), 
 							"failed to create swapchain image view (function vkCreateImageView in function CreateSwapchain)!");
 					if (m_InFlightGraphicsFences[i].state == Fence::State::Resettable) {
-						resetFences[fenceCount++] = m_InFlightGraphicsFences[i].fence;
+						resetFences[resetFenceCount++] = m_InFlightGraphicsFences[i].fence;
 						m_InFlightGraphicsFences[i].state = Fence::State::None;
 					}
 					if (m_InFlightTransferFences[i].state == Fence::State::Resettable) {
-						resetFences[fenceCount++] = m_InFlightTransferFences[i].fence;
+						resetFences[resetFenceCount++] = m_InFlightTransferFences[i].fence;
 						m_InFlightTransferFences[i].state = Fence::State::None;
 					}
+					if (m_InFlightEarlyGraphicsFences[i].state == Fence::State::Resettable) {
+						resetFences[resetFenceCount++] = m_InFlightEarlyGraphicsFences[i].fence;
+						m_InFlightEarlyGraphicsFences[i].state = Fence::State::None;
+					}
 				}
-				vkResetFences(m_VulkanDevice, fenceCount, resetFences.m_Data);
+				vkResetFences(m_VulkanDevice, resetFenceCount, resetFences.m_Data);
 			}
 
 			m_SwapchainCreateCallback(this, m_SwapchainExtent, m_FramesInFlight, m_SwapchainImageViews.m_Data);
@@ -1528,7 +1631,8 @@ namespace engine {
 				.commandBufferCount = 1,
 			};
 
-			VkAssert(vkAllocateCommandBuffers(m_VulkanDevice, &transitionCommandBuffersAllocInfo, &transitionCommandBuffer->m_CommandBuffer),
+			VkAssert(vkAllocateCommandBuffers(m_VulkanDevice, &transitionCommandBuffersAllocInfo, 
+				&transitionCommandBuffer->m_CommandBuffer),
 				"failed to allocate command buffer for swapchain image view layout transition (function vkAllocateCommandBuffers in function CreateSwapchain)!");
 
 			VkCommandBufferBeginInfo transitionBeginInfo {
@@ -1587,6 +1691,43 @@ namespace engine {
 			CreateSwapchain();
 			m_GraphicsCommandBufferFreeList.Reallocate();
 			m_TransferCommandBufferFreeList.Reallocate();
+			for (Thread& thread : m_Threads) {
+				thread.m_GraphicsCommandBufferFreeList.Reallocate();
+				thread.m_TransferCommandBufferFreeList.Reallocate();
+			}
+		}
+
+		template<Queue queue_T>
+		VkCommandPool GetCommandPool(std::thread::id threadID = std::this_thread::get_id()) {
+			static_assert(queue_T != Queue::Present, "invalid queue in function Renderer::GetCommandBuffer!");
+			if (threadID == m_MainThreadID) {
+				if constexpr (queue_T == Queue::Graphics) {
+					return m_GraphicsCommandPool;
+				}
+				else {
+					return m_TransferCommandPool;
+				}
+			}
+			else {
+				LockGuard lockGuard(m_ThreadsMutex);
+				Thread* thread = m_Threads.begin();
+				Thread* end = m_Threads.end();
+				for (; thread != end; thread++) {
+					if (thread->m_ThreadID == threadID) {
+						break;
+					}
+				}
+				if (thread == end) {
+					thread = m_Threads.New(*this, threadID);
+				}
+				if constexpr (queue_T == Queue::Graphics) {
+					return thread->m_GraphicsCommandPool;
+				}
+				else {
+					return thread->m_TransferCommandPool;
+				}
+			}
+			return VK_NULL_HANDLE;
 		}
 
 		VkDescriptorSetLayout CreateDescriptorSetLayout(uint32_t bindingCount, VkDescriptorSetLayoutBinding* pBindings) const {
@@ -1689,37 +1830,32 @@ namespace engine {
 				return false;
 			}
 
-			VkFence fences[2] { m_InFlightGraphicsFences[m_CurrentFrame].fence, m_InFlightTransferFences[m_CurrentFrame].fence };
+			VkFence waitFences[3]{};
+			uint32_t waitFenceCount{};
 
-			if (m_InFlightGraphicsFences[m_CurrentFrame].state == Fence::State::Resettable &&
-				m_InFlightTransferFences[m_CurrentFrame].state == Fence::State::Resettable) {
-				if (!VkCheck(vkWaitForFences(m_VulkanDevice, 2, fences, VK_TRUE, frame_timeout), 
-						"failed to wait for in flight fences (function vkWaitForFences in function BeginFrame)!")) {
-					return false;
-				}
-				vkResetFences(m_VulkanDevice, 2, fences);
-			}	
-
-			else if (m_InFlightGraphicsFences[m_CurrentFrame].state == Fence::State::Resettable) {
-				if (!VkCheck(vkWaitForFences(m_VulkanDevice, 1, &fences[0], VK_TRUE, frame_timeout), 
-						"failed to wait for in flight fences (function vkWaitForFences in function BeginFrame)!")) {
-					return false;
-				}
-				vkResetFences(m_VulkanDevice, 1, &fences[0]);
-			}
-			else if (m_InFlightGraphicsFences[m_CurrentFrame].state == Fence::State::Resettable) {
-				if (!VkCheck(vkWaitForFences(m_VulkanDevice, 1, &fences[1], VK_TRUE, frame_timeout), 
-						"failed to wait for in flight fences (function vkWaitForFences in function BeginFrame)!")) {
-					return false;
-				}
-				vkResetFences(m_VulkanDevice, 1, &fences[1]);
+			if (m_InFlightEarlyGraphicsFences[m_CurrentFrame].state == Fence::State::Resettable) {
+				waitFences[waitFenceCount++] = m_InFlightEarlyGraphicsFences[m_CurrentFrame].fence;
 			}
 
-			m_InFlightGraphicsFences[m_CurrentFrame].state = Fence::State::None;
+			if (m_InFlightTransferFences[m_CurrentFrame].state == Fence::State::Resettable) {
+				waitFences[waitFenceCount++] = m_InFlightTransferFences[m_CurrentFrame].fence;
+			}
+
+			if (m_InFlightGraphicsFences[m_CurrentFrame].state == Fence::State::Resettable) {
+				waitFences[waitFenceCount++] = m_InFlightGraphicsFences[m_CurrentFrame].fence;
+			}
+
+			if (waitFenceCount) {
+				if (!VkCheck(vkWaitForFences(m_VulkanDevice, waitFenceCount, waitFences, VK_TRUE, frame_timeout), 
+						"failed to wait for in flight fences (function vkWaitForFences in function BeginFrame)!")) {
+					return false;
+				}
+				vkResetFences(m_VulkanDevice, waitFenceCount, waitFences);
+			}
+
+			m_InFlightEarlyGraphicsFences[m_CurrentFrame].state = Fence::State::None;
 			m_InFlightTransferFences[m_CurrentFrame].state = Fence::State::None;
-
-			m_GraphicsCommandBufferFreeList.Free(m_CurrentFrame);
-			m_TransferCommandBufferFreeList.Free(m_CurrentFrame);
+			m_InFlightGraphicsFences[m_CurrentFrame].state = Fence::State::None;
 
 			for (const CommandBufferSubmitCallback& callback : m_CommandBufferSubmitCallbacks[m_CurrentFrame]) {
 				callback.Callback(*this);
@@ -1727,45 +1863,136 @@ namespace engine {
 
 			m_CommandBufferSubmitCallbacks[m_CurrentFrame].Clear();
 
+			m_GraphicsCommandBufferFreeList.Free(m_CurrentFrame);
+			m_TransferCommandBufferFreeList.Free(m_CurrentFrame);
+
+			m_ThreadsMutex.lock();
+			for (Thread& thread : m_Threads) {
+				thread.m_GraphicsCommandBufferFreeList.Free(m_CurrentFrame);
+				thread.m_TransferCommandBufferFreeList.Free(m_CurrentFrame);
+			}
+			m_ThreadsMutex.unlock();
+
+
+			m_EarlyGraphicsCommandBufferQueueMutex.lock();
+
+			if (m_EarlyGraphicsCommandBufferQueue.m_Count) {
+
+				Stack::Array<VkCommandBuffer> commandBuffers
+				 	= m_SingleThreadStack.Allocate<VkCommandBuffer>(m_EarlyGraphicsCommandBufferQueue.m_Count);
+
+				 if (!commandBuffers.m_Data) {
+					 m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory,
+					 	"single thread stack was out of memory (function Stack::Allocate in function BeginFrame)!",
+						VK_SUCCESS);
+				 }
+
+				 for (size_t i = 0; i < m_EarlyGraphicsCommandBufferQueue.m_Count; i++) {
+					 CommandBuffer<Queue::Graphics> commandBuffer = m_EarlyGraphicsCommandBufferQueue.m_Data[i];
+					 commandBuffers[i] = commandBuffer.m_CommandBuffer;
+					 if (commandBuffer.m_Flags & CommandBufferFlag_SubmitCallback) {
+						 Assert(m_CommandBufferSubmitCallbacks[m_CurrentFrame].New(commandBuffer.m_SubmitCallback), 
+						 	ErrorOrigin::OutOfMemory, 
+							"command buffer submit callbacks was out of memory (function OneTypeStack::New in function BeginFrame)!");
+					 }
+					 if (commandBuffer.m_Flags & CommandBufferFlag_FreeAfterSubmit) {
+						if (commandBuffer.m_ThreadID == m_MainThreadID) {
+							m_GraphicsCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
+						}
+						else {
+							bool threadFound = false;
+							for (Thread& thread : m_Threads) {
+								if (thread.m_ThreadID == commandBuffer.m_ThreadID) {
+									thread.m_GraphicsCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
+									threadFound = true;
+									break;
+								}
+							}
+							if (!threadFound) {
+								PrintError(ErrorOrigin::Threading, 
+									"failed to find transfer command buffer thread (in function BeginFrame)!");
+							}
+						}
+					 }
+				 }
+
+				VkSubmitInfo submitInfo {
+					.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+					.pNext = nullptr,
+					.commandBufferCount = (uint32_t)commandBuffers.m_Size,
+					.pCommandBuffers = commandBuffers.m_Data,
+					.signalSemaphoreCount = 1,
+					.pSignalSemaphores = &m_EarlyGraphicsSignalSemaphores[m_CurrentFrame],
+				};
+
+				if (VkCheck(vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightEarlyGraphicsFences[m_CurrentFrame].fence), 
+						"failed to submit to early graphics queue (function vkQueueSubmit in function BeginFrame)!")) {
+					m_InFlightEarlyGraphicsFences[m_CurrentFrame].state = Fence::State::Resettable;
+				}
+
+				m_EarlyGraphicsCommandBufferQueue.Clear();
+				m_SingleThreadStack.Clear();
+			}
+
+			m_EarlyGraphicsCommandBufferQueueMutex.unlock();
+
 			m_TransferCommandBufferQueueMutex.lock();
 
 			if (m_TransferCommandBufferQueue.m_Count) {
 
-				Stack::Array<VkCommandBuffer> transferCommandBuffers 
+				Stack::Array<VkCommandBuffer> commandBuffers 
 					= m_SingleThreadStack.Allocate<VkCommandBuffer>(m_TransferCommandBufferQueue.m_Count);
 
-				if (!transferCommandBuffers.m_Data) {
+				if (!commandBuffers.m_Data) {
 					m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory, 
-						"single thread stack was out of memory (in function EndFrame)!", VK_SUCCESS);
+						"single thread stack was out of memory (function Stack::Allocate in function BeginFrame)!", 
+						VK_SUCCESS);
 				}
 
 				for (size_t i = 0; i < m_TransferCommandBufferQueue.m_Count; i++) {
 					CommandBuffer<Queue::Transfer>& commandBuffer = m_TransferCommandBufferQueue.m_Data[i];
-					transferCommandBuffers[i] = commandBuffer.m_CommandBuffer;
+					commandBuffers[i] = commandBuffer.m_CommandBuffer;
+					if (commandBuffer.m_Flags & CommandBufferFlag_SubmitCallback) {
+						 Assert(m_CommandBufferSubmitCallbacks[m_CurrentFrame].New(commandBuffer.m_SubmitCallback), 
+						 	ErrorOrigin::OutOfMemory, 
+							"command buffer submit callbacks was out of memory (function OneTypeStack::New in function BeginFrame)!");
+					}
 					if (commandBuffer.m_Flags & CommandBufferFlag_FreeAfterSubmit) {
-						if (commandBuffer.m_Flags & CommandBufferFlag_MultiThreaded) [[unlikely]] {
-							PrintError(ErrorOrigin::Uncategorized, 
-								"transfer command buffer had simultaneously FreeAfterSubmit and MultiThreaded flags set (in function BeginFrame)!");
-						}
-						else [[likely]] {
+						if (commandBuffer.m_ThreadID == m_MainThreadID) {
 							m_TransferCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
 						}
-					}
-					if (commandBuffer.m_Flags & CommandBufferFlag_SubmitCallback) {
-						m_CommandBufferSubmitCallbacks[m_CurrentFrame].New(commandBuffer.m_SubmitCallback);
+						else {
+							bool threadFound = false;
+							for (Thread& thread : m_Threads) {
+								if (thread.m_ThreadID == commandBuffer.m_ThreadID) {
+									thread.m_TransferCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
+									threadFound = true;
+									break;
+								}
+							}
+							if (!threadFound) {
+								PrintError(ErrorOrigin::Threading, 
+									"failed to find transfer command buffer thread (in function BeginFrame)!");
+							}
+						}
 					}
 				}
 
-				VkSubmitInfo transferSubmit {
+				VkPipelineStageFlags stageFlag = VK_PIPELINE_STAGE_TRANSFER_BIT;
+
+				VkSubmitInfo submitInfo {
 					.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
 					.pNext = nullptr,
-					.waitSemaphoreCount = 0,
-					.commandBufferCount = (uint32_t)transferCommandBuffers.m_Size,
-					.pCommandBuffers = transferCommandBuffers.m_Data,
+					.waitSemaphoreCount 
+						= m_InFlightEarlyGraphicsFences[m_CurrentFrame].state == Fence::State::Resettable ? 1U : 0U,
+					.pWaitSemaphores = &m_EarlyGraphicsSignalSemaphores[m_CurrentFrame],
+					.pWaitDstStageMask = &stageFlag,
+					.commandBufferCount = (uint32_t)commandBuffers.m_Size,
+					.pCommandBuffers = commandBuffers.m_Data,
 				};
 
-				if (VkCheck(vkQueueSubmit(m_TransferQueue, 1, &transferSubmit, m_InFlightTransferFences[m_CurrentFrame].fence), 
-						"failed to submit to transfer queue (function vkQueueSubmit in function EndFrame)!")) {
+				if (VkCheck(vkQueueSubmit(m_TransferQueue, 1, &submitInfo, m_InFlightTransferFences[m_CurrentFrame].fence), 
+						"failed to submit to transfer queue (function vkQueueSubmit in function BeginFrame)!")) {
 					m_InFlightTransferFences[m_CurrentFrame].state = Fence::State::Resettable;
 				}
 
@@ -1787,7 +2014,8 @@ namespace engine {
 				return false;
 			}
 			if (imageIndex != m_CurrentFrame) {
-				m_CriticalErrorCallback(this, ErrorOrigin::Vulkan, "image index didn't match current frame (in function BeginFrame)!", VK_SUCCESS);
+				m_CriticalErrorCallback(this, ErrorOrigin::Vulkan, "image index didn't match current frame (in function BeginFrame)!", 
+					VK_SUCCESS);
 				return false;
 			}
 			outDrawData.swapchainImageView = m_SwapchainImageViews[m_CurrentFrame];
@@ -1827,12 +2055,24 @@ namespace engine {
 					CommandBuffer<Queue::Graphics>& commandBuffer = m_GraphicsCommandBufferQueue.m_Data[i];
 					graphicsCommandBuffers[i] = commandBuffer.m_CommandBuffer;
 					if (commandBuffer.m_Flags & CommandBufferFlag_FreeAfterSubmit) {
-						if (commandBuffer.m_Flags & CommandBufferFlag_MultiThreaded) [[unlikely]] {
-							PrintError(ErrorOrigin::Uncategorized, 
-								"transfer command buffer had simultaneously FreeAfterSubmit and MultiThreaded flags set (in function BeginFrame)!");
-						}
-						else [[likely]] {
-							m_GraphicsCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
+						if (commandBuffer.m_Flags & CommandBufferFlag_FreeAfterSubmit) {
+							if (commandBuffer.m_ThreadID == m_MainThreadID) {
+								m_GraphicsCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
+							}
+							else {
+								bool threadFound = false;
+								for (Thread& thread : m_Threads) {
+									if (thread.m_ThreadID == commandBuffer.m_ThreadID) {
+										thread.m_GraphicsCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
+										threadFound = true;
+										break;
+									}
+								}
+								if (!threadFound) {
+									PrintError(ErrorOrigin::Threading, 
+										"failed to find graphis command buffer thread (in function EndFrame)!");
+								}
+							}
 						}
 						if (commandBuffer.m_Flags & CommandBufferFlag_SubmitCallback) {
 							m_CommandBufferSubmitCallbacks[m_CurrentFrame].New(commandBuffer.m_SubmitCallback);
