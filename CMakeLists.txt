@@ -17,3 +17,5 @@ target_include_directories(game
 	PUBLIC src
 	PUBLIC engine/headers
 )
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/fonts DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
