@@ -46,11 +46,20 @@ namespace engine {
 			}
 		}
 
+		struct Character {
+			Vec2_T<uint32_t> m_Size;
+			IntVec2 m_Bearing;
+			uint32_t m_Offset;
+			uint32_t m_Advance;
+		};
+
 		struct Font {
-			Vec2_T<uint32_t> m_ImageResolution{};
+			Character m_Characters[128]{};
+			Vec2_T<uint32_t> m_ImageSize{};
 			uint8_t* m_Image{};
 			uint32_t m_FontSize{};
-			const char* fileName{};
+			const char* m_FileName{};
+			uint32_t m_TallestCharacter{};
 		};
 
 		struct FontList {
@@ -95,17 +104,9 @@ namespace engine {
 			}
 		};
 
-		struct FontTexture {
-			VkImage m_Image{};
-			VkDeviceMemory m_DeviceMemory{};
-			VkImageView m_ImageView{};
-		};
-
-		struct Character {
-			Vec2_T<uint32_t> m_Size;
-			Vec2_T<int> m_Bearing;
-			uint32_t m_Offset;
-			uint32_t m_Advance;
+		struct TextImage {
+			Vec2_T<uint32_t> m_Extent;
+			uint8_t* m_Image;
 		};
 
 		Renderer& m_Renderer;
@@ -119,13 +120,13 @@ namespace engine {
 				"failed to initialize FreeType (function FT_Init_FreeType in TextRenderer constructor)!");
 		}
 
-		void FtAssert(FT_Error ftErr, const char* err) {
+		void FtAssert(FT_Error ftErr, const char* err) const {
 			if (ftErr) {
 				m_CriticalErrorCallback(this, ErrorOrigin::FreeType, err, ftErr);
 			}
 		}
 
-		bool FtCheck(FT_Error ftErr, const char* err) {
+		bool FtCheck(FT_Error ftErr, const char* err) const {
 			if (ftErr) {
 				PrintError(ErrorOrigin::FreeType, err, ftErr);
 				return false;
@@ -184,7 +185,7 @@ namespace engine {
 		const Font* CreateFont(const char* fontFileName, uint32_t fontSize) {
 			FT_Face face;
 			FT_Error ftRes = FT_New_Face(m_FreeTypeLib, fontFileName, 0, &face);
-			if (!ftRes) {
+			if (ftRes) {
 				if (ftRes == FT_Err_Unknown_File_Format) {
 					PrintError(ErrorOrigin::FreeType, 
 						"failed to load font due to unknown file format (function FT_New_Face in function CreateFontTexture)", ftRes);
@@ -197,6 +198,7 @@ namespace engine {
 				return nullptr;
 			}
 			FT_Set_Pixel_Sizes(face, 0, fontSize);
+			Font font { .m_FileName = fontFileName };
 			uint32_t bitmapWidth = 0;
 			uint32_t bitmapHeight = 0;
 			struct CharacterData {
@@ -204,7 +206,6 @@ namespace engine {
 				uint8_t* m_Data;
 			};
 			CharacterData characterDatas[128]{};
-			Character characters[128];
 			for (unsigned char c = 0; c < 128; c++) {
 				if (!FtCheck(FT_Load_Char(face, c, FT_LOAD_RENDER), 
 						"failed to load font character (function FT_Load_Char in function CreateFontTexture)!")) {
@@ -213,12 +214,13 @@ namespace engine {
 					continue;
 				}
 				bitmapHeight = Max(bitmapHeight, face->glyph->bitmap.rows);
-				characters[c] = {
+				font.m_Characters[c] = {
 					.m_Size { face->glyph->bitmap.width, face->glyph->bitmap.rows },
 					.m_Bearing { face->glyph->bitmap_left, face->glyph->bitmap_top },
 					.m_Offset = bitmapWidth,
 					.m_Advance = (uint32_t)face->glyph->advance.x,
 				};
+				font.m_TallestCharacter = Max(font.m_Characters[c].m_Size.y, font.m_TallestCharacter);
 				uint32_t pitch = face->glyph->bitmap.pitch;
 				if (face->glyph->bitmap.width > 0) {
 					void* bitmapBuf = face->glyph->bitmap.buffer;
@@ -237,20 +239,23 @@ namespace engine {
 			}
 
 			FtCheck(FT_Done_Face(face), "failed to terminate FreeType face (function FT_Done_Face in function CreateFontTexture)!");
-			Font font{};
-			font.m_ImageResolution = { bitmapWidth, bitmapHeight };
+			font.m_ImageSize = { bitmapWidth, bitmapHeight };
 			size_t pixelCount = bitmapWidth * bitmapHeight;
 			font.m_Image = (uint8_t*)malloc(pixelCount * sizeof(uint8_t));
 			font.m_FontSize = fontSize;
 			memset(font.m_Image, 0, pixelCount);
 			uint32_t xPos = 0;
 			for (unsigned char c = 0; c < 128; c++) {
-				Character& character = characters[c];
+				Character& character = font.m_Characters[c];
 				uint32_t width = character.m_Size.x;
 				uint32_t height = character.m_Size.y;
+				uint32_t characterPixelCount = width * height;
 				for (uint32_t i = 0; i < height; i++) {
 					for (uint32_t j = 0; j < width; j++) {
-						font.m_Image[i * bitmapWidth + xPos + j] = characterDatas[c].m_Data[i * width + j];
+						size_t imageIndex = i * bitmapWidth + xPos + j;
+						size_t characterIndex = i * width + j;
+						assert(imageIndex < pixelCount && characterIndex < characterPixelCount);
+						font.m_Image[imageIndex] = characterDatas[c].m_Data[characterIndex];
 					}
 				}
 				xPos += width;
@@ -258,15 +263,100 @@ namespace engine {
 			return m_FontList.AddFont(font);
 		}
 
-		void DestroyFontTexture(FontTexture& texture) {
-			vkDestroyImageView(m_Renderer.m_VulkanDevice, texture.m_ImageView, m_Renderer.m_VulkanAllocationCallbacks);
-			texture.m_ImageView = VK_NULL_HANDLE;
-			vkFreeMemory(m_Renderer.m_VulkanDevice, texture.m_DeviceMemory, m_Renderer.m_VulkanAllocationCallbacks);
-			texture.m_DeviceMemory = VK_NULL_HANDLE;
-			vkDestroyImage(m_Renderer.m_VulkanDevice, texture.m_Image, m_Renderer.m_VulkanAllocationCallbacks);
-			texture.m_Image = VK_NULL_HANDLE;
+		Vec2_T<uint32_t> CalcTextImageSize(const char* buf, size_t textLength, const Font& font, 
+			uint32_t frameWidth, Vec2_T<uint32_t> spacing) {
+			Vec2_T<uint32_t> res { frameWidth, spacing.y };
+			uint32_t xPos = spacing.x;
+			for (size_t i = 0; i < textLength; i++) {
+				char c = buf[i];
+				if (c < 0) {
+					continue;
+				}
+				const Character& character = font.m_Characters[c];
+				if (character.m_Size.x == 0) {
+					continue;
+				}
+				if (character.m_Size.x + spacing.x + spacing.x > frameWidth) {
+					return { 0, 0 };
+				}
+				xPos += spacing.x + character.m_Size.x;
+				if (xPos > frameWidth) {
+					res.y += font.m_TallestCharacter + spacing.y;
+					xPos = spacing.x;
+				}
+			}
+			res.y += font.m_TallestCharacter + spacing.y;
+			return res;
+		}
+
+		TextImage RenderText(const char* buf, size_t textLength, const Font& font, uint32_t frameWidth, Vec2_T<uint32_t> spacing) {
+			TextImage res{};
+			res.m_Extent = CalcTextImageSize(buf, textLength, font, frameWidth, spacing);
+			if (res.m_Extent.x == 0 || res.m_Extent.y == 0) {
+				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+					"frame width was smaller than a single character width when rendering text with font {} (in function TextRenderer::RenderText)!",
+					font.m_FileName);
+				return {};
+			}
+			uint32_t resPixelCount = res.m_Extent.x * res.m_Extent.y;
+			res.m_Image = (uint8_t*)malloc(resPixelCount);
+			if (res.m_Image) {
+				memset(res.m_Image, 0, res.m_Extent.x * res.m_Extent.y);
+			}
+			else {
+				PrintError(ErrorOrigin::Uncategorized, "failed to allocate memory (function malloc in function RenderText)!");
+				return {};
+			}
+			uint32_t fontPixelCount = font.m_ImageSize.x * font.m_ImageSize.y;
+			uint32_t imageWidth = res.m_Extent.x;
+			Vec2_T<uint32_t> pen = { 0, spacing.y };
+			uint32_t currentPenStartingYPos = spacing.y;
+			for (size_t i = 0; i < textLength; i++) {
+				char c = buf[i];
+				if (c < 0) {
+					fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
+						"Invalid character in string (in function TextRenderer::RenderText)!");
+					continue;
+				}
+				const Character& character = font.m_Characters[c];
+				if (character.m_Size.x == 0) {
+					fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
+						"Couldn't find character {} from font (in function TextRenderer::RenderText)", c);
+					continue;
+				}
+				pen.x += spacing.x;
+				uint32_t charWidth = character.m_Size.x;
+				uint32_t charHeight = character.m_Size.x;
+				if (pen.x + charWidth + spacing.x > frameWidth) {
+					pen.x = spacing.x;
+					currentPenStartingYPos += font.m_TallestCharacter + spacing.y;
+				}
+				pen.y = currentPenStartingYPos;
+				pen.y += font.m_TallestCharacter - charHeight;
+				uint32_t currentPenStartingXPos = pen.x;
+				for (size_t y = 0; y < charHeight; y++) {
+					for (size_t x = 0; x < charWidth; x++) {
+						size_t imageIndex = pen.y * imageWidth + pen.x;
+						size_t fontImageIndex = y * charWidth + x;
+						assert(imageIndex < resPixelCount && fontImageIndex < fontPixelCount);
+						res.m_Image[imageIndex] = font.m_Image[fontImageIndex];
+						++pen.x;
+					}
+					++pen.y;
+					pen.x = currentPenStartingXPos;
+				}
+				pen.x += charWidth;
+			}
+			return res;
+		}
+
+		void DestroyTextImage(TextImage& image) {
+			free(image.m_Image);
+			image.m_Image = nullptr;
+			image.m_Extent = {};
 		}
 	};
 
-	typedef TextRenderer::FontTexture FontTexture;
+	typedef TextRenderer::Font Font;
+	typedef TextRenderer::TextImage TextImage;
 }
