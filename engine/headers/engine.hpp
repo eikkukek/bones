@@ -16,6 +16,7 @@ namespace engine {
 	public:
 
 		typedef uint64_t UID;
+		typedef std::lock_guard<std::mutex> LockGuard;
 
 		template<typename T, typename U>
 		struct IsSame {
@@ -30,9 +31,12 @@ namespace engine {
 		enum class ErrorOrigin {
 			Uncategorized = 0,
 			Renderer = 1,
-			Entity = 2,
-			DynamicArray = 3,
-			FileParsing = 4,
+			TextRenderer = 2,
+			OutOfMemory = 3,
+			Vulkan = 4,
+			Entity = 5,
+			DynamicArray = 6,
+			FileParsing = 7,
 			MaxEnum,
 		};
 
@@ -40,6 +44,9 @@ namespace engine {
 			const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
 				"Uncategorized",
 				"Renderer",
+				"TextRenderer",
+				"OutOfMemory",
+				"Vulkan",
 				"Entity",
 				"DynamicArray",
 				"FileParsing",
@@ -617,8 +624,8 @@ namespace engine {
 		};
 
 		enum class MeshType {
-			Static = 0,
-			Dynamic = 1,
+			Static = 1,
+			Dynamic = 2,
 		};
 
 		struct MeshData {
@@ -686,6 +693,340 @@ namespace engine {
 				}
 				m_IndexCount = indexCount;
 				return true;
+			}
+		};
+
+		enum class TextureType {
+			Static = 1,
+			Dynamic = 2,
+		};
+
+		template<TextureType texture_type_T>
+		class Texture {};
+
+		template<>
+		class Texture<TextureType::Static> {
+		public:
+
+			Engine& m_Engine;
+			VkImage m_Image;
+			VkImageView m_ImageView;
+			VkDeviceMemory m_VulkanDeviceMemory;
+
+			Texture(Engine& engine) noexcept 
+				: m_Engine(engine), m_Image(VK_NULL_HANDLE), 
+					m_ImageView(VK_NULL_HANDLE), m_VulkanDeviceMemory(VK_NULL_HANDLE) {}
+
+			bool Create(Vec2_T<uint32_t> extent, uint8_t* image) {
+				Renderer& renderer = m_Engine.m_Renderer;
+				VkDeviceSize deviceSize = (VkDeviceSize)extent.x * extent.y * 4;
+				Renderer::Buffer stagingBuffer(m_Engine.m_Renderer);
+				if (!stagingBuffer.Create(deviceSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+					PrintError(ErrorOrigin::Renderer, 
+						"failed to create staging buffer for texture (function Renderer::Buffer::Create in function Texture::Create!)");
+					return false;
+				}
+				void* stagingMap;
+				VkResult vkRes = vkMapMemory(renderer.m_VulkanDevice, 
+					stagingBuffer.m_VulkanDeviceMemory, 0, deviceSize, 0, &stagingMap);
+				memcpy(stagingMap, image, deviceSize);
+				vkUnmapMemory(renderer.m_VulkanDevice, stagingBuffer.m_VulkanDeviceMemory);
+				if (vkRes != VK_SUCCESS) {
+					PrintError(ErrorOrigin::Vulkan, 
+						"failed to map staging buffer memory (function vkMapMemory in function Texture::Create)!", vkRes);
+					return false;
+				}
+				uint32_t queueFamilies[2] {
+					renderer.m_GraphicsQueueFamilyIndex,
+					renderer.m_TransferQueueFamilyIndex,
+				};
+				VkImageCreateInfo imageInfo {
+					.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.imageType = VK_IMAGE_TYPE_2D,
+					.format = VK_FORMAT_R8G8B8A8_UINT,
+					.extent { extent.x, extent.y, 1 },
+					.mipLevels = 1,
+					.arrayLayers = 1,
+					.samples = VK_SAMPLE_COUNT_1_BIT,
+					.tiling = VK_IMAGE_TILING_OPTIMAL,
+					.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+					.sharingMode = VK_SHARING_MODE_CONCURRENT,
+					.queueFamilyIndexCount = 2,
+					.pQueueFamilyIndices = queueFamilies,
+					.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+				};
+				vkRes = vkCreateImage(renderer.m_VulkanDevice, &imageInfo, renderer.m_VulkanAllocationCallbacks, &m_Image);
+				if (vkRes != VK_SUCCESS) {
+					PrintError(ErrorOrigin::Vulkan, 
+						"failed to create image (function vkCreateImage in function Texture::Create)!", vkRes);
+					return false;
+				}
+				VkMemoryRequirements memRequirements;
+				vkGetImageMemoryRequirements(renderer.m_VulkanDevice, m_Image, &memRequirements);
+				VkMemoryAllocateInfo imageAllocInfo {
+					.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+					.pNext = nullptr,
+					.allocationSize = memRequirements.size,
+				};
+				if (!renderer.FindMemoryTypeIndex(memRequirements.memoryTypeBits, 
+					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, imageAllocInfo.memoryTypeIndex)) {
+					PrintError(ErrorOrigin::Vulkan, 
+						"failed to find memory type index (function Renderer::FindMemoryTypeIndex in function Texture::Create)!");
+					Terminate();
+					return false;
+				}
+				vkRes = vkAllocateMemory(renderer.m_VulkanDevice, &imageAllocInfo, 
+					renderer.m_VulkanAllocationCallbacks, &m_VulkanDeviceMemory);
+				if (vkRes != VK_SUCCESS) {
+					PrintError(ErrorOrigin::Vulkan, 
+						"failed to allocate image memory (function vkAllocateMemory in function Texture::Create)!");
+					Terminate();
+					return false;
+				}
+				vkRes = vkBindImageMemory(renderer.m_VulkanDevice, m_Image, m_VulkanDeviceMemory, 0);
+				if (vkRes != VK_SUCCESS) {
+					PrintError(ErrorOrigin::Vulkan, 
+						"failed to bind image memory (function vkBindImageMemory in function Texture::Create)!");
+					Terminate();
+					return false;
+				}
+
+				{
+					LockGuard earlyGraphicsQueueLockGuard(renderer.m_EarlyGraphicsCommandBufferQueueMutex);
+					Renderer::CommandBuffer<Renderer::Queue::Graphics>* commandBuffer
+						= renderer.m_EarlyGraphicsCommandBufferQueue.New();
+					if (!commandBuffer) {
+						PrintError(ErrorOrigin::OutOfMemory, 
+							"renderer early graphics command buffer queue was out of memory (in function Texture::Create)!");
+						Terminate();
+						return false;
+					}
+					VkCommandBufferAllocateInfo commandBufferAllocInfo {
+						.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+						.pNext = nullptr,
+						.commandPool = renderer.GetCommandPool<Renderer::Queue::Graphics>(),
+						.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+						.commandBufferCount = 1,
+					};
+					vkRes = vkAllocateCommandBuffers(renderer.m_VulkanDevice, &commandBufferAllocInfo, 
+						&commandBuffer->m_CommandBuffer);
+					if (vkRes != VK_SUCCESS) {
+						PrintError(ErrorOrigin::Vulkan, 
+							"failed to allocate early graphics command buffer (function vkAllocateCommandBuffers in function Texture::Create)", 
+							vkRes);
+						Terminate();
+						return false;
+					}
+					VkCommandBufferBeginInfo commandBufferBeginInfo {
+						.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.pInheritanceInfo = nullptr,
+					};
+					vkRes = vkBeginCommandBuffer(commandBuffer->m_CommandBuffer, &commandBufferBeginInfo);
+					if (vkRes != VK_SUCCESS) {
+						PrintError(ErrorOrigin::Vulkan, 
+							"failed to begin early graphics command buffer (function vkAllocateCommandBuffers in function Texture::Create)", 
+							vkRes);
+						Terminate();
+						return false;
+					}
+					VkImageMemoryBarrier memoryBarrier {
+						.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+						.pNext = nullptr,
+						.srcAccessMask = 0,
+						.dstAccessMask = 0,
+						.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+						.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+						.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+						.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+						.image = m_Image,
+						.subresourceRange {
+							.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+							.baseMipLevel = 0,
+							.levelCount = 1,
+							.baseArrayLayer = 0,
+							.layerCount = 1,
+						},
+					};
+
+					vkCmdPipelineBarrier(commandBuffer->m_CommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+						VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &memoryBarrier);
+
+					vkRes = vkEndCommandBuffer(commandBuffer->m_CommandBuffer);
+					if (vkRes != VK_SUCCESS) {
+						PrintError(ErrorOrigin::Vulkan, 
+							"failed to end early graphics command buffer (function vkEndCommandBuffer in function Texture::Create)!", 
+							vkRes);
+						Terminate();
+						return false;
+					}
+
+					commandBuffer->m_Flags = Renderer::CommandBufferFlag_FreeAfterSubmit;
+				}
+
+				{
+					LockGuard transferQueueLockGuard(renderer.m_TransferCommandBufferQueueMutex);
+					Renderer::CommandBuffer<Renderer::Queue::Transfer>* commandBuffer
+						= renderer.m_TransferCommandBufferQueue.New();
+					if (!commandBuffer) {
+						PrintError(ErrorOrigin::OutOfMemory, 
+							"renderer transfer command buffer queue was out of memory (in function Texture::Create)!");
+						Terminate();
+						return false;
+					}
+					VkCommandBufferAllocateInfo commandBufferAllocInfo {
+						.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+						.pNext = nullptr,
+						.commandPool = renderer.GetCommandPool<Renderer::Queue::Transfer>(),
+						.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+						.commandBufferCount = 1,
+					};
+					vkRes = vkAllocateCommandBuffers(renderer.m_VulkanDevice, &commandBufferAllocInfo, 
+						&commandBuffer->m_CommandBuffer);
+					if (vkRes != VK_SUCCESS) {
+						PrintError(ErrorOrigin::Vulkan, 
+							"failed to allocate transfer command buffer (function vkAllocateCommandBuffers in function Texture::Create)", 
+							vkRes);
+						Terminate();
+						return false;
+					}
+					VkCommandBufferBeginInfo commandBufferBeginInfo {
+						.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.pInheritanceInfo = nullptr,
+					};
+					vkRes = vkBeginCommandBuffer(commandBuffer->m_CommandBuffer, &commandBufferBeginInfo);
+					if (vkRes != VK_SUCCESS) {
+						PrintError(ErrorOrigin::Vulkan, 
+							"failed to begin transfer command buffer (function vkAllocateCommandBuffers in function Texture::Create)", 
+							vkRes);
+						Terminate();
+						return false;
+					}
+					VkBufferImageCopy copyRegion {
+						.bufferOffset = 0,
+						.bufferRowLength = 0,
+						.bufferImageHeight = 0,
+						.imageSubresource {
+							.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+							.mipLevel = 0,
+							.baseArrayLayer = 0,
+							.layerCount = 1,
+						},
+						.imageOffset = { 0, 0 },
+						.imageExtent = { extent.x, extent.y, 1 },
+					};
+					vkCmdCopyBufferToImage(commandBuffer->m_CommandBuffer, stagingBuffer.m_Buffer, m_Image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+						1, &copyRegion);
+					vkRes = vkEndCommandBuffer(commandBuffer->m_CommandBuffer);
+					if (vkRes != VK_SUCCESS) {
+						PrintError(ErrorOrigin::Vulkan, 
+							"failed to end transfer command buffer (function vkEndCommandBuffer in function Texture::Create)!", 
+							vkRes);
+						Terminate();
+						return false;
+					}
+					commandBuffer->m_Flags = Renderer::CommandBufferFlag_SubmitCallback | Renderer::CommandBufferFlag_FreeAfterSubmit;
+					commandBuffer->m_SubmitCallback = {
+						.m_Callback = [](const Renderer& renderer, const Renderer::CommandBufferSubmitCallback& submit) {
+							vkDestroyBuffer(renderer.m_VulkanDevice, submit.m_Data.u_BufferData.m_Buffer, 
+								renderer.m_VulkanAllocationCallbacks);
+							vkFreeMemory(renderer.m_VulkanDevice, submit.m_Data.u_BufferData.m_VulkanDeviceMemory, 
+								renderer.m_VulkanAllocationCallbacks);
+						},
+						.m_Data {
+							.u_BufferData {
+								.m_Buffer = stagingBuffer.m_Buffer,
+								.m_VulkanDeviceMemory = stagingBuffer.m_VulkanDeviceMemory,
+							}
+						}
+					};
+					stagingBuffer.m_Buffer = VK_NULL_HANDLE;
+					stagingBuffer.m_VulkanDeviceMemory = VK_NULL_HANDLE;
+				}
+				LockGuard graphisQueueLockGuard(renderer.m_GraphicsCommandBufferQueueMutex);
+				Renderer::CommandBuffer<Renderer::Queue::Graphics>* commandBuffer 
+					= renderer.m_GraphicsCommandBufferQueue.New();
+				if (!commandBuffer) {
+					PrintError(ErrorOrigin::OutOfMemory, 
+						"renderer graphics command buffer queue was out of memory (in function Texture::Create)!");
+					Terminate();
+					return false;
+				}
+				VkCommandBufferAllocateInfo commandBufferAllocInfo {
+					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+					.pNext = nullptr,
+					.commandPool = renderer.GetCommandPool<Renderer::Queue::Graphics>(),
+					.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+					.commandBufferCount = 1,
+				};
+				vkRes = vkAllocateCommandBuffers(renderer.m_VulkanDevice, &commandBufferAllocInfo, &commandBuffer->m_CommandBuffer);
+				if (vkRes != VK_SUCCESS) {
+					PrintError(ErrorOrigin::Vulkan, 
+						"failed to allocate graphics command buffer (function vkAllocateCommandBuffers in function Texture::Create)", 
+						vkRes);
+					Terminate();
+					return false;
+				}
+				VkCommandBufferBeginInfo commandBufferBeginInfo {
+					.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.pInheritanceInfo = nullptr,
+				};
+				vkRes = vkBeginCommandBuffer(commandBuffer->m_CommandBuffer, &commandBufferBeginInfo);
+				if (vkRes != VK_SUCCESS) {
+					PrintError(ErrorOrigin::Vulkan, 
+						"failed to begin graphics command buffer (function vkAllocateCommandBuffers in function Texture::Create)", 
+						vkRes);
+					Terminate();
+					return false;
+				}
+				VkImageMemoryBarrier memoryBarrier {
+					.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+					.pNext = nullptr,
+					.srcAccessMask = 0,
+					.dstAccessMask = 0,
+					.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+					.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 
+					.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+					.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+					.image = m_Image,
+					.subresourceRange {
+						.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+						.baseMipLevel = 0,
+						.levelCount = 1,
+						.baseArrayLayer = 0,
+						.layerCount = 1,
+					},
+				};
+				vkCmdPipelineBarrier(commandBuffer->m_CommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+					VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &memoryBarrier);
+				vkRes = vkEndCommandBuffer(commandBuffer->m_CommandBuffer);
+				if (vkRes != VK_SUCCESS) {
+					PrintError(ErrorOrigin::Vulkan, 
+						"failed to end graphics command buffer (function vkEndCommandBuffer in function Texture::Create)!", 
+						vkRes);
+					Terminate();
+					return false;
+				}
+				commandBuffer->m_Flags = Renderer::CommandBufferFlag_FreeAfterSubmit;
+				return true;
+			}
+
+			void Terminate() {
+				Renderer& renderer = m_Engine.m_Renderer;
+				vkDestroyImageView(renderer.m_VulkanDevice, m_ImageView, renderer.m_VulkanAllocationCallbacks);
+				m_ImageView = VK_NULL_HANDLE;
+				vkDestroyImage(renderer.m_VulkanDevice, m_Image, renderer.m_VulkanAllocationCallbacks);
+				m_Image = VK_NULL_HANDLE;
+				vkFreeMemory(renderer.m_VulkanDevice, m_VulkanDeviceMemory, renderer.m_VulkanAllocationCallbacks);
+				m_VulkanDeviceMemory = VK_NULL_HANDLE;
 			}
 		};
 
@@ -839,6 +1180,7 @@ namespace engine {
 				s_engine_instance->~Engine();
 			}
 			fmt::print(fmt::emphasis::bold, "Stopping program execution...\n");
+			glfwTerminate();
 			exit(EXIT_FAILURE);
 		}
 
@@ -854,6 +1196,7 @@ namespace engine {
 				s_engine_instance->~Engine();
 			}
 			fmt::print(fmt::emphasis::bold, "Stopping program execution...\n");
+			glfwTerminate();
 			exit(EXIT_FAILURE);
 		}
 
@@ -923,6 +1266,7 @@ namespace engine {
 				"Engine called a critical error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
 			this->~Engine();
 			fmt::print(fmt::emphasis::bold, "Stopping program execution...\n");
+			glfwTerminate();
 			exit(EXIT_FAILURE);
 		}
 
@@ -1014,7 +1358,10 @@ namespace engine {
 		}
 	};
 
-	typedef Engine::Mesh<Engine::MeshType::Static> StaticMesh;
+	typedef Engine::MeshType MeshType;
+	typedef Engine::Mesh<MeshType::Static> StaticMesh;
+	typedef Engine::TextureType TextureType;
+	typedef Engine::Texture<TextureType::Static> StaticTexture;
 	typedef Engine::Entity Entity;
 	typedef Engine::GraphicsPipeline GraphicsPipeline;
 	typedef Engine::CameraData1 CameraData;
