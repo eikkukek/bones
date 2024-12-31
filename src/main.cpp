@@ -83,7 +83,8 @@ void main() {
 			.pVertexBindingDescriptions = &vertexBinding,
 		};
 
-		engine::Engine::Vertex::GetVertexAttributes(vertexInputStateInfo.vertexAttributeDescriptionCount, &vertexInputStateInfo.pVertexAttributeDescriptions);
+		engine::Engine::Vertex::GetVertexAttributes(vertexInputStateInfo.vertexAttributeDescriptionCount, 
+			&vertexInputStateInfo.pVertexAttributeDescriptions);
 
 		VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateInfo {
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -254,6 +255,13 @@ int main() {
 	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
 	engine::Engine engine("Test", pWindow, false, 100, 0, nullptr, 1000);
+	engine::TextRenderer& textRenderer = engine.m_TextRenderer;
+	const engine::Font* font = textRenderer.CreateFont("fonts\\arial_mt.ttf", 18);
+	assert(font);
+	const char* text = "Moi";
+	engine::TextImage textImage = textRenderer.RenderText(text, strlen(text), *font, 248, { 10, 10 });
+	engine::StaticTexture texture(engine);
+	assert(texture.Create(textImage.m_Extent, textImage.m_Image));
 	TestPipeline testPipeline(engine.m_Renderer);
 	engine::Engine::GraphicsPipeline& testPipelineData =
 			engine.AddGraphicsPipeline(testPipeline.m_GpuPipeline, testPipeline.m_GpuPipelineLayout, 0, 1000);
@@ -266,4 +274,6 @@ int main() {
 	vkDeviceWaitIdle(engine.m_Renderer.m_VulkanDevice);	
 	testPipeline.Terminate();
 	glfwTerminate();
+	textRenderer.DestroyTextImage(textImage);
+	texture.Terminate();
 }
