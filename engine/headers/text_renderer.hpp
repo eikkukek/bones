@@ -263,29 +263,21 @@ namespace engine {
 			return m_FontList.AddFont(font);
 		}
 
-		Vec2_T<uint32_t> CalcTextImageSize(const char* buf, size_t textLength, const Font& font, 
-			uint32_t frameWidth, Vec2_T<uint32_t> spacing) {
-			Vec2_T<uint32_t> res { frameWidth, spacing.y };
-			uint32_t xPos = spacing.x;
-			for (size_t i = 0; i < textLength; i++) {
-				char c = buf[i];
+		uint32_t CalcWordWidth(const char* text, size_t pos, uint32_t frameWidth, const Font& font, size_t& outEndPos) {
+			uint32_t res = 0;
+			char c = text[pos];
+			size_t i = pos;
+			for (; c && c != ' '; c = text[i], i++) {
 				if (c < 0) {
 					continue;
 				}
-				const Character& character = font.m_Characters[c];
-				if (character.m_Size.x == 0) {
-					continue;
+				uint32_t temp = res + font.m_Characters[c].m_Escapement.x;
+				if (temp >= frameWidth) {
+					break;
 				}
-				if (character.m_Size.x + spacing.x + spacing.x > frameWidth) {
-					return { 0, 0 };
-				}
-				xPos += spacing.x + character.m_Size.x;
-				if (xPos > frameWidth) {
-					res.y += font.m_MaxHoriBearingY + spacing.y;
-					xPos = spacing.x;
-				}
+				res = temp;
 			}
-			res.y += font.m_MaxHoriBearingY + spacing.y;
+			outEndPos = i;
 			return res;
 		}
 
@@ -312,40 +304,52 @@ namespace engine {
 			uint32_t imageWidth = res.m_Extent.x;
 			Vec2_T<uint32_t> pen = { spacing.x, spacing.y };
 			uint32_t currentPenStartingYPos = spacing.y;
-			for (size_t i = 0; i < textLength; i++) {
+			for (size_t i = 0; i < textLength;) {
 				char c = text[i];
 				if (c < 0) {
 					fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
 						"Invalid character in string (in function TextRenderer::RenderText)!\n");
+					i++;
 					continue;
 				}
-				const Character& character = font.m_Characters[c];
-				uint32_t charWidth = character.m_Size.x;
-				uint32_t charHeight = character.m_Size.y;
-				if (pen.x + charWidth + spacing.x > frameExtent.x) {
+				if (c == ' ') {
+					pen.x += font.m_Characters[c].m_Escapement.x;
+					i++;
+					continue;
+				}
+				size_t end;
+				uint32_t wordWidth = CalcWordWidth(text, i, frameExtent.x, font, end);
+				assert(wordWidth < frameExtent.x);
+				if (pen.x + wordWidth + spacing.x > frameExtent.x) {
 					pen.x = spacing.x;
 					currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
 				}
-				pen.y = currentPenStartingYPos;
-				pen.y += font.m_MaxHoriBearingY - character.m_Bearing.y;
-				uint32_t currentPenStartingXPos = pen.x;
-				for (size_t y = 0; y < charHeight; y++) {
-					if (pen.y > res.m_Extent.y) {
-						fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
-							"Text truncated:\n\"{}\" (in function TextRenderer::RenderText)\n", text);
-						return res;
+				for (; i < end; i++) {
+					c = text[i];
+					const Character& character = font.m_Characters[c];
+					uint32_t charWidth = character.m_Size.x;
+					uint32_t charHeight = character.m_Size.y;
+					pen.y = currentPenStartingYPos;
+					pen.y += font.m_MaxHoriBearingY - character.m_Bearing.y;
+					uint32_t currentPenStartingXPos = pen.x;
+					for (size_t y = 0; y < charHeight; y++) {
+						if (pen.y > res.m_Extent.y) {
+							fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
+								"Text truncated:\n\"{}\" (in function TextRenderer::RenderText)\n", text);
+							return res;
+						}
+						for (size_t x = 0; x < charWidth; x++) {
+							size_t imageIndex = pen.y * imageWidth + pen.x;
+							size_t fontImageIndex = y * font.m_ImageExtent.x + character.m_Offset + x;
+							assert(imageIndex < resPixelCount && fontImageIndex < fontPixelCount);
+							res.m_Image[imageIndex] = font.m_Image[fontImageIndex];
+							++pen.x;
+						}
+						++pen.y;
+						pen.x = currentPenStartingXPos;
 					}
-					for (size_t x = 0; x < charWidth; x++) {
-						size_t imageIndex = pen.y * imageWidth + pen.x;
-						size_t fontImageIndex = y * font.m_ImageExtent.x + character.m_Offset + x;
-						assert(imageIndex < resPixelCount && fontImageIndex < fontPixelCount);
-						res.m_Image[imageIndex] = font.m_Image[fontImageIndex];
-						++pen.x;
-					}
-					++pen.y;
-					pen.x = currentPenStartingXPos;
+					pen.x += character.m_Escapement.x;
 				}
-				pen.x += character.m_Escapement.x;
 			}
 			return res;
 		}
