@@ -10,7 +10,7 @@
 #include <cstring>
 #include <utility>
 
-namespace engine {	
+namespace engine {
 
 	class Engine {
 	public:
@@ -716,7 +716,7 @@ namespace engine {
 			Texture(Engine& engine) noexcept 
 				: m_Engine(engine), m_Format(VK_FORMAT_UNDEFINED), m_Image(VK_NULL_HANDLE), m_VulkanDeviceMemory(VK_NULL_HANDLE) {}
 
-			bool Create(VkFormat format, uint32_t colorChannels, Vec2_T<uint32_t> extent, uint8_t* image) {
+			bool Create(VkFormat format, uint32_t colorChannels, Vec2_T<uint32_t> extent, const void* image) {
 				Renderer& renderer = m_Engine.m_Renderer;
 				VkDeviceSize deviceSize = (VkDeviceSize)extent.x * extent.y * colorChannels;
 				Renderer::Buffer stagingBuffer(m_Engine.m_Renderer);
