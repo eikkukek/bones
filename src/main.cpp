@@ -333,11 +333,12 @@ int main() {
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
 	engine::Engine engine("Test", pWindow, false, 100, 0, nullptr, 1000);
 	engine::TextRenderer& textRenderer = engine.m_TextRenderer;
-	const engine::Font* font = textRenderer.CreateFont("fonts\\arial_mt.ttf", 50);
-	const char* text = "Hello, howhowhow\n is it going? MoiMoiMoiMoiMoiMoi";
+	engine::GlyphAtlas atlas{};
+	textRenderer.CreateGlyphAtlas("fonts\\arial_mt.ttf", 64, atlas);
+	const char* text = "Hello, how\nis it going? MoiMoiMoiMoiMoiMoi";
 	engine::TextImage textImage 
-			= textRenderer.RenderText<engine::TextAlignment::Middle>(text, *font, engine::PackColorRBGA({ 0.0f, 0.0f, 1.0f, 1.0f }),
-				{ 540, 540 }, { 10, 10 });
+			= textRenderer.RenderText<engine::TextAlignment::Middle>(text, atlas, engine::PackColorRBGA({ 0.0f, 0.0f, 1.0f, 1.0f }),
+				{ 1300, 1300 }, { 100, 100 });
 	engine::StaticTexture texture(engine);
 	texture.Create(VK_FORMAT_R8G8B8A8_SRGB, 4, textImage.m_Extent, textImage.m_Image);	
 	TestPipeline testPipeline(engine.m_Renderer);
@@ -353,6 +354,7 @@ int main() {
 	testEntity.OnTerminate();
 	testPipeline.Terminate();
 	glfwTerminate();
+	free(atlas.m_Atlas);
 	textRenderer.DestroyTextImage(textImage);
 	texture.Terminate();
 }
