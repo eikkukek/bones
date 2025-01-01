@@ -1825,7 +1825,7 @@ namespace engine {
 			return res;
 		}
 
-		bool CreateGraphicsPipelines(uint32_t pipelineCount, const VkGraphicsPipelineCreateInfo* pipelineCreateInfos, VkPipeline** outPipelines) {
+		bool CreateGraphicsPipelines(uint32_t pipelineCount, const VkGraphicsPipelineCreateInfo* pipelineCreateInfos, VkPipeline outPipelines[]) {
 			if (!VkCheck(vkCreateGraphicsPipelines(m_VulkanDevice, VK_NULL_HANDLE, pipelineCount, pipelineCreateInfos, 
 					m_VulkanAllocationCallbacks, outPipelines), 
 					"failed to create graphics pipelines (function vkCreateGraphicsPipelines in function CreateGraphicsPipelines)!")) {

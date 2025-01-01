@@ -96,7 +96,7 @@ void main() {
 			.pVertexBindingDescriptions = &vertexBinding,
 		};
 
-		engine::Engine::Vertex::GetVertexAttributes(vertexInputStateInfo.vertexAttributeDescriptionCount, 
+		engine::Engine::Vertex::GetVertexAttributes(vertexInputStateInfo.vertexAttributeDescriptionCount,
 			&vertexInputStateInfo.pVertexAttributeDescriptions);
 
 		VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateInfo {
