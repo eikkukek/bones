@@ -267,7 +267,7 @@ namespace engine {
 			uint32_t res = 0;
 			char c = text[pos];
 			size_t i = pos;
-			for (; c && c != ' '; c = text[i], i++) {
+			for (; c && c != ' '; i++, c = text[i]) {
 				if (c < 0) {
 					continue;
 				}
@@ -280,16 +280,60 @@ namespace engine {
 			outEndPos = i;
 			return res;
 		}
-		
+
+		uint32_t CalcLineWidth(const char* text, size_t pos, uint32_t frameWidth, const Font& font, size_t& outEndPos) {
+			uint32_t res = 0;
+			char c = text[pos];
+			size_t i = pos;
+			size_t lastWordEnd = i;
+			uint32_t lengthAtLastWord = 0;
+			uint32_t spaceEscapement = font.m_Characters[' '].m_Escapement.x;
+			for (; c && c != '\n'; i++, c = text[i]) {
+				if (c < 0) {
+					continue;
+				}
+				uint32_t escapement = font.m_Characters[c].m_Escapement.x;
+				res += escapement;
+				if (res >= frameWidth) {
+					if (lastWordEnd != pos) {
+						i = lastWordEnd;
+					}
+					else {
+						--i;
+						res -= escapement;
+					}
+					break;
+				}
+				if (c == ' ') {
+					lastWordEnd = i;
+					lengthAtLastWord = res - spaceEscapement;
+				}
+			}
+			outEndPos = i;
+			if (i && text[i - 1] == ' ') {
+				res -= spaceEscapement;
+			}
+			if (c && i == lastWordEnd) {
+				return lengthAtLastWord;
+			}	
+			return res;
+		}
+	
+		enum class TextAlignment {
+			Left = 0,
+			Middle = 1,
+		};
+
+		template<TextAlignment text_alignment_T = TextAlignment::Left>
 		TextImage RenderText(const char* text, const Font& font, uint32_t color,
 			Vec2_T<uint32_t> frameExtent, Vec2_T<uint32_t> spacing) {
 			static_assert(sizeof(uint32_t) == 4, "size of uint32_t was not 4!");
-			TextImage res{};
-			res.m_Extent = frameExtent;
-			if (res.m_Extent.x == 0 || res.m_Extent.y == 0) {
+			if (frameExtent.x == 0 || frameExtent.y == 0) {
 				PrintError(ErrorOrigin::Uncategorized, "frame size was 0 (in function TextRenderer::RenderText)!");
 				return {};
 			}
+			TextImage res{};
+			res.m_Extent = frameExtent;
 			size_t resPixelCount = res.m_Extent.x * res.m_Extent.y;
 			size_t allocationSize = resPixelCount * 4;
 			res.m_Image = (uint32_t*)malloc(allocationSize);
@@ -302,62 +346,108 @@ namespace engine {
 			}
 			size_t textLength = strlen(text);
 			uint32_t fontPixelCount = font.m_ImageExtent.x * font.m_ImageExtent.y;
-			uint32_t imageWidth = res.m_Extent.x;
-			Vec2_T<uint32_t> pen = { spacing.x, spacing.y };
-			uint32_t currentPenStartingYPos = spacing.y;
-			for (size_t i = 0; i < textLength;) {
-				char c = text[i];
-				if (c < 0) {
-					fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
-						"Invalid character in string (in function TextRenderer::RenderText)!\n");
-					++i;
-					continue;
-				}
-				if (c == ' ') {
-					pen.x += font.m_Characters[c].m_Escapement.x;
-					++i;
-					continue;
-				}	
-				size_t end;
-				uint32_t wordWidth = CalcWordWidth(text, i, frameExtent.x, font, end);
-				assert(wordWidth < frameExtent.x);
-				if (pen.x + wordWidth + spacing.x > frameExtent.x) {
-					pen.x = spacing.x;
-					currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
-				}
-				for (; i < end; i++) {
-					c = text[i];
-					if (c == '\n') {
-						currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
-						pen.x = spacing.x;
+			if constexpr (text_alignment_T == TextAlignment::Left) {
+				Vec2_T<uint32_t> pen = { spacing.x, spacing.y };
+				uint32_t currentPenStartingYPos = spacing.y;
+				for (size_t i = 0; i < textLength;) {
+					char c = text[i];
+					if (c < 0) {
 						++i;
 						continue;
 					}
-					const Character& character = font.m_Characters[c];
-					uint32_t charWidth = character.m_Size.x;
-					uint32_t charHeight = character.m_Size.y;
-					pen.y = currentPenStartingYPos;
-					pen.y += font.m_MaxHoriBearingY - character.m_Bearing.y;
-					uint32_t currentPenStartingXPos = pen.x;
-					for (size_t y = 0; y < charHeight; y++) {
-						if (pen.y > res.m_Extent.y) {
-							fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
-								"Text truncated:\n\"{}\" (in function TextRenderer::RenderText)\n", text);
-							return res;
-						}
-						for (size_t x = 0; x < charWidth; x++) {
-							size_t imageIndex = pen.y * imageWidth + pen.x;
-							size_t fontImageIndex = y * font.m_ImageExtent.x + character.m_Offset + x;
-							assert(imageIndex < resPixelCount && fontImageIndex < fontPixelCount);
-							res.m_Image[imageIndex] = font.m_Image[fontImageIndex] ? color : 0U;
-							++pen.x;
-						}
-						++pen.y;
-						pen.x = currentPenStartingXPos;
+					if (c == ' ') {
+						pen.x += font.m_Characters[c].m_Escapement.x;
+						++i;
+						continue;
+					}	
+					size_t end;
+					uint32_t wordWidth = CalcWordWidth(text, i, frameExtent.x, font, end);
+					assert(wordWidth < frameExtent.x);
+					if (pen.x + wordWidth + spacing.x > frameExtent.x) {
+						pen.x = spacing.x;
+						currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
 					}
-					pen.x += character.m_Escapement.x;
+					for (; i < end; i++) {
+						c = text[i];
+						if (c == '\n') {
+							currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
+							pen.x = spacing.x;
+							++i;
+							continue;
+						}
+						const Character& character = font.m_Characters[c];
+						uint32_t charWidth = character.m_Size.x;
+						uint32_t charHeight = character.m_Size.y;
+						pen.y = currentPenStartingYPos;
+						pen.y += font.m_MaxHoriBearingY - character.m_Bearing.y;
+						uint32_t currentPenStartingXPos = pen.x;
+						for (size_t y = 0; y < charHeight; y++) {
+							if (pen.y > res.m_Extent.y) {
+								fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
+									"Text truncated:\n\"{}\" (in function TextRenderer::RenderText)\n", text);
+								return res;
+							}
+							for (size_t x = 0; x < charWidth; x++) {
+								size_t imageIndex = pen.y * frameExtent.x + pen.x;
+								size_t fontImageIndex = y * font.m_ImageExtent.x + character.m_Offset + x;
+								assert(imageIndex < resPixelCount && fontImageIndex < fontPixelCount);
+								res.m_Image[imageIndex] = font.m_Image[fontImageIndex] ? color : 0U;
+								++pen.x;
+							}
+							++pen.y;
+							pen.x = currentPenStartingXPos;
+						}
+						pen.x += character.m_Escapement.x;
+					}
 				}
 			}
+			else if (text_alignment_T == TextAlignment::Middle) {
+				uint32_t imageWidthHalf = frameExtent.x >> 1;
+				Vec2_T<uint32_t> pen(0, spacing.y);
+				uint32_t currentPenStartingYPos = pen.y;
+				for (size_t i = 0; i < textLength; i++) {
+					char c = text[i];
+					if (c < 0) {
+						++i;
+						continue;
+					}
+					size_t end;
+					size_t lineWidth = CalcLineWidth(text, i, frameExtent.x, font, end);
+					assert(lineWidth < frameExtent.x);
+					pen.x = imageWidthHalf - (lineWidth >> 1);
+					for (; i < end; i++) {
+						c = text[i];
+						if (c < 0) {
+							continue;
+						}
+						const Character& character = font.m_Characters[c];
+						uint32_t charWidth = character.m_Size.x;
+						uint32_t charHeight = character.m_Size.y;
+						pen.y = currentPenStartingYPos;
+						pen.y += font.m_MaxHoriBearingY - character.m_Bearing.y;
+						uint32_t currentPenStartingXPos = pen.x;
+						for (size_t y = 0; y < charHeight; y++) {
+							if (pen.y > res.m_Extent.y) {
+								fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
+									"Text truncated:\n\"{}\" (in function TextRenderer::RenderText)\n", text);
+								return res;
+							}
+							for (size_t x = 0; x < charWidth; x++) {
+								size_t imageIndex = pen.y * frameExtent.x + pen.x;
+								size_t fontImageIndex = y * font.m_ImageExtent.x + character.m_Offset + x;
+								assert(imageIndex < resPixelCount && fontImageIndex < fontPixelCount);
+								res.m_Image[imageIndex] = font.m_Image[fontImageIndex] ? color : 0U;
+								++pen.x;
+							}
+							++pen.y;
+							pen.x = currentPenStartingXPos;
+						}
+						pen.x += character.m_Escapement.x;
+					}
+					currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
+				}
+			}
+			
 			return res;
 		}
 
@@ -370,4 +460,5 @@ namespace engine {
 
 	typedef TextRenderer::Font Font;
 	typedef TextRenderer::TextImage TextImage;
+	typedef TextRenderer::TextAlignment TextAlignment;
 }
