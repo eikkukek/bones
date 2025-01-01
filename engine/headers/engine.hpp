@@ -1330,12 +1330,10 @@ void main() {
 					.basePipelineHandle = VK_NULL_HANDLE,
 					.basePipelineIndex = 0,
 				};
-				VkPipeline* pipelines;
-				if (!renderer.CreateGraphicsPipelines(1, &pipelineInfo, &pipelines)) {
+				if (!renderer.CreateGraphicsPipelines(1, &pipelineInfo, &m_Pipeline2D.m_Pipeline)) {
 					CriticalError(ErrorOrigin::Renderer, 
 						"failed to create UI pipelines (function Renderer::CreateGraphicsPipelines in UI constructor)!");
 				}
-				m_Pipeline2D.m_Pipeline = *pipelines;
 				vkDestroyShaderModule(renderer.m_VulkanDevice, vertexShaderModule, renderer.m_VulkanAllocationCallbacks);
 				vkDestroyShaderModule(renderer.m_VulkanDevice, fragmentShaderModule, renderer.m_VulkanAllocationCallbacks);
 			}
