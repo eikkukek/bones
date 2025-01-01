@@ -123,6 +123,10 @@ namespace engine {
 		constexpr inline Vec4_T operator*(T scalar) const noexcept { return Vec4_T(x * scalar, y * scalar, z * scalar, w * scalar); }
 		constexpr inline Vec4_T& operator*=(T scalar) noexcept { x *= scalar; y *= scalar; z *= scalar; w *= scalar; return *this; }
 
+		constexpr inline bool operator==(const Vec4_T& other) const noexcept { 
+			return x == other.x && y == other.y && z == other.z && w == other.w; 
+		}
+
 		constexpr inline explicit operator Vec3_T<T>() const noexcept { return Vec3_T<T>(x, y, z); }
 		constexpr inline explicit operator Vec2_T<T>() const noexcept { return Vec2_T<T>(x, y); }
 	};
