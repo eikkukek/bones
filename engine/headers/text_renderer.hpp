@@ -53,55 +53,13 @@ namespace engine {
 			uint32_t m_Offset;
 		};
 
-		struct Font {
+		struct GlyphAtlas {
 			Character m_Characters[128]{};
-			Vec2_T<uint32_t> m_ImageExtent{};
-			uint8_t* m_Image{};
-			uint32_t m_FontSize{};
+			Vec2_T<uint32_t> m_Extent{};
+			uint8_t* m_Atlas{};
+			uint32_t m_PixelSize{};
 			const char* m_FileName{};
 			int m_MaxHoriBearingY{};
-		};
-
-		struct FontList {
-
-			typedef Font* Iterator;
-			typedef Font* const ConstIterator;
-
-			std::mutex m_Mutex;
-			const size_t m_MaxFonts;
-			size_t m_Count;
-			Font* const m_Data;
-			
-			FontList(size_t maxFonts) 
-				: m_Mutex(), m_MaxFonts(maxFonts), m_Data((Font*)malloc(maxFonts * sizeof(Font))), m_Count(0) {}
-
-			FontList(const FontList&) = delete;
-
-			~FontList() {
-				Iterator iter = m_Data;
-				ConstIterator end = &m_Data[m_Count];
-				for (; iter != end; iter++) {
-					free(iter->m_Image);
-				}
-				free(m_Data);
-			}
-
-			const Font* AddFont(const Font& font) {
-				std::lock_guard<std::mutex> lockGuard(m_Mutex);
-				if (m_Count >= m_MaxFonts) {
-					PrintError(ErrorOrigin::OutOfMemory, "font list was out of memory (in function FontList::AddFont)!");
-					return nullptr;
-				}
-				return &(m_Data[m_Count++] = font);
-			}
-
-			Iterator begin() const {
-				return m_Data;
-			}
-
-			ConstIterator end() const {
-				return &m_Data[m_Count];
-			}
 		};
 
 		struct TextImage {
@@ -111,11 +69,10 @@ namespace engine {
 
 		Renderer& m_Renderer;
 		FT_Library m_FreeTypeLib;
-		FontList m_FontList;
 		const CriticalErrorCallback m_CriticalErrorCallback;
 
 		TextRenderer(Renderer& renderer, size_t maxFonts, CriticalErrorCallback criticalErrorCallback) 
-			: m_Renderer(renderer), m_FontList(maxFonts), m_CriticalErrorCallback(criticalErrorCallback) {
+			: m_Renderer(renderer), m_CriticalErrorCallback(criticalErrorCallback) {
 			FtAssert(FT_Init_FreeType(&m_FreeTypeLib), 
 				"failed to initialize FreeType (function FT_Init_FreeType in TextRenderer constructor)!");
 		}
@@ -182,7 +139,7 @@ namespace engine {
 		}
 		*/
 
-		const Font* CreateFont(const char* fontFileName, uint32_t fontSize) {
+		const bool CreateGlyphAtlas(const char* fontFileName, uint32_t pixelSize, GlyphAtlas& out) {
 			FT_Face face;
 			FT_Error ftRes = FT_New_Face(m_FreeTypeLib, fontFileName, 0, &face);
 			if (ftRes) {
@@ -195,75 +152,73 @@ namespace engine {
 						"failed to open font file (function FT_New_Face in function CreateFontTexture)!", ftRes);
 				}
 				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "failed to load font {}\n", fontFileName);
-				return nullptr;
+				return {};
 			}
-			FT_Set_Pixel_Sizes(face, 0, fontSize);
-			Font font { .m_FileName = fontFileName };
+			FT_Set_Pixel_Sizes(face, 0, pixelSize * 16);
+			out.m_FileName = fontFileName;
 			uint32_t bitmapWidth = 0;
 			uint32_t bitmapHeight = 0;
-			struct CharacterData {
-				uint32_t m_Size;
-				uint8_t* m_Data;
-			};
-			CharacterData characterDatas[128]{};
 			for (unsigned char c = 0; c < 128; c++) {
-				if (!FtCheck(FT_Load_Char(face, c, FT_LOAD_RENDER), 
-						"failed to load font character (function FT_Load_Char in function CreateFontTexture)!")) {
-					fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
-						"failed to load character {} for font {}\n", c, fontFileName);
+				if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
 					continue;
 				}
 				bitmapHeight = Max(bitmapHeight, face->glyph->bitmap.rows);
-				font.m_Characters[c] = {
-					.m_Size { face->glyph->bitmap.width, face->glyph->bitmap.rows },
-					.m_Escapement = { (uint32_t)face->glyph->advance.x >> 6, (uint32_t)face->glyph->advance.y >> 6 },
-					.m_Bearing = { face->glyph->bitmap_left, face->glyph->bitmap_top },
-					.m_Offset = bitmapWidth,
-				};
-				font.m_MaxHoriBearingY = Max((int)face->glyph->metrics.horiBearingY >> 6, font.m_MaxHoriBearingY);
-				uint32_t pitch = face->glyph->bitmap.pitch;
-				if (face->glyph->bitmap.width > 0) {
-					void* bitmapBuf = face->glyph->bitmap.buffer;
-					uint32_t rows = face->glyph->bitmap.rows;
-					uint32_t width = face->glyph->bitmap.width;
-					CharacterData& characterData = characterDatas[c];
-					characterData = { width * rows, new uint8_t[width * rows] };
-					memset(characterData.m_Data, 0, characterData.m_Size);
-					for (size_t i = 0; i < rows; i++) {
-						for (size_t j = 0; j < width; j++) {
-							characterDatas[c].m_Data[i * pitch + j] = face->glyph->bitmap.buffer[i * pitch + j];
-						}
-					}
-				}
+				out.m_MaxHoriBearingY = Max(((int)face->glyph->metrics.horiBearingY >> 6) / 4, out.m_MaxHoriBearingY);
 				bitmapWidth += face->glyph->bitmap.width;
 			}
-
-			FtCheck(FT_Done_Face(face), "failed to terminate FreeType face (function FT_Done_Face in function CreateFontTexture)!");
-			font.m_ImageExtent = { bitmapWidth, bitmapHeight };
-			size_t pixelCount = bitmapWidth * bitmapHeight;
-			font.m_Image = (uint8_t*)malloc(pixelCount * sizeof(uint8_t));
-			font.m_FontSize = fontSize;
-			memset(font.m_Image, 0, pixelCount);
-			uint32_t xPos = 0;
+			out.m_Extent = { bitmapWidth / 4, bitmapHeight / 4 };
+			size_t atlasPixelCount = out.m_Extent.x * out.m_Extent.y;
+			out.m_Atlas = (uint8_t*)malloc(atlasPixelCount * sizeof(uint8_t));
+			memset(out.m_Atlas, 0, atlasPixelCount);
+			out.m_PixelSize = pixelSize;
+			Vec2_T<uint32_t> pen{};
+			uint32_t currentPenStartingXPos = 0;
 			for (unsigned char c = 0; c < 128; c++) {
-				Character& character = font.m_Characters[c];
-				uint32_t width = character.m_Size.x;
-				uint32_t height = character.m_Size.y;
-				uint32_t characterPixelCount = width * height;
-				for (uint32_t i = 0; i < height; i++) {
-					for (uint32_t j = 0; j < width; j++) {
-						size_t imageIndex = i * bitmapWidth + xPos + j;
-						size_t characterIndex = i * width + j;
-						assert(imageIndex < pixelCount && characterIndex < characterPixelCount);
-						font.m_Image[imageIndex] = characterDatas[c].m_Data[characterIndex];
-					}
+				if (!FtCheck(FT_Load_Char(face, c, FT_LOAD_RENDER), 
+						"failed to load font character (function FT_Load_Char in function CreateGlyphAtlas)!")) {
+					fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
+						"failed to load character {} from font {}\n", c, fontFileName);
+					continue;
 				}
-				xPos += width;
+				pen.x = currentPenStartingXPos;
+				pen.y = 0;
+				uint32_t pitch = face->glyph->bitmap.pitch;
+				if (face->glyph->bitmap.width > 0) {
+					uint8_t* bitmapBuf = face->glyph->bitmap.buffer;
+					uint32_t bitmapWidth = face->glyph->bitmap.width;
+					uint32_t bitmapHeight = face->glyph->bitmap.rows;
+					uint32_t bitmapSize = bitmapWidth * bitmapHeight;
+					float nom = 0;
+					static constexpr float denom = 16;
+					for (uint32_t offsetY = 0; offsetY + 4 < bitmapHeight; offsetY += 4) {
+						for (uint32_t offsetX = 0; offsetX + 4 < bitmapWidth; offsetX += 4) {
+							for (uint32_t y = 0; y < 4; y++) {
+								for (uint32_t x = 0; x < 4; x++) {
+									uint32_t byteIndex = (offsetY + y) * bitmapWidth + x + offsetX;
+									assert(byteIndex < bitmapSize);
+									if (bitmapBuf[byteIndex]) {
+										nom++;
+									}
+								}
+							}
+							out.m_Atlas[pen.y * out.m_Extent.x + pen.x++] = nom / denom * 255;
+							nom = 0.0f;
+						}
+						pen.y++;
+						pen.x = currentPenStartingXPos;
+					}
+					out.m_Characters[c].m_Size = { bitmapWidth / 4, bitmapHeight / 4 };
+					out.m_Characters[c].m_Escapement = { bitmapWidth / 4, 0 };
+					out.m_Characters[c].m_Offset = currentPenStartingXPos;
+					out.m_MaxHoriBearingY = Max(out.m_MaxHoriBearingY, ((int)face->glyph->metrics.horiBearingY >> 6) / 4);
+					currentPenStartingXPos += bitmapWidth / 4;
+				}
 			}
-			return m_FontList.AddFont(font);
+			FtCheck(FT_Done_Face(face), "failed to terminate FreeType face (function FT_Done_Face in function CreateFontTexture)!");
+			return true;
 		}
 
-		uint32_t CalcWordWidth(const char* text, size_t pos, uint32_t frameWidth, const Font& font, size_t& outEndPos) {
+		uint32_t CalcWordWidth(const char* text, size_t pos, uint32_t frameWidth, const GlyphAtlas& atlas, size_t& outEndPos) {
 			uint32_t res = 0;
 			char c = text[pos];
 			size_t i = pos;
@@ -271,7 +226,7 @@ namespace engine {
 				if (c < 0) {
 					continue;
 				}
-				uint32_t temp = res + font.m_Characters[c].m_Escapement.x;
+				uint32_t temp = res + atlas.m_Characters[c].m_Escapement.x;
 				if (temp >= frameWidth) {
 					break;
 				}
@@ -281,19 +236,19 @@ namespace engine {
 			return res;
 		}
 
-		uint32_t CalcLineWidth(const char* text, size_t pos, uint32_t frameWidth, const Font& font, size_t& outEndPos, bool& wordCut) {
+		uint32_t CalcLineWidth(const char* text, size_t pos, uint32_t frameWidth, const GlyphAtlas& atlas, size_t& outEndPos, bool& wordCut) {
 			uint32_t res = 0;
 			char c = text[pos];
 			size_t i = pos;
 			size_t lastWordEnd = i;
 			uint32_t lengthAtLastWord = 0;
-			uint32_t spaceEscapement = font.m_Characters[' '].m_Escapement.x;
+			uint32_t spaceEscapement = atlas.m_Characters[' '].m_Escapement.x;
 			wordCut = false;
 			for (; c && c != '\n'; i++, c = text[i]) {
 				if (c < 0) {
 					continue;
 				}
-				uint32_t escapement = font.m_Characters[c].m_Escapement.x;
+				uint32_t escapement = atlas.m_Characters[c].m_Escapement.x;
 				res += escapement;
 				if (res >= frameWidth) {
 					if (lastWordEnd != pos) {
@@ -326,7 +281,7 @@ namespace engine {
 		};
 
 		template<TextAlignment text_alignment_T = TextAlignment::Left>
-		TextImage RenderText(const char* text, const Font& font, uint32_t color,
+		TextImage RenderText(const char* text, const GlyphAtlas& atlas, uint32_t color,
 			Vec2_T<uint32_t> frameExtent, Vec2_T<uint32_t> spacing) {
 			static_assert(sizeof(uint32_t) == 4, "size of uint32_t was not 4!");
 			if (frameExtent.x == 0 || frameExtent.y == 0) {
@@ -346,7 +301,7 @@ namespace engine {
 				return {};
 			}
 			size_t textLength = strlen(text);
-			uint32_t fontPixelCount = font.m_ImageExtent.x * font.m_ImageExtent.y;
+			uint32_t atlasPixelCount = atlas.m_Extent.x * atlas.m_Extent.y;
 			if constexpr (text_alignment_T == TextAlignment::Left) {
 				Vec2_T<uint32_t> pen = { spacing.x, spacing.y };
 				uint32_t currentPenStartingYPos = spacing.y;
@@ -357,30 +312,30 @@ namespace engine {
 						continue;
 					}
 					if (c == ' ') {
-						pen.x += font.m_Characters[c].m_Escapement.x;
+						pen.x += atlas.m_Characters[c].m_Escapement.x;
 						++i;
 						continue;
 					}	
 					size_t end;
-					uint32_t wordWidth = CalcWordWidth(text, i, frameExtent.x, font, end);
+					uint32_t wordWidth = CalcWordWidth(text, i, frameExtent.x, atlas, end);
 					assert(wordWidth < frameExtent.x);
 					if (pen.x + wordWidth + spacing.x > frameExtent.x) {
 						pen.x = spacing.x;
-						currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
+						currentPenStartingYPos += atlas.m_MaxHoriBearingY + spacing.y;
 					}
 					for (; i < end; i++) {
 						c = text[i];
 						if (c == '\n') {
-							currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
+							currentPenStartingYPos += atlas.m_MaxHoriBearingY + spacing.y;
 							pen.x = spacing.x;
 							++i;
 							continue;
 						}
-						const Character& character = font.m_Characters[c];
+						const Character& character = atlas.m_Characters[c];
 						uint32_t charWidth = character.m_Size.x;
 						uint32_t charHeight = character.m_Size.y;
 						pen.y = currentPenStartingYPos;
-						pen.y += font.m_MaxHoriBearingY - character.m_Bearing.y;
+						pen.y += atlas.m_MaxHoriBearingY - character.m_Bearing.y;
 						uint32_t currentPenStartingXPos = pen.x;
 						for (size_t y = 0; y < charHeight; y++) {
 							if (pen.y > res.m_Extent.y) {
@@ -390,9 +345,9 @@ namespace engine {
 							}
 							for (size_t x = 0; x < charWidth; x++) {
 								size_t imageIndex = pen.y * frameExtent.x + pen.x;
-								size_t fontImageIndex = y * font.m_ImageExtent.x + character.m_Offset + x;
-								assert(imageIndex < resPixelCount && fontImageIndex < fontPixelCount);
-								res.m_Image[imageIndex] = font.m_Image[fontImageIndex] ? color : 0U;
+								size_t fontImageIndex = y * atlas.m_Extent.x + character.m_Offset + x;
+								assert(imageIndex < resPixelCount && fontImageIndex < atlasPixelCount);
+								res.m_Image[imageIndex] = atlas.m_Atlas[fontImageIndex] ? color : 0U;
 								++pen.x;
 							}
 							++pen.y;
@@ -414,7 +369,7 @@ namespace engine {
 					}
 					size_t end;
 					bool wordCut;
-					size_t lineWidth = CalcLineWidth(text, i, frameExtent.x, font, end, wordCut);
+					size_t lineWidth = CalcLineWidth(text, i, frameExtent.x, atlas, end, wordCut);
 					assert(lineWidth < frameExtent.x);
 					pen.x = imageWidthHalf - (lineWidth >> 1);
 					for (; i < end; i++) {
@@ -422,23 +377,23 @@ namespace engine {
 						if (c < 0) {
 							continue;
 						}
-						const Character& character = font.m_Characters[c];
+						const Character& character = atlas.m_Characters[c];
 						uint32_t charWidth = character.m_Size.x;
 						uint32_t charHeight = character.m_Size.y;
 						pen.y = currentPenStartingYPos;
-						pen.y += font.m_MaxHoriBearingY - character.m_Bearing.y;
+						pen.y += spacing.y;
 						uint32_t currentPenStartingXPos = pen.x;
 						for (size_t y = 0; y < charHeight; y++) {
-							if (pen.y > res.m_Extent.y) {
+							if (pen.y >= res.m_Extent.y) {
 								fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
 									"Text truncated:\n\"{}\" (in function TextRenderer::RenderText)\n", text);
 								return res;
 							}
 							for (size_t x = 0; x < charWidth; x++) {
 								size_t imageIndex = pen.y * frameExtent.x + pen.x;
-								size_t fontImageIndex = y * font.m_ImageExtent.x + character.m_Offset + x;
-								assert(imageIndex < resPixelCount && fontImageIndex < fontPixelCount);
-								res.m_Image[imageIndex] = font.m_Image[fontImageIndex] ? color : 0U;
+								size_t fontImageIndex = y * atlas.m_Extent.x + character.m_Offset + x;
+								assert(imageIndex < resPixelCount && fontImageIndex < atlasPixelCount);
+								res.m_Image[imageIndex] = atlas.m_Atlas[fontImageIndex] ? color : 0U;
 								++pen.x;
 							}
 							++pen.y;
@@ -446,13 +401,12 @@ namespace engine {
 						}
 						pen.x += character.m_Escapement.x;
 					}
-					currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
+					currentPenStartingYPos += atlas.m_MaxHoriBearingY + spacing.y;
 					if (!wordCut) {
 						++i;
 					}
 				}
 			}
-			
 			return res;
 		}
 
@@ -463,7 +417,7 @@ namespace engine {
 		}
 	};
 
-	typedef TextRenderer::Font Font;
+	typedef TextRenderer::GlyphAtlas GlyphAtlas;
 	typedef TextRenderer::TextImage TextImage;
 	typedef TextRenderer::TextAlignment TextAlignment;
 }
