@@ -57,7 +57,7 @@ namespace engine {
 			Character m_Characters[128]{};
 			Vec2_T<uint32_t> m_Extent{};
 			uint8_t* m_Atlas{};
-			uint32_t m_PixelSize{};
+			uint32_t m_FontSize{};
 			const char* m_FileName{};
 			int m_MaxHoriBearingY{};
 		};
@@ -139,7 +139,8 @@ namespace engine {
 		}
 		*/
 
-		const bool CreateGlyphAtlas(const char* fontFileName, uint32_t pixelSize, GlyphAtlas& out) {
+		const bool CreateGlyphAtlas(const char* fontFileName, uint32_t fontPixelSize, GlyphAtlas& out) {
+			assert(fontPixelSize > 0);
 			FT_Face face;
 			FT_Error ftRes = FT_New_Face(m_FreeTypeLib, fontFileName, 0, &face);
 			if (ftRes) {
@@ -154,23 +155,35 @@ namespace engine {
 				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "failed to load font {}\n", fontFileName);
 				return {};
 			}
-			FT_Set_Pixel_Sizes(face, 0, pixelSize * 16);
+			FT_Set_Pixel_Sizes(face, 0, fontPixelSize);
 			out.m_FileName = fontFileName;
-			uint32_t bitmapWidth = 0;
-			uint32_t bitmapHeight = 0;
+			uint32_t sampledImageWidth = 0;
+			uint32_t sampledImageHeight = 0;
 			for (unsigned char c = 0; c < 128; c++) {
 				if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
 					continue;
 				}
-				bitmapHeight = Max(bitmapHeight, face->glyph->bitmap.rows);
-				out.m_MaxHoriBearingY = Max(((int)face->glyph->metrics.horiBearingY >> 6) / 4, out.m_MaxHoriBearingY);
-				bitmapWidth += face->glyph->bitmap.width;
+				sampledImageHeight = Max(sampledImageHeight, face->glyph->bitmap.rows);
+				out.m_MaxHoriBearingY = Max(((int)face->glyph->metrics.horiBearingY >> 6), out.m_MaxHoriBearingY);
+				out.m_Characters[c] = {
+					.m_Size { face->glyph->bitmap.width, face->glyph->bitmap.rows },
+					.m_Escapement { (uint32_t)face->glyph->advance.x >> 6, (uint32_t)face->glyph->advance.y >> 6 },
+					.m_Bearing { face->glyph->bitmap_left, face->glyph->bitmap_top },
+					.m_Offset = sampledImageWidth,
+				};
+				sampledImageWidth += face->glyph->bitmap.width;
 			}
-			out.m_Extent = { bitmapWidth / 4, bitmapHeight / 4 };
+			out.m_Extent = { sampledImageWidth, sampledImageHeight };
 			size_t atlasPixelCount = out.m_Extent.x * out.m_Extent.y;
 			out.m_Atlas = (uint8_t*)malloc(atlasPixelCount * sizeof(uint8_t));
-			memset(out.m_Atlas, 0, atlasPixelCount);
-			out.m_PixelSize = pixelSize;
+			if (out.m_Atlas) {
+				memset(out.m_Atlas, 0, atlasPixelCount);
+			}
+			else {
+				PrintError(ErrorOrigin::Uncategorized, "failed to allocate glyph atlas image (function malloc in function CreateGlyphAtlas)!");
+				return false;
+			}
+			out.m_FontSize = fontPixelSize;
 			Vec2_T<uint32_t> pen{};
 			uint32_t currentPenStartingXPos = 0;
 			for (unsigned char c = 0; c < 128; c++) {
@@ -188,6 +201,20 @@ namespace engine {
 					uint32_t bitmapWidth = face->glyph->bitmap.width;
 					uint32_t bitmapHeight = face->glyph->bitmap.rows;
 					uint32_t bitmapSize = bitmapWidth * bitmapHeight;
+					for (uint32_t y = 0; y < bitmapHeight; y++) {
+						for (uint32_t x = 0; x < bitmapWidth; x++) {
+							uint32_t byteIndex = y * pitch + x;
+							assert(byteIndex < bitmapSize);
+							uint32_t atlasIndex = pen.y * out.m_Extent.x + pen.x;
+							assert(atlasIndex < atlasPixelCount);
+							out.m_Atlas[atlasIndex] = bitmapBuf[byteIndex];
+							pen.x++;
+						}
+						pen.x = currentPenStartingXPos;
+						pen.y++;
+					}
+					currentPenStartingXPos += bitmapWidth;
+					/*
 					float nom = 0;
 					static constexpr float denom = 16;
 					for (uint32_t offsetY = 0; offsetY + 4 < bitmapHeight; offsetY += 4) {
@@ -201,17 +228,19 @@ namespace engine {
 									}
 								}
 							}
-							out.m_Atlas[pen.y * out.m_Extent.x + pen.x++] = nom / denom * 255;
+							uint32_t atlasIndex = pen.y * out.m_Extent.x + pen.x++;
+							assert(atlasIndex < atlasPixelCount);
+							out.m_Atlas[atlasIndex] = nom / denom * 255;
 							nom = 0.0f;
 						}
 						pen.y++;
 						pen.x = currentPenStartingXPos;
 					}
 					out.m_Characters[c].m_Size = { bitmapWidth / 4, bitmapHeight / 4 };
-					out.m_Characters[c].m_Escapement = { bitmapWidth / 4, 0 };
 					out.m_Characters[c].m_Offset = currentPenStartingXPos;
 					out.m_MaxHoriBearingY = Max(out.m_MaxHoriBearingY, ((int)face->glyph->metrics.horiBearingY >> 6) / 4);
 					currentPenStartingXPos += bitmapWidth / 4;
+					*/
 				}
 			}
 			FtCheck(FT_Done_Face(face), "failed to terminate FreeType face (function FT_Done_Face in function CreateFontTexture)!");
@@ -344,10 +373,19 @@ namespace engine {
 								return res;
 							}
 							for (size_t x = 0; x < charWidth; x++) {
-								size_t imageIndex = pen.y * frameExtent.x + pen.x;
-								size_t fontImageIndex = y * atlas.m_Extent.x + character.m_Offset + x;
-								assert(imageIndex < resPixelCount && fontImageIndex < atlasPixelCount);
-								res.m_Image[imageIndex] = atlas.m_Atlas[fontImageIndex] ? color : 0U;
+								size_t atlasIndex = y * atlas.m_Extent.x + character.m_Offset + x;
+								size_t resImageIndex = pen.y * frameExtent.x + pen.x;
+								assert(atlasIndex < atlasPixelCount && resImageIndex < resPixelCount);
+								float val = (float)atlas.m_Atlas[atlasIndex] / 255;
+								if (val != 0.0f) {
+									uint32_t trueColor = color;
+									uint8_t* pTrueColor = (uint8_t*)&trueColor;
+									const uint8_t* pColor = (uint8_t*)&color;
+									for (size_t i = 0; i < 4; i++) {
+										pTrueColor[i] = val * pColor[i];
+									}
+									res.m_Image[resImageIndex] = trueColor;
+								}
 								++pen.x;
 							}
 							++pen.y;
@@ -380,8 +418,7 @@ namespace engine {
 						const Character& character = atlas.m_Characters[c];
 						uint32_t charWidth = character.m_Size.x;
 						uint32_t charHeight = character.m_Size.y;
-						pen.y = currentPenStartingYPos;
-						pen.y += spacing.y;
+						pen.y = currentPenStartingYPos + atlas.m_MaxHoriBearingY - character.m_Bearing.y;
 						uint32_t currentPenStartingXPos = pen.x;
 						for (size_t y = 0; y < charHeight; y++) {
 							if (pen.y >= res.m_Extent.y) {
@@ -390,10 +427,19 @@ namespace engine {
 								return res;
 							}
 							for (size_t x = 0; x < charWidth; x++) {
-								size_t imageIndex = pen.y * frameExtent.x + pen.x;
-								size_t fontImageIndex = y * atlas.m_Extent.x + character.m_Offset + x;
-								assert(imageIndex < resPixelCount && fontImageIndex < atlasPixelCount);
-								res.m_Image[imageIndex] = atlas.m_Atlas[fontImageIndex] ? color : 0U;
+								size_t resImageIndex = pen.y * frameExtent.x + pen.x;
+								size_t atlasImageIndex = y * atlas.m_Extent.x + character.m_Offset + x;
+								assert(resImageIndex < resPixelCount && atlasImageIndex < atlasPixelCount);
+								float val = (float)atlas.m_Atlas[atlasImageIndex] / 255;
+								if (val != 0.0f) {
+									uint32_t trueColor = color;
+									uint8_t* pTrueColor = (uint8_t*)&trueColor;
+									const uint8_t* pColor = (uint8_t*)&color;
+									for (size_t i = 0; i < 4; i++) {
+										pTrueColor[i] = val * pColor[i];
+									}
+									res.m_Image[resImageIndex] = trueColor;
+								}
 								++pen.x;
 							}
 							++pen.y;
@@ -402,9 +448,7 @@ namespace engine {
 						pen.x += character.m_Escapement.x;
 					}
 					currentPenStartingYPos += atlas.m_MaxHoriBearingY + spacing.y;
-					if (!wordCut) {
-						++i;
-					}
+					i++;
 				}
 			}
 			return res;

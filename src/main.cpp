@@ -334,11 +334,11 @@ int main() {
 	engine::Engine engine("Test", pWindow, false, 100, 0, nullptr, 1000);
 	engine::TextRenderer& textRenderer = engine.m_TextRenderer;
 	engine::GlyphAtlas atlas{};
-	textRenderer.CreateGlyphAtlas("fonts\\arial_mt.ttf", 64, atlas);
-	const char* text = "Hello, how\nis it going? MoiMoiMoiMoiMoiMoi";
+	textRenderer.CreateGlyphAtlas("fonts\\arial_mt.ttf", 30.0f, atlas);
+	const char* text = "Hello, how\nis it going? AVAVAVA";
 	engine::TextImage textImage 
-			= textRenderer.RenderText<engine::TextAlignment::Middle>(text, atlas, engine::PackColorRBGA({ 0.0f, 0.0f, 1.0f, 1.0f }),
-				{ 1300, 1300 }, { 100, 100 });
+			= textRenderer.RenderText<engine::TextAlignment::Middle>(text, atlas, engine::PackColorRBGA({ 1.0f, 1.0f, 1.0f, 1.0f }),
+				{ 540, 540 }, { 2, 2 });
 	engine::StaticTexture texture(engine);
 	texture.Create(VK_FORMAT_R8G8B8A8_SRGB, 4, textImage.m_Extent, textImage.m_Image);	
 	TestPipeline testPipeline(engine.m_Renderer);
