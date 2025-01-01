@@ -335,9 +335,10 @@ int main() {
 	engine::TextRenderer& textRenderer = engine.m_TextRenderer;
 	const engine::Font* font = textRenderer.CreateFont("fonts\\arial_mt.ttf", 64);
 	const char* text = "Hello, how is it going? MoiMoiMoiMoiMoiMoi";
-	engine::TextImage textImage = textRenderer.RenderText(text, *font, { 540, 540 }, { 10, 10 });
+	engine::TextImage textImage = textRenderer.RenderText(text, *font, engine::PackColorRBGA({ 0.0f, 0.0f, 1.0f, 1.0f }),
+			{ 540, 540 }, { 10, 10 });
 	engine::StaticTexture texture(engine);
-	texture.Create(VK_FORMAT_R8_SRGB, 1, textImage.m_Extent, textImage.m_Image);
+	texture.Create(VK_FORMAT_R8G8B8A8_SRGB, 4, textImage.m_Extent, textImage.m_Image);	
 	TestPipeline testPipeline(engine.m_Renderer);
 	engine::Engine::GraphicsPipeline& testPipelineData =
 			engine.AddGraphicsPipeline(testPipeline.m_GpuPipeline, testPipeline.m_GpuPipelineLayout, 1, 1000);
