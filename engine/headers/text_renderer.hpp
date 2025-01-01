@@ -106,7 +106,7 @@ namespace engine {
 
 		struct TextImage {
 			Vec2_T<uint32_t> m_Extent;
-			uint8_t* m_Image;
+			uint32_t* m_Image;
 		};
 
 		Renderer& m_Renderer;
@@ -280,20 +280,21 @@ namespace engine {
 			outEndPos = i;
 			return res;
 		}
-
-		TextImage RenderText(const char* text, const Font& font, Vec2_T<uint32_t> frameExtent, Vec2_T<uint32_t> spacing) {
+		
+		TextImage RenderText(const char* text, const Font& font, uint32_t color,
+			Vec2_T<uint32_t> frameExtent, Vec2_T<uint32_t> spacing) {
+			static_assert(sizeof(uint32_t) == 4, "size of uint32_t was not 4!");
 			TextImage res{};
 			res.m_Extent = frameExtent;
 			if (res.m_Extent.x == 0 || res.m_Extent.y == 0) {
-				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
-					"frame width was smaller than a single character width when rendering text with font {} (in function TextRenderer::RenderText)!",
-					font.m_FileName);
+				PrintError(ErrorOrigin::Uncategorized, "frame size was 0 (in function TextRenderer::RenderText)!");
 				return {};
 			}
-			uint32_t resPixelCount = res.m_Extent.x * res.m_Extent.y;
-			res.m_Image = (uint8_t*)malloc(resPixelCount);
+			size_t resPixelCount = res.m_Extent.x * res.m_Extent.y;
+			size_t allocationSize = resPixelCount * 4;
+			res.m_Image = (uint32_t*)malloc(allocationSize);
 			if (res.m_Image) {
-				memset(res.m_Image, 0, res.m_Extent.x * res.m_Extent.y);
+				memset(res.m_Image, 0, allocationSize);
 			}
 			else {
 				PrintError(ErrorOrigin::Uncategorized, "failed to allocate memory (function malloc in function RenderText)!");
@@ -342,7 +343,7 @@ namespace engine {
 							size_t imageIndex = pen.y * imageWidth + pen.x;
 							size_t fontImageIndex = y * font.m_ImageExtent.x + character.m_Offset + x;
 							assert(imageIndex < resPixelCount && fontImageIndex < fontPixelCount);
-							res.m_Image[imageIndex] = font.m_Image[fontImageIndex];
+							res.m_Image[imageIndex] = font.m_Image[fontImageIndex] ? color : 0U;
 							++pen.x;
 						}
 						++pen.y;
