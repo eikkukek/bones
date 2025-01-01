@@ -233,6 +233,7 @@ void main() {
 	void Terminate() {
 		vkDestroyPipelineLayout(m_Renderer.m_VulkanDevice, m_GpuPipelineLayout, m_Renderer.m_VulkanAllocationCallbacks);
 		vkDestroyPipeline(m_Renderer.m_VulkanDevice, m_GpuPipeline, m_Renderer.m_VulkanAllocationCallbacks);
+		vkDestroyDescriptorSetLayout(m_Renderer.m_VulkanDevice, m_DescriptorSetLayout, m_Renderer.m_VulkanAllocationCallbacks);
 	}
 };
 
@@ -333,7 +334,7 @@ int main() {
 	engine::Engine engine("Test", pWindow, false, 100, 0, nullptr, 1000);
 	engine::TextRenderer& textRenderer = engine.m_TextRenderer;
 	const engine::Font* font = textRenderer.CreateFont("fonts\\arial_mt.ttf", 64);
-	const char* text = "Hello, how is it going?";
+	const char* text = "Hello, how is it going? MoiMoiMoiMoiMoiMoi";
 	engine::TextImage textImage = textRenderer.RenderText(text, *font, { 540, 540 }, { 10, 10 });
 	engine::StaticTexture texture(engine);
 	texture.Create(VK_FORMAT_R8_SRGB, 1, textImage.m_Extent, textImage.m_Image);
@@ -346,8 +347,8 @@ int main() {
 		glfwPollEvents();
 		engine.Render();
 	}
-	testEntity.OnTerminate();
 	vkDeviceWaitIdle(engine.m_Renderer.m_VulkanDevice);	
+	testEntity.OnTerminate();
 	testPipeline.Terminate();
 	glfwTerminate();
 	textRenderer.DestroyTextImage(textImage);
