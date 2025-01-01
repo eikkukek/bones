@@ -48,9 +48,9 @@ namespace engine {
 
 		struct Character {
 			Vec2_T<uint32_t> m_Size;
+			Vec2_T<uint32_t> m_Escapement;
 			IntVec2 m_Bearing;
 			uint32_t m_Offset;
-			uint32_t m_Advance;
 		};
 
 		struct Font {
@@ -59,7 +59,7 @@ namespace engine {
 			uint8_t* m_Image{};
 			uint32_t m_FontSize{};
 			const char* m_FileName{};
-			uint32_t m_TallestCharacter{};
+			int m_MaxHoriBearingY{};
 		};
 
 		struct FontList {
@@ -216,11 +216,11 @@ namespace engine {
 				bitmapHeight = Max(bitmapHeight, face->glyph->bitmap.rows);
 				font.m_Characters[c] = {
 					.m_Size { face->glyph->bitmap.width, face->glyph->bitmap.rows },
-					.m_Bearing { face->glyph->bitmap_left, face->glyph->bitmap_top },
+					.m_Escapement = { (uint32_t)face->glyph->advance.x >> 6, (uint32_t)face->glyph->advance.y >> 6 },
+					.m_Bearing = { face->glyph->bitmap_left, face->glyph->bitmap_top },
 					.m_Offset = bitmapWidth,
-					.m_Advance = (uint32_t)face->glyph->advance.x,
 				};
-				font.m_TallestCharacter = Max(font.m_Characters[c].m_Size.y, font.m_TallestCharacter);
+				font.m_MaxHoriBearingY = Max((int)face->glyph->metrics.horiBearingY >> 6, font.m_MaxHoriBearingY);
 				uint32_t pitch = face->glyph->bitmap.pitch;
 				if (face->glyph->bitmap.width > 0) {
 					void* bitmapBuf = face->glyph->bitmap.buffer;
@@ -281,11 +281,11 @@ namespace engine {
 				}
 				xPos += spacing.x + character.m_Size.x;
 				if (xPos > frameWidth) {
-					res.y += font.m_TallestCharacter + spacing.y;
+					res.y += font.m_MaxHoriBearingY + spacing.y;
 					xPos = spacing.x;
 				}
 			}
-			res.y += font.m_TallestCharacter + spacing.y;
+			res.y += font.m_MaxHoriBearingY + spacing.y;
 			return res;
 		}
 
@@ -310,7 +310,7 @@ namespace engine {
 			size_t textLength = strlen(text);
 			uint32_t fontPixelCount = font.m_ImageExtent.x * font.m_ImageExtent.y;
 			uint32_t imageWidth = res.m_Extent.x;
-			Vec2_T<uint32_t> pen = { 0, spacing.y };
+			Vec2_T<uint32_t> pen = { spacing.x, spacing.y };
 			uint32_t currentPenStartingYPos = spacing.y;
 			for (size_t i = 0; i < textLength; i++) {
 				char c = text[i];
@@ -320,20 +320,14 @@ namespace engine {
 					continue;
 				}
 				const Character& character = font.m_Characters[c];
-				if (character.m_Size.x == 0) {
-					fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
-						"Couldn't find character {} from font (in function TextRenderer::RenderText)\n", c);
-					continue;
-				}
-				pen.x += spacing.x;
 				uint32_t charWidth = character.m_Size.x;
 				uint32_t charHeight = character.m_Size.y;
 				if (pen.x + charWidth + spacing.x > frameExtent.x) {
 					pen.x = spacing.x;
-					currentPenStartingYPos += font.m_TallestCharacter + spacing.y;
+					currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
 				}
 				pen.y = currentPenStartingYPos;
-				pen.y += font.m_TallestCharacter - charHeight;
+				pen.y += font.m_MaxHoriBearingY - character.m_Bearing.y;
 				uint32_t currentPenStartingXPos = pen.x;
 				for (size_t y = 0; y < charHeight; y++) {
 					if (pen.y > res.m_Extent.y) {
@@ -351,7 +345,7 @@ namespace engine {
 					++pen.y;
 					pen.x = currentPenStartingXPos;
 				}
-				pen.x += charWidth;
+				pen.x += character.m_Escapement.x;
 			}
 			return res;
 		}
