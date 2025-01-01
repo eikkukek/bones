@@ -21,6 +21,8 @@ namespace engine {
 		T x, y;
 
 		constexpr inline Vec2_T(T x = Cast(0), T y = Cast(0)) noexcept : x(x), y(y) {}
+		template<typename Vec2>
+		constexpr inline Vec2_T(const Vec2& other) noexcept : x(Cast(other.x)), y(Cast(other.y)) {}
 
 		constexpr inline T SqrMagnitude() const noexcept { return x * x + y * y; }
 		constexpr inline float Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
