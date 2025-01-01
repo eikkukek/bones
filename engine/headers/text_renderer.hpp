@@ -55,7 +55,7 @@ namespace engine {
 
 		struct Font {
 			Character m_Characters[128]{};
-			Vec2_T<uint32_t> m_ImageSize{};
+			Vec2_T<uint32_t> m_ImageExtent{};
 			uint8_t* m_Image{};
 			uint32_t m_FontSize{};
 			const char* m_FileName{};
@@ -239,7 +239,7 @@ namespace engine {
 			}
 
 			FtCheck(FT_Done_Face(face), "failed to terminate FreeType face (function FT_Done_Face in function CreateFontTexture)!");
-			font.m_ImageSize = { bitmapWidth, bitmapHeight };
+			font.m_ImageExtent = { bitmapWidth, bitmapHeight };
 			size_t pixelCount = bitmapWidth * bitmapHeight;
 			font.m_Image = (uint8_t*)malloc(pixelCount * sizeof(uint8_t));
 			font.m_FontSize = fontSize;
@@ -289,9 +289,9 @@ namespace engine {
 			return res;
 		}
 
-		TextImage RenderText(const char* buf, size_t textLength, const Font& font, uint32_t frameWidth, Vec2_T<uint32_t> spacing) {
+		TextImage RenderText(const char* text, const Font& font, Vec2_T<uint32_t> frameExtent, Vec2_T<uint32_t> spacing) {
 			TextImage res{};
-			res.m_Extent = CalcTextImageSize(buf, textLength, font, frameWidth, spacing);
+			res.m_Extent = frameExtent;
 			if (res.m_Extent.x == 0 || res.m_Extent.y == 0) {
 				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
 					"frame width was smaller than a single character width when rendering text with font {} (in function TextRenderer::RenderText)!",
@@ -307,27 +307,28 @@ namespace engine {
 				PrintError(ErrorOrigin::Uncategorized, "failed to allocate memory (function malloc in function RenderText)!");
 				return {};
 			}
-			uint32_t fontPixelCount = font.m_ImageSize.x * font.m_ImageSize.y;
+			size_t textLength = strlen(text);
+			uint32_t fontPixelCount = font.m_ImageExtent.x * font.m_ImageExtent.y;
 			uint32_t imageWidth = res.m_Extent.x;
 			Vec2_T<uint32_t> pen = { 0, spacing.y };
 			uint32_t currentPenStartingYPos = spacing.y;
 			for (size_t i = 0; i < textLength; i++) {
-				char c = buf[i];
+				char c = text[i];
 				if (c < 0) {
 					fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
-						"Invalid character in string (in function TextRenderer::RenderText)!");
+						"Invalid character in string (in function TextRenderer::RenderText)!\n");
 					continue;
 				}
 				const Character& character = font.m_Characters[c];
 				if (character.m_Size.x == 0) {
 					fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
-						"Couldn't find character {} from font (in function TextRenderer::RenderText)", c);
+						"Couldn't find character {} from font (in function TextRenderer::RenderText)\n", c);
 					continue;
 				}
 				pen.x += spacing.x;
 				uint32_t charWidth = character.m_Size.x;
-				uint32_t charHeight = character.m_Size.x;
-				if (pen.x + charWidth + spacing.x > frameWidth) {
+				uint32_t charHeight = character.m_Size.y;
+				if (pen.x + charWidth + spacing.x > frameExtent.x) {
 					pen.x = spacing.x;
 					currentPenStartingYPos += font.m_TallestCharacter + spacing.y;
 				}
@@ -335,9 +336,14 @@ namespace engine {
 				pen.y += font.m_TallestCharacter - charHeight;
 				uint32_t currentPenStartingXPos = pen.x;
 				for (size_t y = 0; y < charHeight; y++) {
+					if (pen.y > res.m_Extent.y) {
+						fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
+							"Text truncated:\n\"{}\" (in function TextRenderer::RenderText)\n", text);
+						return res;
+					}
 					for (size_t x = 0; x < charWidth; x++) {
 						size_t imageIndex = pen.y * imageWidth + pen.x;
-						size_t fontImageIndex = y * charWidth + x;
+						size_t fontImageIndex = y * font.m_ImageExtent.x + character.m_Offset + x;
 						assert(imageIndex < resPixelCount && fontImageIndex < fontPixelCount);
 						res.m_Image[imageIndex] = font.m_Image[fontImageIndex];
 						++pen.x;
