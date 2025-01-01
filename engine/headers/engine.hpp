@@ -1079,6 +1079,271 @@ namespace engine {
 					m_DescriptorSetCount(other.m_DescriptorSetCount), m_Entites(std::move(other.m_Entites)) {}
 		};
 
+		class UI {
+
+			struct Pipeline2D {
+
+				struct Vertex {
+					Vec3 m_Position{};
+					Vec2 m_UV{};
+				};
+
+				static constexpr uint32_t vertex_input_attributes_count = 2;
+
+				static constexpr VkVertexInputAttributeDescription vertex_input_attributes[vertex_input_attributes_count] {
+					{
+						.location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Position),
+					},
+					{
+						.location = 1, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, m_UV),
+					},
+				};
+
+				static constexpr const char* vertex_shader = R"(
+#version 450
+
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec2 inUV;
+
+layout(location = 0) out vec2 outUV;
+
+layout(push_constant) uniform PushConstant {
+	layout(offset = 0) mat4 c_Transform
+} pc;
+
+void main() {
+	outUV = inUV;
+	gl_Position = pc.c_Transform * vec4(inPosition, 1.0f);
+}
+				)";
+
+				static constexpr const char* fragment_shader = R"(
+#version 450
+
+layout(location = 0) in vec2 inUV;
+
+layout(location = 0) out vec4 outColor;
+
+layout(set = 0, binding = 0) uniform sampler2D textures[];
+
+layout(push_constant) uniform PushConstant {
+	layout(offset = 64) uint c_TextureIndex;
+} pc;
+
+void main() {
+	outColor = texture(textures[pc.c_TextureIndex], inUV);
+}
+				)";
+
+				Renderer& m_Renderer;
+				VkPipeline m_Pipeline;
+				VkPipelineLayout m_PipelineLayout;
+
+				Pipeline2D(Renderer& renderer) 
+					: m_Renderer(renderer), m_Pipeline(VK_NULL_HANDLE), m_PipelineLayout(VK_NULL_HANDLE) {
+					VkPushConstantRange pushConstantRanges[2] {
+						{
+							.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+							.offset = 0,
+							.size = 64,
+						},
+						{
+							.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+							.offset = 64,
+							.size = 16,
+						},
+					};
+					m_PipelineLayout = m_Renderer.CreatePipelineLayout(0, nullptr, 2, pushConstantRanges);
+					if (m_PipelineLayout == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create pipeline layout for UI::Pipeline2D (funcion Renderer::CreatePipelineLayout in UI::Pipeline2D constructor)!");
+					}
+				}
+
+				~Pipeline2D() {
+					vkDestroyPipeline(m_Renderer.m_VulkanDevice, m_Pipeline, m_Renderer.m_VulkanAllocationCallbacks);
+					vkDestroyPipelineLayout(m_Renderer.m_VulkanDevice, m_PipelineLayout, m_Renderer.m_VulkanAllocationCallbacks);
+				}
+			};
+
+			Engine& m_Engine;
+			Pipeline2D m_Pipeline2D;
+
+			UI(Engine& engine) : m_Engine(engine), m_Pipeline2D(engine.m_Renderer) {
+				Renderer& renderer = engine.m_Renderer;
+				Renderer::Shader vertexShader(renderer);
+				Renderer::Shader fragmentShader(renderer);
+				if (!vertexShader.Compile(Pipeline2D::vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to compile vertex shader for UI::Pipeline2D (function Renderer::Shader::Compile in UI::Pipeline2D constructor)!");
+				}
+				if (!fragmentShader.Compile(Pipeline2D::fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to compile vertex shader for UI::Pipeline2D (function Renderer::Shader::Compile in UI::Pipeline2D constructor)!");
+				}
+
+				VkShaderModule vertexShaderModule = vertexShader.CreateShaderModule();
+				VkShaderModule fragmentShaderModule = fragmentShader.CreateShaderModule();
+
+				const VkPipelineShaderStageCreateInfo shaderStages[2] {
+					{
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.stage = VK_SHADER_STAGE_VERTEX_BIT,
+						.module = vertexShaderModule,
+						.pName = "main",
+						.pSpecializationInfo = nullptr,
+					},
+					{
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+						.module = fragmentShaderModule,
+						.pName = "main",
+						.pSpecializationInfo = nullptr,
+					},
+				};
+
+				VkVertexInputBindingDescription vertexBinding {
+					.binding = 0,
+					.stride = sizeof(Vertex),
+					.inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+				};
+
+				VkPipelineVertexInputStateCreateInfo vertexInputStateInfo {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.vertexBindingDescriptionCount = 1,
+					.pVertexBindingDescriptions = &vertexBinding,
+					.vertexAttributeDescriptionCount = Pipeline2D::vertex_input_attributes_count,
+					.pVertexAttributeDescriptions = Pipeline2D::vertex_input_attributes,
+				};
+
+				VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateInfo {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+					.primitiveRestartEnable = VK_FALSE,
+				};
+
+				VkPipelineViewportStateCreateInfo viewPortStateInfo {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.viewportCount = 1,
+					.pViewports = nullptr,
+					.scissorCount = 1,
+					.pScissors = nullptr,
+				};
+
+				VkPipelineRasterizationStateCreateInfo rasterizationStateInfo {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.depthClampEnable = VK_FALSE,
+					.rasterizerDiscardEnable = VK_FALSE,
+					.polygonMode = VK_POLYGON_MODE_FILL,
+					.cullMode = VK_CULL_MODE_NONE,
+					.frontFace = VK_FRONT_FACE_CLOCKWISE,
+					.depthBiasClamp = VK_FALSE,
+					.lineWidth = 1.0f,
+				};
+
+				VkPipelineMultisampleStateCreateInfo multisampleStateInfo {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.rasterizationSamples = renderer.GetMaxColorSamples(),
+					.sampleShadingEnable = VK_TRUE,
+					.minSampleShading = 0.2f,
+					.pSampleMask = nullptr,
+					.alphaToCoverageEnable = VK_FALSE,
+					.alphaToOneEnable = VK_FALSE,
+				};
+
+				VkPipelineColorBlendAttachmentState colorBlendAttachment {
+					.blendEnable = VK_TRUE,
+					.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+					.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+					.colorBlendOp = VK_BLEND_OP_ADD,
+					.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+					.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+					.alphaBlendOp = VK_BLEND_OP_ADD,
+					.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+				};
+
+				VkPipelineColorBlendStateCreateInfo colorBlendStateInfo {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.logicOpEnable = VK_FALSE,
+					.attachmentCount = 1,
+					.pAttachments = &colorBlendAttachment,
+					.blendConstants = { 0, 0, 0, 0 },
+				};
+
+				VkDynamicState dynamicStates[2] {
+					VK_DYNAMIC_STATE_VIEWPORT,
+					VK_DYNAMIC_STATE_SCISSOR,
+				};
+
+				VkPipelineDynamicStateCreateInfo dynamicStateInfo {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.dynamicStateCount = 2,
+					.pDynamicStates = dynamicStates,
+				};
+
+				VkPipelineRenderingCreateInfo renderingInfo {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+					.pNext = nullptr,
+					.viewMask = 0,
+					.colorAttachmentCount = 1,
+					.pColorAttachmentFormats = &renderer.m_SwapchainSurfaceFormat.format,
+					.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
+					.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+				};
+
+				VkGraphicsPipelineCreateInfo pipelineInfo {
+					.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+					.pNext = &renderingInfo,
+					.flags = 0,
+					.stageCount = 2,
+					.pStages = shaderStages,
+					.pVertexInputState = &vertexInputStateInfo,
+					.pInputAssemblyState = &inputAssemblyStateInfo,
+					.pTessellationState = nullptr,
+					.pViewportState = &viewPortStateInfo,
+					.pRasterizationState = &rasterizationStateInfo,
+					.pMultisampleState = &multisampleStateInfo,
+					.pDepthStencilState = nullptr,
+					.pColorBlendState = &colorBlendStateInfo,
+					.pDynamicState = &dynamicStateInfo,
+					.layout = m_Pipeline2D.m_PipelineLayout,
+					.renderPass = VK_NULL_HANDLE,
+					.subpass = 0,
+					.basePipelineHandle = VK_NULL_HANDLE,
+					.basePipelineIndex = 0,
+				};
+				VkPipeline* pipelines;
+				if (!renderer.CreateGraphicsPipelines(1, &pipelineInfo, &pipelines)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create UI pipelines (function Renderer::CreateGraphicsPipelines in UI constructor)!");
+				}
+				m_Pipeline2D.m_Pipeline = *pipelines;
+				vkDestroyShaderModule(renderer.m_VulkanDevice, vertexShaderModule, renderer.m_VulkanAllocationCallbacks);
+				vkDestroyShaderModule(renderer.m_VulkanDevice, fragmentShaderModule, renderer.m_VulkanAllocationCallbacks);
+			}
+
+			UI(const UI&) = delete;
+			UI(UI&&) = delete;
+		};
+
 		class EntityConstructor {
 			const char* m_TypeName;
 			Entity* (*m_NewEntityFunction)(EntityAllocator&);
@@ -1197,10 +1462,11 @@ namespace engine {
 			}
 		}
 
-		void CriticalError(ErrorOrigin origin, const char* err) {
+		static void CriticalError(ErrorOrigin origin, const char* err) {
 			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
 				"Engine called a critical error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
-			this->~Engine();
+			s_engine_instance->~Engine();
+			s_engine_instance = nullptr;
 			fmt::print(fmt::emphasis::bold, "Stopping program execution...\n");
 			glfwTerminate();
 			exit(EXIT_FAILURE);
