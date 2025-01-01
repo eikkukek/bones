@@ -1704,6 +1704,28 @@ namespace engine {
 			}
 		}
 
+		VkSampleCountFlagBits GetMaxColorSamples() {
+			if (m_ColorMsaaSamples & VK_SAMPLE_COUNT_64_BIT) {
+				return VK_SAMPLE_COUNT_64_BIT;
+			}
+			if (m_ColorMsaaSamples & VK_SAMPLE_COUNT_32_BIT) {
+				return VK_SAMPLE_COUNT_32_BIT;
+			}
+			if (m_ColorMsaaSamples & VK_SAMPLE_COUNT_16_BIT) {
+				return VK_SAMPLE_COUNT_16_BIT;
+			}
+			if (m_ColorMsaaSamples & VK_SAMPLE_COUNT_8_BIT) {
+				return VK_SAMPLE_COUNT_8_BIT;
+			}
+			if (m_ColorMsaaSamples & VK_SAMPLE_COUNT_4_BIT) {
+				return VK_SAMPLE_COUNT_4_BIT;
+			}
+			if (m_ColorMsaaSamples & VK_SAMPLE_COUNT_2_BIT) {
+				return VK_SAMPLE_COUNT_2_BIT;
+			}
+			return VK_SAMPLE_COUNT_1_BIT;
+		}
+
 		template<Queue queue_T>
 		VkCommandPool GetCommandPool(std::thread::id threadID = std::this_thread::get_id()) {
 			static_assert(queue_T != Queue::Present, "invalid queue in function Renderer::GetCommandBuffer!");
@@ -1803,7 +1825,7 @@ namespace engine {
 			return res;
 		}
 
-		bool CreateGraphicsPipelines(uint32_t pipelineCount, VkGraphicsPipelineCreateInfo pipelineCreateInfos[], VkPipeline outPipelines[]) {
+		bool CreateGraphicsPipelines(uint32_t pipelineCount, const VkGraphicsPipelineCreateInfo* pipelineCreateInfos, VkPipeline** outPipelines) {
 			if (!VkCheck(vkCreateGraphicsPipelines(m_VulkanDevice, VK_NULL_HANDLE, pipelineCount, pipelineCreateInfos, 
 					m_VulkanAllocationCallbacks, outPipelines), 
 					"failed to create graphics pipelines (function vkCreateGraphicsPipelines in function CreateGraphicsPipelines)!")) {
