@@ -333,8 +333,8 @@ int main() {
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
 	engine::Engine engine("Test", pWindow, false, 100, 0, nullptr, 1000);
 	engine::TextRenderer& textRenderer = engine.m_TextRenderer;
-	const engine::Font* font = textRenderer.CreateFont("fonts\\arial_mt.ttf", 64);
-	const char* text = "Hello, how is it going? MoiMoiMoiMoiMoiMoi";
+	const engine::Font* font = textRenderer.CreateFont("fonts\\arial_mt.ttf", 50);
+	const char* text = "Hello, how\n is it going? MoiMoiMoiMoiMoiMoi";
 	engine::TextImage textImage = textRenderer.RenderText(text, *font, engine::PackColorRBGA({ 0.0f, 0.0f, 1.0f, 1.0f }),
 			{ 540, 540 }, { 10, 10 });
 	engine::StaticTexture texture(engine);

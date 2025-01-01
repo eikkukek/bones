@@ -310,14 +310,14 @@ namespace engine {
 				if (c < 0) {
 					fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold,
 						"Invalid character in string (in function TextRenderer::RenderText)!\n");
-					i++;
+					++i;
 					continue;
 				}
 				if (c == ' ') {
 					pen.x += font.m_Characters[c].m_Escapement.x;
-					i++;
+					++i;
 					continue;
-				}
+				}	
 				size_t end;
 				uint32_t wordWidth = CalcWordWidth(text, i, frameExtent.x, font, end);
 				assert(wordWidth < frameExtent.x);
@@ -327,6 +327,12 @@ namespace engine {
 				}
 				for (; i < end; i++) {
 					c = text[i];
+					if (c == '\n') {
+						currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
+						pen.x = spacing.x;
+						++i;
+						continue;
+					}
 					const Character& character = font.m_Characters[c];
 					uint32_t charWidth = character.m_Size.x;
 					uint32_t charHeight = character.m_Size.y;
