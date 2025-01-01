@@ -3,6 +3,7 @@
 struct TestPipeline {
 
 	engine::Renderer& m_Renderer;
+	VkDescriptorSetLayout m_DescriptorSetLayout;
 	VkPipelineLayout m_GpuPipelineLayout;
 	VkPipeline m_GpuPipeline;
 
@@ -30,8 +31,10 @@ layout(location = 0) in vec2 inUV;
 
 layout(location = 0) out vec4 outColor;
 
+layout(set = 0, binding = 0) uniform sampler2D tex;
+
 void main() {
-	outColor = vec4(inUV, 0.0f, 1.0f);
+	outColor = texture(tex, inUV);
 }
 	)";
 
@@ -39,7 +42,17 @@ void main() {
 		: m_Renderer(renderer), m_GpuPipelineLayout(VK_NULL_HANDLE),
 			m_GpuPipeline(VK_NULL_HANDLE) {
 
-		m_GpuPipelineLayout = m_Renderer.CreatePipelineLayout(0, nullptr, 0, nullptr);
+		VkDescriptorSetLayoutBinding descriptorSetBinding {
+			.binding = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+			.pImmutableSamplers = nullptr,
+		};
+
+		m_DescriptorSetLayout = renderer.CreateDescriptorSetLayout(1, &descriptorSetBinding);
+
+		m_GpuPipelineLayout = m_Renderer.CreatePipelineLayout(1, &m_DescriptorSetLayout, 0, nullptr);
 		assert(m_GpuPipelineLayout != VK_NULL_HANDLE);
 
 		engine::Renderer::Shader vertexShader(m_Renderer);
@@ -227,11 +240,67 @@ class TestEntity : public engine::Entity {
 
 public:
 
-	VkDeviceSize vertexOffset = 0;
-	engine::MeshData meshData{};
+	VkDeviceSize m_VertexOffset = 0;
+	engine::MeshData m_MeshData{};
+	engine::Renderer::DescriptorPool m_ImageDescriptorPool;
+	VkDescriptorSetLayout m_ImageDescriptorSetLayout;
+	VkDescriptorSet m_ImageDescriptorSet;
+	VkSampler m_ImageSampler;
+	VkImageView m_ImageView;
 
-	TestEntity(engine::Engine& engine) : Entity(engine, "Test", 0, sizeof(TestEntity)) {
-		meshData = engine.m_StaticQuadMesh.GetMeshData();
+	TestEntity(engine::Engine& engine, const engine::StaticTexture& texture) 
+		: Entity(engine, "Test", 0, sizeof(TestEntity)), m_ImageDescriptorPool(engine.m_Renderer, 1) {
+		m_MeshData = engine.m_StaticQuadMesh.GetMeshData();
+		m_ImageView = texture.CreateImageView();
+		VkSamplerCreateInfo samplerInfo {
+			.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+			.pNext = nullptr,
+			.flags = 0,
+			.magFilter = VK_FILTER_LINEAR,
+			.minFilter = VK_FILTER_LINEAR,
+			.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+			.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+			.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+			.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+			.mipLodBias = 0.0f,
+			.anisotropyEnable = VK_FALSE,
+			.compareEnable = VK_FALSE,
+			.minLod = 0.0f,
+			.maxLod = VK_LOD_CLAMP_NONE,
+			.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+			.unnormalizedCoordinates = VK_FALSE,
+		};
+		vkCreateSampler(m_Engine.m_Renderer.m_VulkanDevice, &samplerInfo, m_Engine.m_Renderer.m_VulkanAllocationCallbacks, &m_ImageSampler);
+		VkDescriptorSetLayoutBinding setBinding {
+			.binding = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+			.pImmutableSamplers = nullptr,
+		};
+		m_ImageDescriptorSetLayout = engine.m_Renderer.CreateDescriptorSetLayout(1, &setBinding);
+		VkDescriptorPoolSize poolSize {
+			.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			.descriptorCount = 1,
+		};
+		m_ImageDescriptorPool.Create(1, &poolSize);
+		engine.m_Renderer.AllocateDescriptorSets(m_ImageDescriptorPool, 1, &m_ImageDescriptorSetLayout, &m_ImageDescriptorSet);
+		VkDescriptorImageInfo imageInfo {
+			.sampler = m_ImageSampler,
+			.imageView = m_ImageView,
+			.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		};
+		VkWriteDescriptorSet write {
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.pNext = nullptr,
+			.dstSet = m_ImageDescriptorSet,
+			.dstBinding = 0,
+			.dstArrayElement = 0,
+			.descriptorCount = 1,
+			.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			.pImageInfo = &imageInfo,
+		};
+		engine.m_Renderer.UpdateDescriptorSets(1, &write);
 	}
 
 	bool LogicUpdate() {
@@ -240,13 +309,20 @@ public:
 
 	void RenderUpdate(const engine::GraphicsPipeline& pipeline, const engine::CameraData& camera, const uint32_t descriptorCount,
 		VkDescriptorSet** outDescriptorSets, uint32_t& meshCount, engine::MeshData** meshes) {
-		*meshes = &meshData;
+		*meshes = &m_MeshData;
 		meshCount = 1;
+		*outDescriptorSets = &m_ImageDescriptorSet;
 	}
 
 	void WriteToFile(FILE* file) {}
 
-	void OnTerminate() {}
+	void OnTerminate() {
+		const engine::Renderer& renderer = m_Engine.m_Renderer;
+		vkDestroyImageView(renderer.m_VulkanDevice, m_ImageView, renderer.m_VulkanAllocationCallbacks);
+		vkDestroySampler(renderer.m_VulkanDevice, m_ImageSampler, renderer.m_VulkanAllocationCallbacks);
+		m_ImageDescriptorPool.Terminate();
+		vkDestroyDescriptorSetLayout(renderer.m_VulkanDevice, m_ImageDescriptorSetLayout, renderer.m_VulkanAllocationCallbacks);
+	}
 };
 
 int main() {
@@ -256,21 +332,21 @@ int main() {
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
 	engine::Engine engine("Test", pWindow, false, 100, 0, nullptr, 1000);
 	engine::TextRenderer& textRenderer = engine.m_TextRenderer;
-	const engine::Font* font = textRenderer.CreateFont("fonts\\arial_mt.ttf", 18);
-	assert(font);
-	const char* text = "Moi";
-	engine::TextImage textImage = textRenderer.RenderText(text, strlen(text), *font, 248, { 10, 10 });
+	const engine::Font* font = textRenderer.CreateFont("fonts\\arial_mt.ttf", 64);
+	const char* text = "Hello, how is it going?";
+	engine::TextImage textImage = textRenderer.RenderText(text, *font, { 540, 540 }, { 10, 10 });
 	engine::StaticTexture texture(engine);
-	assert(texture.Create(textImage.m_Extent, textImage.m_Image));
+	texture.Create(VK_FORMAT_R8_SRGB, 1, textImage.m_Extent, textImage.m_Image);
 	TestPipeline testPipeline(engine.m_Renderer);
 	engine::Engine::GraphicsPipeline& testPipelineData =
-			engine.AddGraphicsPipeline(testPipeline.m_GpuPipeline, testPipeline.m_GpuPipelineLayout, 0, 1000);
-	TestEntity testEntity(engine);
+			engine.AddGraphicsPipeline(testPipeline.m_GpuPipeline, testPipeline.m_GpuPipelineLayout, 1, 1000);
+	TestEntity testEntity(engine, texture);
 	testPipelineData.m_Entites.Insert(&testEntity);
 	while (!glfwWindowShouldClose(pWindow)) {
 		glfwPollEvents();
 		engine.Render();
 	}
+	testEntity.OnTerminate();
 	vkDeviceWaitIdle(engine.m_Renderer.m_VulkanDevice);	
 	testPipeline.Terminate();
 	glfwTerminate();
