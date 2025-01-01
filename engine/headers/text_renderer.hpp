@@ -281,13 +281,14 @@ namespace engine {
 			return res;
 		}
 
-		uint32_t CalcLineWidth(const char* text, size_t pos, uint32_t frameWidth, const Font& font, size_t& outEndPos) {
+		uint32_t CalcLineWidth(const char* text, size_t pos, uint32_t frameWidth, const Font& font, size_t& outEndPos, bool& wordCut) {
 			uint32_t res = 0;
 			char c = text[pos];
 			size_t i = pos;
 			size_t lastWordEnd = i;
 			uint32_t lengthAtLastWord = 0;
 			uint32_t spaceEscapement = font.m_Characters[' '].m_Escapement.x;
+			wordCut = false;
 			for (; c && c != '\n'; i++, c = text[i]) {
 				if (c < 0) {
 					continue;
@@ -299,8 +300,8 @@ namespace engine {
 						i = lastWordEnd;
 					}
 					else {
-						--i;
 						res -= escapement;
+						wordCut = true;
 					}
 					break;
 				}
@@ -405,14 +406,15 @@ namespace engine {
 				uint32_t imageWidthHalf = frameExtent.x >> 1;
 				Vec2_T<uint32_t> pen(0, spacing.y);
 				uint32_t currentPenStartingYPos = pen.y;
-				for (size_t i = 0; i < textLength; i++) {
+				for (size_t i = 0; i < textLength;) {
 					char c = text[i];
 					if (c < 0) {
 						++i;
 						continue;
 					}
 					size_t end;
-					size_t lineWidth = CalcLineWidth(text, i, frameExtent.x, font, end);
+					bool wordCut;
+					size_t lineWidth = CalcLineWidth(text, i, frameExtent.x, font, end, wordCut);
 					assert(lineWidth < frameExtent.x);
 					pen.x = imageWidthHalf - (lineWidth >> 1);
 					for (; i < end; i++) {
@@ -445,6 +447,9 @@ namespace engine {
 						pen.x += character.m_Escapement.x;
 					}
 					currentPenStartingYPos += font.m_MaxHoriBearingY + spacing.y;
+					if (!wordCut) {
+						++i;
+					}
 				}
 			}
 			
