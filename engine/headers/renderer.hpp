@@ -238,8 +238,7 @@ namespace engine {
 			}
 		};
 
-		class DescriptorPool {
-		public:
+		struct DescriptorPool {
 
 			const Renderer& m_Renderer;
 			const uint32_t m_MaxSets;
@@ -259,7 +258,7 @@ namespace engine {
 				}
 			}
 
-			bool CreatePool(uint32_t poolSizeCount, VkDescriptorPoolSize* pPoolSizes) {
+			bool Create(uint32_t poolSizeCount, VkDescriptorPoolSize* pPoolSizes) {
 				if (m_DescriptorPool != VK_NULL_HANDLE) {
 					PrintError(ErrorOrigin::Uncategorized, 
 						"attempting to create descriptor pool (in function DescriptorPool::CreatePool) that has already been created!");
@@ -683,7 +682,7 @@ namespace engine {
 						m_Renderer.m_VulkanAllocationCallbacks, &m_Buffer),
 						"failed to create buffer (function vkCreateBuffer in function Buffer::Create)!")) {
 					m_Buffer = VK_NULL_HANDLE;
-					return {};
+					return false;
 				}
 				VkMemoryRequirements memRequirements{};
 				vkGetBufferMemoryRequirements(m_Renderer.m_VulkanDevice, m_Buffer, &memRequirements);
@@ -696,19 +695,20 @@ namespace engine {
 					PrintError(ErrorOrigin::Vulkan, 
 						"failed to find memory type index when creating buffer (function FindMemoryTypeIndex in function Buffer::Create)!");
 					Terminate();
-					return {};
+					return false;
 				}
 				if (!m_Renderer.VkCheck(vkAllocateMemory(m_Renderer.m_VulkanDevice, &allocInfo, 
 						m_Renderer.m_VulkanAllocationCallbacks, &m_VulkanDeviceMemory),
 						"failed to allocate memory for buffer (function vkAllocateMemory in function Buffer::Create)!")) {
 					Terminate();
-					return {};
+					return false;
 				}
 				if (!m_Renderer.VkCheck(vkBindBufferMemory(m_Renderer.m_VulkanDevice, m_Buffer, m_VulkanDeviceMemory, 0),
 						"failed to bind buffer memory (function vkBindBufferMemory in function Buffer::Create)!")) {
 					Terminate();
-					return {};
+					return false;
 				}
+				m_BufferSize = size;
 				return true;
 			}
 
@@ -1258,7 +1258,7 @@ namespace engine {
 				.descriptorCount = 2,
 			};
 
-			m_ModelDescriptorPool.CreatePool(1, &modelPoolSize);
+			m_ModelDescriptorPool.Create(1, &modelPoolSize);
 
 			if (includeImGui) {
 				IMGUI_CHECKVERSION();
@@ -1771,6 +1771,10 @@ namespace engine {
 				return false;
 			}
 			return true;
+		}
+
+		void UpdateDescriptorSets(uint32_t writeCount, const VkWriteDescriptorSet* writes) {
+			vkUpdateDescriptorSets(m_VulkanDevice, writeCount, writes, 0, nullptr);
 		}
 
 		VkPipelineLayout CreatePipelineLayout(uint32_t setLayoutCount, VkDescriptorSetLayout* pSetLayouts, 
