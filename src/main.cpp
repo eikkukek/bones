@@ -1,4 +1,5 @@
 #include "engine.hpp"
+#include <chrono>
 
 struct TestPipeline {
 
@@ -243,14 +244,14 @@ public:
 
 	VkDeviceSize m_VertexOffset = 0;
 	engine::MeshData m_MeshData{};
-	engine::Renderer::DescriptorPool m_ImageDescriptorPool;
+	VkDescriptorPool m_ImageDescriptorPool;
 	VkDescriptorSetLayout m_ImageDescriptorSetLayout;
 	VkDescriptorSet m_ImageDescriptorSet;
 	VkSampler m_ImageSampler;
 	VkImageView m_ImageView;
 
 	TestEntity(engine::Engine& engine, const engine::StaticTexture& texture) 
-		: Entity(engine, "Test", 0, sizeof(TestEntity)), m_ImageDescriptorPool(engine.m_Renderer, 1) {
+		: Entity(engine, "Test", 0, sizeof(TestEntity)), m_ImageDescriptorPool(VK_NULL_HANDLE) {
 		m_MeshData = engine.m_StaticQuadMesh.GetMeshData();
 		m_ImageView = texture.CreateImageView();
 		VkSamplerCreateInfo samplerInfo {
@@ -284,8 +285,8 @@ public:
 			.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 			.descriptorCount = 1,
 		};
-		m_ImageDescriptorPool.Create(1, &poolSize);
-		engine.m_Renderer.AllocateDescriptorSets(m_ImageDescriptorPool, 1, &m_ImageDescriptorSetLayout, &m_ImageDescriptorSet);
+		m_ImageDescriptorPool = m_Engine.m_Renderer.CreateDescriptorPool(1, 1, &poolSize);
+		engine.m_Renderer.AllocateDescriptorSets(nullptr, m_ImageDescriptorPool, 1, &m_ImageDescriptorSetLayout, &m_ImageDescriptorSet);
 		VkDescriptorImageInfo imageInfo {
 			.sampler = m_ImageSampler,
 			.imageView = m_ImageView,
@@ -321,7 +322,7 @@ public:
 		const engine::Renderer& renderer = m_Engine.m_Renderer;
 		vkDestroyImageView(renderer.m_VulkanDevice, m_ImageView, renderer.m_VulkanAllocationCallbacks);
 		vkDestroySampler(renderer.m_VulkanDevice, m_ImageSampler, renderer.m_VulkanAllocationCallbacks);
-		m_ImageDescriptorPool.Terminate();
+		renderer.DestroyDescriptorPool(m_ImageDescriptorPool);
 		vkDestroyDescriptorSetLayout(renderer.m_VulkanDevice, m_ImageDescriptorSetLayout, renderer.m_VulkanAllocationCallbacks);
 	}
 };
@@ -348,13 +349,22 @@ int main() {
 	TestEntity testEntity(engine, texture);
 	testPipelineData.m_Entites.Insert(&testEntity);
 	UI& UI = engine.GetUI();
-	UI::Window* uiWindow = UI.AddWindow("Moi", UI::WindowState::Focused, { 0, 0 }, { 100, 100 });
+	static VkDescriptorSet testUIDescriptorSet;
+	VkDescriptorPool testUIDescriptorPool;
+	assert(UI.CreateTexture2DArray<1>(&testEntity.m_ImageView, testUIDescriptorSet, testUIDescriptorPool));
+	UI::Window* uiWindow = UI.AddWindow("Moi", UI::WindowState::Focused, { 0, 0 }, { 270, 270 });
+	uiWindow->m_Pipeline2DRenderCallback = [](const UI::Window& window, VkDescriptorSet& outDescriptorSet, uint32_t& outTextureIndex) -> bool {
+		outDescriptorSet = testUIDescriptorSet;
+		outTextureIndex = 0;
+		return true;
+	};
 	while (!glfwWindowShouldClose(pWindow)) {
 		glfwPollEvents();
 		uiWindow->SetPosition(UI.m_CursorPosition);
 		engine.Render();
 	}
 	vkDeviceWaitIdle(engine.m_Renderer.m_VulkanDevice);	
+	engine.m_Renderer.DestroyDescriptorPool(testUIDescriptorPool);
 	testEntity.OnTerminate();
 	testPipeline.Terminate();
 	glfwTerminate();
