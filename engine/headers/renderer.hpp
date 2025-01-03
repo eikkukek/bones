@@ -245,53 +245,6 @@ namespace engine {
 			}
 		};
 
-		struct DescriptorPool {
-
-			const Renderer& m_Renderer;
-			const uint32_t m_MaxSets;
-			VkDescriptorPool m_DescriptorPool;
-
-			DescriptorPool(Renderer& renderer, uint32_t maxSets) noexcept 
-				: m_Renderer(renderer), m_MaxSets(maxSets), m_DescriptorPool(VK_NULL_HANDLE) {}
-
-			~DescriptorPool() {
-				Terminate();
-			}
-
-			void Terminate() {
-				if (m_DescriptorPool != VK_NULL_HANDLE) {
-					vkDestroyDescriptorPool(m_Renderer.m_VulkanDevice, m_DescriptorPool, m_Renderer.m_VulkanAllocationCallbacks);
-					m_DescriptorPool = VK_NULL_HANDLE;
-				}
-			}
-
-			bool Create(uint32_t poolSizeCount, VkDescriptorPoolSize* pPoolSizes) {
-				if (m_DescriptorPool != VK_NULL_HANDLE) {
-					PrintError(ErrorOrigin::Uncategorized, 
-						"attempting to create descriptor pool (in function DescriptorPool::CreatePool) that has already been created!");
-					return false;
-				}
-				VkDescriptorPoolCreateInfo createInfo {
-					.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.maxSets = m_MaxSets,
-					.poolSizeCount = poolSizeCount,
-					.pPoolSizes = pPoolSizes,
-				};
-				VkResult vkRes = vkCreateDescriptorPool(m_Renderer.m_VulkanDevice, &createInfo, 
-					m_Renderer.m_VulkanAllocationCallbacks, &m_DescriptorPool);
-				if (vkRes != VK_SUCCESS) {
-					PrintError(ErrorOrigin::Vulkan, 
-						"failed to create descriptor pool (function vkCreateDescriptorPool in function DescriptorPool::CreatePool)!",
-						vkRes);
-					m_DescriptorPool = VK_NULL_HANDLE;
-					return false;
-				}
-				return true;
-			}
-		};
-
 		struct Shader {
 
 			static constexpr glslang_stage_t GetGlslangStage(VkShaderStageFlagBits shaderStage) noexcept {
@@ -943,9 +896,6 @@ namespace engine {
 		VkSurfaceKHR m_Surface = VK_NULL_HANDLE;
 		uint32_t m_MaxFragmentOutPutAttachments;
 
-		VkDescriptorSetLayout m_ModelDescriptorSetLayout;
-		DescriptorPool m_ModelDescriptorPool { *this, max_model_descriptor_sets };
-
 		Stack::Array<Fence> m_InFlightEarlyGraphicsFences { 0, nullptr };
 		Stack::Array<Fence> m_InFlightTransferFences { 0, nullptr };
 		Stack::Array<Fence> m_InFlightGraphicsFences { 0, nullptr };
@@ -1110,7 +1060,6 @@ namespace engine {
 				vkEnumerateDeviceExtensionProperties(gpu, nullptr, &deviceExtensionCount, deviceExtensions.m_Data);
 				bool dynamicRenderingExtensionFound = false;
 				bool timelineSemaphoreExtensionFound = false;
-				uint32_t deviceExtensionsNotFound = 0;
 				for (VkExtensionProperties& extension : deviceExtensions) {
 					if (dynamicRenderingExtensionFound && timelineSemaphoreExtensionFound) {
 						break;
@@ -1122,7 +1071,7 @@ namespace engine {
 					if (!timelineSemaphoreExtensionFound && !strcmp(extension.extensionName, vulkan_timeline_semaphore_extension_name)) {
 						timelineSemaphoreExtensionFound = true;
 						continue;
-					}
+					}	
 				}
 				m_SingleThreadStack.Deallocate<VkExtensionProperties>(deviceExtensions.m_Size);
 				if (!dynamicRenderingExtensionFound || !timelineSemaphoreExtensionFound) {
@@ -1224,6 +1173,21 @@ namespace engine {
 				.dynamicRendering = VK_TRUE,
 			};
 
+			/*
+
+			VkPhysicalDevicePresentWaitFeaturesKHR gpuPresentWaitFeatures {
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR,
+				.pNext = &gpuFeaturesVulkan13,
+				.presentWait = VK_TRUE,
+			};
+
+			VkPhysicalDevicePresentIdFeaturesKHR gpuPresentIdFeatures {
+				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR,
+				.pNext = &gpuPresentWaitFeatures,
+				.presentId = VK_TRUE,
+			};
+			*/
+
 			VkDeviceCreateInfo deviceInfo {
 				.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
 				.pNext = &gpuFeaturesVulkan13,
@@ -1272,8 +1236,6 @@ namespace engine {
 				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 				.descriptorCount = 2,
 			};
-
-			m_ModelDescriptorPool.Create(1, &modelPoolSize);
 
 			if (includeImGui) {
 				IMGUI_CHECKVERSION();
@@ -1334,7 +1296,6 @@ namespace engine {
 
 		void Terminate() {
 			if (m_VulkanDevice) {
-				m_ModelDescriptorPool.Terminate();
 				vkDeviceWaitIdle(m_VulkanDevice);
 				for (size_t i = 0; i < m_FramesInFlight; i++) {
 					vkDestroyImageView(m_VulkanDevice, m_SwapchainImageViews[i], m_VulkanAllocationCallbacks);
@@ -1406,7 +1367,7 @@ namespace engine {
 			Stack::Array<VkPresentModeKHR> presentModes = m_SingleThreadStack.Allocate<VkPresentModeKHR>(presentModeCount);
 			vkGetPhysicalDeviceSurfacePresentModesKHR(m_Gpu, m_Surface, &presentModeCount, presentModes.m_Data);
 
-			m_PresentMode = VK_PRESENT_MODE_FIFO_KHR;
+			m_PresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
 			for (VkPresentModeKHR presentMode : presentModes) {
 				if (presentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
 					m_PresentMode = presentMode;
@@ -1787,17 +1748,38 @@ namespace engine {
 			vkDestroyDescriptorSetLayout(m_VulkanDevice, layout, m_VulkanAllocationCallbacks);
 		}
 
-		bool AllocateDescriptorSets(const DescriptorPool& descriptorPool, uint32_t setCount, 
-			VkDescriptorSetLayout* pLayouts, VkDescriptorSet outSets[]) {
-			if (descriptorPool.m_DescriptorPool == VK_NULL_HANDLE) {
+		VkDescriptorPool CreateDescriptorPool(uint32_t maxSets, uint32_t poolSizeCount, VkDescriptorPoolSize poolSizes[]) const {
+			VkDescriptorPoolCreateInfo poolInfo {
+				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.maxSets = maxSets,
+				.poolSizeCount = poolSizeCount,
+				.pPoolSizes = poolSizes,
+			};
+			VkDescriptorPool res;
+			if (!VkCheck(vkCreateDescriptorPool(m_VulkanDevice, &poolInfo, m_VulkanAllocationCallbacks, &res), 
+					"failed to create descriptor pool (function vkCreateDescriptorPool in function CreateDescriptorPool)!")) {
+				return VK_NULL_HANDLE;
+			}
+			return res;
+		}
+
+		void DestroyDescriptorPool(VkDescriptorPool pool) const {
+			vkDestroyDescriptorPool(m_VulkanDevice, pool, m_VulkanAllocationCallbacks);
+		}
+
+		bool AllocateDescriptorSets(const void* pNext, VkDescriptorPool descriptorPool, uint32_t setCount,
+			VkDescriptorSetLayout* pLayouts, VkDescriptorSet outSets[]) const {
+			if (descriptorPool == VK_NULL_HANDLE) {
 				PrintError(ErrorOrigin::Vulkan, 
-					"attempting to allocate descriptor sets with a descriptor pool that's null!");
+					"attempting to allocate descriptor sets with a descriptor pool that's null (in function AllocateDescriptorSets)!");
 				return false;
 			}
 			VkDescriptorSetAllocateInfo allocInfo {
 				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-				.pNext = nullptr,
-				.descriptorPool = descriptorPool.m_DescriptorPool,
+				.pNext = pNext,
+				.descriptorPool = descriptorPool,
 				.descriptorSetCount = setCount,
 				.pSetLayouts = pLayouts,
 			};
@@ -1814,7 +1796,7 @@ namespace engine {
 			return true;
 		}
 
-		void UpdateDescriptorSets(uint32_t writeCount, const VkWriteDescriptorSet* writes) {
+		void UpdateDescriptorSets(uint32_t writeCount, const VkWriteDescriptorSet* writes) const {
 			vkUpdateDescriptorSets(m_VulkanDevice, writeCount, writes, 0, nullptr);
 		}
 
@@ -1866,14 +1848,18 @@ namespace engine {
 			return false;
 		}
 
+		void DestroySampler(VkSampler sampler) {
+			vkDestroySampler(m_VulkanDevice, sampler, m_VulkanAllocationCallbacks);
+		}
+
 		struct DrawData {
-			VkCommandBuffer commandBuffer;
-			VkImageView swapchainImageView;
+			VkCommandBuffer m_CommandBuffer;
+			VkImageView m_SwapchainImageView;
 		};
 
 		bool BeginFrame(DrawData& outDrawData) {
-
 			static constexpr uint64_t frame_timeout = 2000000000;
+
 			if (m_Swapchain == VK_NULL_HANDLE || m_SwapchainExtent.width == 0 || m_SwapchainExtent.height == 0) {
 				return false;
 			}
@@ -2071,16 +2057,16 @@ namespace engine {
 					VK_SUCCESS);
 				return false;
 			}
-			outDrawData.swapchainImageView = m_SwapchainImageViews[m_CurrentFrame];
-			outDrawData.commandBuffer = m_RenderCommandBuffers[m_CurrentFrame];
-			vkResetCommandBuffer(outDrawData.commandBuffer, 0);
+			outDrawData.m_SwapchainImageView = m_SwapchainImageViews[m_CurrentFrame];
+			outDrawData.m_CommandBuffer = m_RenderCommandBuffers[m_CurrentFrame];
+			vkResetCommandBuffer(outDrawData.m_CommandBuffer, 0);
 			VkCommandBufferBeginInfo commandBufferBeginInfo {
 				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 				.pNext = nullptr,
 				.flags = 0,
 				.pInheritanceInfo = nullptr,
 			};
-			if (!VkCheck(vkBeginCommandBuffer(outDrawData.commandBuffer, &commandBufferBeginInfo), 
+			if (!VkCheck(vkBeginCommandBuffer(outDrawData.m_CommandBuffer, &commandBufferBeginInfo), 
 				"failed to begin render command buffer (function vkBeginCommandBuffer in function BeginFrame)")) {
 				return false;
 			}
@@ -2157,7 +2143,7 @@ namespace engine {
 					.pNext = nullptr,
 					.commandBufferCount = (uint32_t)graphicsCommandBuffers.m_Size,
 					.pCommandBuffers = graphicsCommandBuffers.m_Data,
-				}
+				},
 			};
 
 			m_SingleThreadStack.Clear();
