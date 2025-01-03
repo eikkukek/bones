@@ -71,7 +71,7 @@ namespace engine {
 		FT_Library m_FreeTypeLib;
 		const CriticalErrorCallback m_CriticalErrorCallback;
 
-		TextRenderer(Renderer& renderer, size_t maxFonts, CriticalErrorCallback criticalErrorCallback) 
+		TextRenderer(Renderer& renderer, CriticalErrorCallback criticalErrorCallback) 
 			: m_Renderer(renderer), m_CriticalErrorCallback(criticalErrorCallback) {
 			FtAssert(FT_Init_FreeType(&m_FreeTypeLib), 
 				"failed to initialize FreeType (function FT_Init_FreeType in TextRenderer constructor)!");
