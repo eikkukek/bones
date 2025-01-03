@@ -28,7 +28,7 @@ namespace engine {
 
 		constexpr inline T SqrMagnitude() const noexcept { return x * x + y * y; }
 		constexpr inline float Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
-		constexpr inline Vec2_T Normalized() const noexcept { 
+		constexpr inline Vec2_T Normalized() const noexcept {
 			T mag = SqrMagnitude();
 			if (mag <= Cast(0.00001)) {
 				return Vec2(Cast(0), Cast(0));
@@ -38,11 +38,13 @@ namespace engine {
 		}
 
 		constexpr inline Vec2_T operator*(float scalar) const noexcept { return Vec2_T(x * scalar, y * scalar); }
-		constexpr inline Vec2_T operator/(float scalar) const noexcept { return Vec2_T(x * scalar, y / scalar); }
+		constexpr inline Vec2_T operator/(float scalar) const noexcept { return Vec2_T(x / scalar, y / scalar); }
 		constexpr inline Vec2_T operator-() const noexcept { return Vec2_T(-x, -y); }
 		constexpr inline Vec2_T operator+(Vec2_T other) const noexcept { return Vec2_T(x + other.x, y + other.y); }
 		constexpr inline Vec2_T operator-(Vec2_T other) const noexcept { return Vec2_T(x - other.x, y - other.y); }
 		constexpr inline Vec2_T& operator+=(Vec2_T other) noexcept { x += other.x; y += other.y; return *this; }
+
+		constexpr inline bool operator==(Vec2_T other) noexcept { return x == other.x && y == other.y; }
 	};
 
 	typedef Vec2_T<float> Vec2;
