@@ -28,7 +28,7 @@ namespace engine {
 
 	static_assert(sizeof(size_t) >= 4, "size of size_t isn't big enough!");
 
-	inline constexpr uint32_t PackColorRBGA(const Vec4& color) {
+	constexpr inline uint32_t PackColorRBGA(const Vec4& color) {
 		return ((uint32_t)(color.w * 255) << 24) 
 			+ ((uint32_t)(color.z * 255) << 16)
 			+ ((uint32_t)(color.y * 255) << 8)
@@ -38,7 +38,7 @@ namespace engine {
 	class Renderer {
 	public:
 
-		typedef void (*SwapchainCreateCallback)(const Renderer* renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews);
+		typedef void (*SwapchainCreateCallback)(const Renderer& renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews);
 		typedef std::lock_guard<std::mutex> LockGuard;
 		typedef uint32_t Bool32;
 
@@ -880,10 +880,12 @@ namespace engine {
 		};
 
 		static constexpr uint32_t desired_frames_in_flight = 2;
-		static constexpr const char* gpu_validation_layer_name = "VK_LAYER_KHRONOS_validation";
-		static constexpr const char* gpu_dynamic_rendering_extension_name = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
-		static constexpr const char* gpu_timeline_semaphore_extension_name = VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME;
-		static constexpr const char* gpu_swapchain_extension_name = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+
+		static constexpr const char* vulkan_swapchain_extension_name = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+
+		static constexpr const char* vulkan_validation_layer_name = "VK_LAYER_KHRONOS_validation";
+		static constexpr const char* vulkan_dynamic_rendering_extension_name = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
+		static constexpr const char* vulkan_timeline_semaphore_extension_name = VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME;
 
 		static constexpr size_t single_thread_stack_size = 524288;
 		static constexpr size_t max_thread_count = 256;
@@ -1036,7 +1038,7 @@ namespace engine {
 				}
 			}
 
-			bool includeGpuValidationLayer = false;
+			bool includeVulkanValidationLayer = false;
 			if constexpr (BOOL_RENDERER_DEBUG) {
 				uint32_t availableInstanceLayerCount;
 				vkEnumerateInstanceLayerProperties(&availableInstanceLayerCount, nullptr);
@@ -1044,12 +1046,12 @@ namespace engine {
 					= m_SingleThreadStack.Allocate<VkLayerProperties>(availableInstanceLayerCount);
 				vkEnumerateInstanceLayerProperties(&availableInstanceLayerCount, availableGpuInstanceLayers.m_Data);
 				for (VkLayerProperties& layer : availableGpuInstanceLayers) {
-					if (!strcmp(layer.layerName, gpu_validation_layer_name)) {
-						includeGpuValidationLayer = true;
+					if (!strcmp(layer.layerName, vulkan_validation_layer_name)) {
+						includeVulkanValidationLayer = true;
 						break;
 					}
 				}
-				if (!includeGpuValidationLayer) {
+				if (!includeVulkanValidationLayer) {
 					PrintWarning("Vulkan Khronos validation not supported (in Renderer constructor)!");
 				}
 			}
@@ -1069,8 +1071,8 @@ namespace engine {
 				.pNext = nullptr,
 				.flags = 0,
 				.pApplicationInfo = &appInfo,
-				.enabledLayerCount = includeGpuValidationLayer ? 1U : 0U,
-				.ppEnabledLayerNames = includeGpuValidationLayer ? &gpu_validation_layer_name : nullptr,
+				.enabledLayerCount = includeVulkanValidationLayer ? 1U : 0U,
+				.ppEnabledLayerNames = includeVulkanValidationLayer ? &vulkan_validation_layer_name : nullptr,
 				.enabledExtensionCount = instanceExtensionCount,
 				.ppEnabledExtensionNames = instanceExtensions,
 			};
@@ -1113,11 +1115,13 @@ namespace engine {
 					if (dynamicRenderingExtensionFound && timelineSemaphoreExtensionFound) {
 						break;
 					}
-					if (!dynamicRenderingExtensionFound && !strcmp(gpu_dynamic_rendering_extension_name, extension.extensionName)) {
+					if (!dynamicRenderingExtensionFound && !strcmp(extension.extensionName, vulkan_dynamic_rendering_extension_name)) {
 						dynamicRenderingExtensionFound = true;
+						continue;
 					}
-					if (!timelineSemaphoreExtensionFound && !strcmp(gpu_timeline_semaphore_extension_name, extension.extensionName)) {
+					if (!timelineSemaphoreExtensionFound && !strcmp(extension.extensionName, vulkan_timeline_semaphore_extension_name)) {
 						timelineSemaphoreExtensionFound = true;
+						continue;
 					}
 				}
 				m_SingleThreadStack.Deallocate<VkExtensionProperties>(deviceExtensions.m_Size);
@@ -1204,9 +1208,13 @@ namespace engine {
 				.samplerAnisotropy = VK_TRUE,
 			};
 
-			VkPhysicalDeviceVulkan12Features gpuFeaturesVulkan12 {
+			VkPhysicalDeviceVulkan12Features gpuFeaturesVulkan12{
 				.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
 				.pNext = nullptr,
+				.shaderSampledImageArrayNonUniformIndexing = VK_TRUE,
+				.descriptorBindingPartiallyBound = VK_TRUE,
+				.descriptorBindingVariableDescriptorCount = VK_TRUE,
+				.runtimeDescriptorArray = VK_TRUE,
 				.timelineSemaphore = VK_TRUE,
 			};
 
@@ -1222,7 +1230,7 @@ namespace engine {
 				.queueCreateInfoCount = 3,
 				.pQueueCreateInfos = deviceQueueInfos,
 				.enabledExtensionCount = 1,
-				.ppEnabledExtensionNames = &gpu_swapchain_extension_name,
+				.ppEnabledExtensionNames = &vulkan_swapchain_extension_name,
 				.pEnabledFeatures = &gpuFeatures,
 			};
 
@@ -1622,7 +1630,7 @@ namespace engine {
 				vkResetFences(m_VulkanDevice, resetFenceCount, resetFences.m_Data);
 			}
 
-			m_SwapchainCreateCallback(this, m_SwapchainExtent, m_FramesInFlight, m_SwapchainImageViews.m_Data);
+			m_SwapchainCreateCallback(*this, m_SwapchainExtent, m_FramesInFlight, m_SwapchainImageViews.m_Data);
 
 			m_GraphicsCommandBufferQueueMutex.lock();
 			CommandBuffer<Queue::Graphics>* transitionCommandBuffer = m_GraphicsCommandBufferQueue.New();
@@ -1759,10 +1767,10 @@ namespace engine {
 			return VK_NULL_HANDLE;
 		}
 
-		VkDescriptorSetLayout CreateDescriptorSetLayout(uint32_t bindingCount, VkDescriptorSetLayoutBinding* pBindings) const {
+		VkDescriptorSetLayout CreateDescriptorSetLayout(const void* pNext, uint32_t bindingCount, VkDescriptorSetLayoutBinding* pBindings) const {
 			VkDescriptorSetLayoutCreateInfo createInfo {
 				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-				.pNext = nullptr,
+				.pNext = pNext,
 				.flags = 0,
 				.bindingCount = bindingCount,
 				.pBindings = pBindings,
@@ -1773,6 +1781,10 @@ namespace engine {
 				return VK_NULL_HANDLE;
 			}
 			return res;
+		}
+
+		void DestroyDescriptorSetLayout(VkDescriptorSetLayout layout) {
+			vkDestroyDescriptorSetLayout(m_VulkanDevice, layout, m_VulkanAllocationCallbacks);
 		}
 
 		bool AllocateDescriptorSets(const DescriptorPool& descriptorPool, uint32_t setCount, 
@@ -1806,8 +1818,8 @@ namespace engine {
 			vkUpdateDescriptorSets(m_VulkanDevice, writeCount, writes, 0, nullptr);
 		}
 
-		VkPipelineLayout CreatePipelineLayout(uint32_t setLayoutCount, VkDescriptorSetLayout* pSetLayouts, 
-				uint32_t pushConstantRangeCount, VkPushConstantRange* pPushConstantRanges) {
+		VkPipelineLayout CreatePipelineLayout(uint32_t setLayoutCount, const VkDescriptorSetLayout* pSetLayouts, 
+				uint32_t pushConstantRangeCount, const VkPushConstantRange* pPushConstantRanges) {
 			VkPipelineLayoutCreateInfo createInfo {
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
 				.pNext = nullptr,
@@ -1825,6 +1837,10 @@ namespace engine {
 			return res;
 		}
 
+		void DestroyPipelineLayout(VkPipelineLayout layout) {
+			vkDestroyPipelineLayout(m_VulkanDevice, layout, m_VulkanAllocationCallbacks);
+		}
+
 		bool CreateGraphicsPipelines(uint32_t pipelineCount, const VkGraphicsPipelineCreateInfo* pipelineCreateInfos, VkPipeline outPipelines[]) {
 			if (!VkCheck(vkCreateGraphicsPipelines(m_VulkanDevice, VK_NULL_HANDLE, pipelineCount, pipelineCreateInfos, 
 					m_VulkanAllocationCallbacks, outPipelines), 
@@ -1832,6 +1848,10 @@ namespace engine {
 				return false;
 			}
 			return true;
+		}
+
+		void DestroyPipeline(VkPipeline pipeline) {
+			vkDestroyPipeline(m_VulkanDevice, pipeline, m_VulkanAllocationCallbacks);
 		}
 
 		bool FindMemoryTypeIndex(uint32_t typeFilter, VkMemoryPropertyFlags properties, uint32_t& outIndex) const {
