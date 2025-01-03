@@ -50,7 +50,7 @@ void main() {
 			.pImmutableSamplers = nullptr,
 		};
 
-		m_DescriptorSetLayout = renderer.CreateDescriptorSetLayout(1, &descriptorSetBinding);
+		m_DescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 1, &descriptorSetBinding);
 
 		m_GpuPipelineLayout = m_Renderer.CreatePipelineLayout(1, &m_DescriptorSetLayout, 0, nullptr);
 		assert(m_GpuPipelineLayout != VK_NULL_HANDLE);
@@ -279,7 +279,7 @@ public:
 			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
 			.pImmutableSamplers = nullptr,
 		};
-		m_ImageDescriptorSetLayout = engine.m_Renderer.CreateDescriptorSetLayout(1, &setBinding);
+		m_ImageDescriptorSetLayout = engine.m_Renderer.CreateDescriptorSetLayout(nullptr, 1, &setBinding);
 		VkDescriptorPoolSize poolSize {
 			.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 			.descriptorCount = 1,
@@ -327,27 +327,31 @@ public:
 };
 
 int main() {
+	using namespace engine;
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
-	engine::Engine engine("Test", pWindow, false, 100, 0, nullptr, 1000);
-	engine::TextRenderer& textRenderer = engine.m_TextRenderer;
-	engine::GlyphAtlas atlas{};
+	engine::Engine engine("Test", pWindow, 250, 0, nullptr, 1000);
+	TextRenderer& textRenderer = engine.m_TextRenderer;
+	GlyphAtlas atlas{};
 	textRenderer.CreateGlyphAtlas("fonts\\arial_mt.ttf", 30.0f, atlas);
 	const char* text = "Hello, how\nis it going? AVAVAVA";
-	engine::TextImage textImage 
-			= textRenderer.RenderText<engine::TextAlignment::Middle>(text, atlas, engine::PackColorRBGA({ 1.0f, 1.0f, 1.0f, 1.0f }),
+	TextImage textImage 
+			= textRenderer.RenderText<TextAlignment::Middle>(text, atlas, PackColorRBGA({ 1.0f, 1.0f, 1.0f, 1.0f }),
 				{ 540, 540 }, { 2, 2 });
-	engine::StaticTexture texture(engine);
+	StaticTexture texture(engine);
 	texture.Create(VK_FORMAT_R8G8B8A8_SRGB, 4, textImage.m_Extent, textImage.m_Image);	
 	TestPipeline testPipeline(engine.m_Renderer);
-	engine::Engine::GraphicsPipeline& testPipelineData =
-			engine.AddGraphicsPipeline(testPipeline.m_GpuPipeline, testPipeline.m_GpuPipelineLayout, 1, 1000);
+	Engine::GraphicsPipeline& testPipelineData =
+			engine.AddGraphicsPipeline(testPipeline.m_GpuPipeline, testPipeline.m_GpuPipelineLayout, 1, 1, 1000);
 	TestEntity testEntity(engine, texture);
 	testPipelineData.m_Entites.Insert(&testEntity);
+	UI& UI = engine.GetUI();
+	UI::Window* uiWindow = UI.AddWindow("Moi", UI::WindowState::Focused, { 0, 0 }, { 100, 100 });
 	while (!glfwWindowShouldClose(pWindow)) {
 		glfwPollEvents();
+		uiWindow->SetPosition(UI.m_CursorPosition);
 		engine.Render();
 	}
 	vkDeviceWaitIdle(engine.m_Renderer.m_VulkanDevice);	

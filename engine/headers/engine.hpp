@@ -32,11 +32,13 @@ namespace engine {
 			Uncategorized = 0,
 			Renderer = 1,
 			TextRenderer = 2,
-			OutOfMemory = 3,
-			Vulkan = 4,
-			Entity = 5,
-			DynamicArray = 6,
-			FileParsing = 7,
+			UI = 3,
+			OutOfMemory = 4,
+			IndexOutOfBounds = 5,
+			Vulkan = 6,
+			Entity = 7,
+			DynamicArray = 8,
+			FileParsing = 9,
 			MaxEnum,
 		};
 
@@ -45,7 +47,9 @@ namespace engine {
 				"Uncategorized",
 				"Renderer",
 				"TextRenderer",
+				"UI",
 				"OutOfMemory",
+				"IndexOutOfBounds",
 				"Vulkan",
 				"Entity",
 				"DynamicArray",
@@ -165,6 +169,13 @@ namespace engine {
 
 			ConstIterator end() const {
 				return m_Data ? &m_Data[m_Size] : nullptr;
+			}
+
+			T& operator[](size_t index) {
+				if (index >= m_Size) {
+					CriticalError(ErrorOrigin::IndexOutOfBounds, "index out of bounds (DynamicArray::operator[])!");
+				}
+				return m_Data[index];
 			}
 		};
 
@@ -623,11 +634,6 @@ namespace engine {
 			Vec3 m_Bitangent;
 		};
 
-		enum class MeshType {
-			Static = 1,
-			Dynamic = 2,
-		};
-
 		struct MeshData {
 			uint32_t m_VertexBufferCount;
 			const VkBuffer* m_VertexBuffers;
@@ -636,11 +642,7 @@ namespace engine {
 			uint32_t m_IndexCount;
 		};
 
-		template<MeshType mesh_type_T>
-		class Mesh {};
-
-		template<>
-		class Mesh<MeshType::Static> {
+		class StaticMesh {
 		public:
 
 			Engine& m_Engine;
@@ -648,11 +650,13 @@ namespace engine {
 			Renderer::Buffer m_VertexBuffer;
 			Renderer::Buffer m_IndexBuffer;
 
-			Mesh(Engine& engine) noexcept 
+			StaticMesh(Engine& engine) noexcept 
 				: m_Engine(engine), m_VertexBuffer(engine.m_Renderer), m_IndexBuffer(engine.m_Renderer), m_IndexCount(0) {}
 
-			Mesh(Mesh&& other) noexcept : m_Engine(other.m_Engine), 
+			StaticMesh(StaticMesh&& other) noexcept : m_Engine(other.m_Engine), 
 					m_VertexBuffer(std::move(other.m_VertexBuffer)), m_IndexBuffer(std::move(other.m_IndexBuffer)), m_IndexCount(0) {}
+
+			StaticMesh(const StaticMesh&) = delete;
 
 			MeshData GetMeshData() {
 				constexpr static VkDeviceSize offset = 0;
@@ -672,22 +676,23 @@ namespace engine {
 				m_IndexBuffer.Terminate();
 			}
 
-			bool CreateBuffers(uint32_t vertexCount, const Vertex* pVertices, uint32_t indexCount, const uint32_t* pIndices) {
+			template<typename VertexType>
+			bool CreateBuffers(uint32_t vertexCount, const VertexType* pVertices, uint32_t indexCount, const uint32_t* pIndices) {
 				if (m_VertexBuffer.m_BufferSize || m_IndexBuffer.m_BufferSize) {
 					PrintError(ErrorOrigin::Renderer, 
-					"attempting to create vertex and index buffers when the buffers have already been created (in function Mesh::CreateBuffers)!");
+					"attempting to create vertex and index buffers when the buffers have already been created (in function StaticMesh::CreateBuffers)!");
 					return false;
 				}
-				if (!m_VertexBuffer.CreateWithData(vertexCount * sizeof(Vertex), pVertices, 
+				if (!m_VertexBuffer.CreateWithData(vertexCount * sizeof(VertexType), pVertices, 
 						VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
 						VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
-					PrintError(ErrorOrigin::Renderer, "failed to create vertex buffer (in function Mesh::CreateBuffers)!");
+					PrintError(ErrorOrigin::Renderer, "failed to create vertex buffer (in function StaticMesh::CreateBuffers)!");
 					return false;
 				}
 				if (!m_IndexBuffer.CreateWithData(indexCount * sizeof(uint32_t), pIndices, 
 						VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
 						VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
-					PrintError(ErrorOrigin::Renderer, "failed to create index buffer (in function Mesh::CreateBuffers)!");
+					PrintError(ErrorOrigin::Renderer, "failed to create index buffer (in function StaticMesh::CreateBuffers)!");
 					m_VertexBuffer.Terminate();
 					return false;
 				}
@@ -696,16 +701,7 @@ namespace engine {
 			}
 		};
 
-		enum class TextureType {
-			Static = 1,
-			Dynamic = 2,
-		};
-
-		template<TextureType texture_type_T>
-		class Texture {};
-
-		template<>
-		class Texture<TextureType::Static> {
+		class StaticTexture {
 		public:
 
 			Engine& m_Engine;
@@ -713,7 +709,7 @@ namespace engine {
 			VkImage m_Image;
 			VkDeviceMemory m_VulkanDeviceMemory;
 
-			Texture(Engine& engine) noexcept 
+			StaticTexture(Engine& engine) noexcept 
 				: m_Engine(engine), m_Format(VK_FORMAT_UNDEFINED), m_Image(VK_NULL_HANDLE), m_VulkanDeviceMemory(VK_NULL_HANDLE) {}
 
 			bool Create(VkFormat format, uint32_t colorChannels, Vec2_T<uint32_t> extent, const void* image) {
@@ -723,7 +719,7 @@ namespace engine {
 				if (!stagingBuffer.Create(deviceSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
 					PrintError(ErrorOrigin::Renderer, 
-						"failed to create staging buffer for texture (function Renderer::Buffer::Create in function Texture::Create!)");
+						"failed to create staging buffer for texture (function Renderer::Buffer::Create in function StaticTexture::Create!)");
 					return false;
 				}
 				void* stagingMap;
@@ -733,7 +729,7 @@ namespace engine {
 				vkUnmapMemory(renderer.m_VulkanDevice, stagingBuffer.m_VulkanDeviceMemory);
 				if (vkRes != VK_SUCCESS) {
 					PrintError(ErrorOrigin::Vulkan, 
-						"failed to map staging buffer memory (function vkMapMemory in function Texture::Create)!", vkRes);
+						"failed to map staging buffer memory (function vkMapMemory in function StaticTexture::Create)!", vkRes);
 					return false;
 				}
 				uint32_t queueFamilies[2] {
@@ -760,7 +756,7 @@ namespace engine {
 				vkRes = vkCreateImage(renderer.m_VulkanDevice, &imageInfo, renderer.m_VulkanAllocationCallbacks, &m_Image);
 				if (vkRes != VK_SUCCESS) {
 					PrintError(ErrorOrigin::Vulkan, 
-						"failed to create image (function vkCreateImage in function Texture::Create)!", vkRes);
+						"failed to create image (function vkCreateImage in function StaticTexture::Create)!", vkRes);
 					return false;
 				}
 				VkMemoryRequirements memRequirements;
@@ -773,7 +769,7 @@ namespace engine {
 				if (!renderer.FindMemoryTypeIndex(memRequirements.memoryTypeBits, 
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, imageAllocInfo.memoryTypeIndex)) {
 					PrintError(ErrorOrigin::Vulkan, 
-						"failed to find memory type index (function Renderer::FindMemoryTypeIndex in function Texture::Create)!");
+						"failed to find memory type index (function Renderer::FindMemoryTypeIndex in function StaticTexture::Create)!");
 					Terminate();
 					return false;
 				}
@@ -781,14 +777,14 @@ namespace engine {
 					renderer.m_VulkanAllocationCallbacks, &m_VulkanDeviceMemory);
 				if (vkRes != VK_SUCCESS) {
 					PrintError(ErrorOrigin::Vulkan, 
-						"failed to allocate image memory (function vkAllocateMemory in function Texture::Create)!");
+						"failed to allocate image memory (function vkAllocateMemory in function StaticTexture::Create)!");
 					Terminate();
 					return false;
 				}
 				vkRes = vkBindImageMemory(renderer.m_VulkanDevice, m_Image, m_VulkanDeviceMemory, 0);
 				if (vkRes != VK_SUCCESS) {
 					PrintError(ErrorOrigin::Vulkan, 
-						"failed to bind image memory (function vkBindImageMemory in function Texture::Create)!");
+						"failed to bind image memory (function vkBindImageMemory in function StaticTexture::Create)!");
 					Terminate();
 					return false;
 				}
@@ -797,7 +793,7 @@ namespace engine {
 					= renderer.m_EarlyGraphicsCommandBufferQueue.New();
 				if (!commandBuffer) {
 					PrintError(ErrorOrigin::OutOfMemory, 
-						"renderer graphics command buffer queue was out of memory (in function Texture::Create)!");
+						"renderer graphics command buffer queue was out of memory (in function StaticTexture::Create)!");
 					Terminate();
 					return false;
 				}
@@ -812,7 +808,7 @@ namespace engine {
 					&commandBuffer->m_CommandBuffer);
 				if (vkRes != VK_SUCCESS) {
 					PrintError(ErrorOrigin::Vulkan, 
-						"failed to allocate graphics command buffer (function vkAllocateCommandBuffers in function Texture::Create)", 
+						"failed to allocate graphics command buffer (function vkAllocateCommandBuffers in function StaticTexture::Create)", 
 						vkRes);
 					Terminate();
 					return false;
@@ -826,7 +822,7 @@ namespace engine {
 				vkRes = vkBeginCommandBuffer(commandBuffer->m_CommandBuffer, &commandBufferBeginInfo);
 				if (vkRes != VK_SUCCESS) {
 					PrintError(ErrorOrigin::Vulkan, 
-						"failed to begin graphics command buffer (function vkAllocateCommandBuffers in function Texture::Create)", 
+						"failed to begin graphics command buffer (function vkAllocateCommandBuffers in function StaticTexture::Create)", 
 						vkRes);
 					Terminate();
 					return false;
@@ -893,7 +889,7 @@ namespace engine {
 				vkRes = vkEndCommandBuffer(commandBuffer->m_CommandBuffer);
 				if (vkRes != VK_SUCCESS) {
 					PrintError(ErrorOrigin::Vulkan, 
-						"failed to end graphics command buffer (function vkEndCommandBuffer in function Texture::Create)!", 
+						"failed to end graphics command buffer (function vkEndCommandBuffer in function StaticTexture::Create)!", 
 						vkRes);
 					Terminate();
 					return false;
@@ -922,7 +918,7 @@ namespace engine {
 			VkImageView CreateImageView() const {
 				if (m_Image == VK_NULL_HANDLE) {
 					PrintError(ErrorOrigin::Vulkan, 
-						"attempting to create image view for texture that's null (in function Texture::CreateImageView)!");
+						"attempting to create image view for texture that's null (in function StaticTexture::CreateImageView)!");
 					return VK_NULL_HANDLE;
 				}
 				const Renderer& renderer = m_Engine.m_Renderer; 
@@ -951,7 +947,7 @@ namespace engine {
 				VkResult vkRes = vkCreateImageView(renderer.m_VulkanDevice, &imageViewInfo, renderer.m_VulkanAllocationCallbacks, &res);
 				if (vkRes != VK_SUCCESS) {
 					PrintError(ErrorOrigin::Vulkan, 
-						"failed to create image view (function vkCreateImageView in function Texture::CreateImageView)");
+						"failed to create image view (function vkCreateImageView in function StaticTexture::CreateImageView)");
 					return VK_NULL_HANDLE;
 				}
 				return res;
@@ -999,7 +995,8 @@ namespace engine {
 				: m_Engine(engine), c_ClassSize(classSize), m_UID(UID) {
 				size_t len = strlen(name);
 				if (len > name_max_length) {
-					PrintError(ErrorOrigin::Entity, "given entity name is longer than entity name max size (in Entity constructor)!");
+					PrintError(ErrorOrigin::Entity, 
+						"given entity name is longer than entity name max size (in Entity constructor)!");
 				}
 				size_t i = 0;
 				for (; i < len && i < name_max_length; i++) {
@@ -1019,7 +1016,8 @@ namespace engine {
 				m_Name[i] = '\0';
 				m_NameLength = i;
 				if (c != '\n') {
-					PrintError(ErrorOrigin::FileParsing, "there was an entity name larger than entity name max size in file (in Entity constructor)!");
+					PrintError(ErrorOrigin::FileParsing, 
+						"there was an entity name larger than entity name max size in file (in Entity constructor)!");
 				}
 				while (c != '\n') {
 					c = fgetchar();
@@ -1065,21 +1063,137 @@ namespace engine {
 
 		struct GraphicsPipeline {
 
-			VkPipeline m_GpuPipeline;
-			VkPipelineLayout m_GpuPipelineLayout;
+			VkPipeline m_Pipeline;
+			uint32_t m_PushConstantCount;
+			VkPipelineLayout m_PipelineLayout;
 			uint32_t m_DescriptorSetCount;
 			Set<Entity*, Entity::Hash> m_Entites;
 
 			GraphicsPipeline() 
-				: m_GpuPipeline(VK_NULL_HANDLE), m_GpuPipelineLayout(VK_NULL_HANDLE),
+				: m_Pipeline(VK_NULL_HANDLE), m_PipelineLayout(VK_NULL_HANDLE),
 					m_DescriptorSetCount(0), m_Entites() {}
 
 			GraphicsPipeline(GraphicsPipeline&& other) noexcept 
-				: m_GpuPipeline(other.m_GpuPipeline), m_GpuPipelineLayout(other.m_GpuPipelineLayout),
+				: m_Pipeline(other.m_Pipeline), m_PipelineLayout(other.m_PipelineLayout),
 					m_DescriptorSetCount(other.m_DescriptorSetCount), m_Entites(std::move(other.m_Entites)) {}
-		};
+
+			GraphicsPipeline(const GraphicsPipeline&) = delete;
+		};	
 
 		class UI {
+		public:
+
+			friend class Engine;
+
+			template<typename T>
+			class Dictionary {
+			public:
+
+				static constexpr size_t max_bucket_size = 4;
+
+				typedef const char* KeyType;
+				typedef T ValueType;
+				typedef KeyType KeyBucket[max_bucket_size];
+				typedef ValueType ValueBucket[max_bucket_size];
+
+				const size_t m_Capacity;
+				KeyBucket* m_KeyBuckets;
+				ValueBucket* m_ValueBuckets;
+				uint8_t* m_BucketSizes;
+				size_t m_Size;
+
+				Dictionary(size_t capacity) 
+					: m_Capacity(capacity), m_KeyBuckets((KeyBucket*)malloc(m_Capacity * sizeof(KeyBucket))),
+						m_ValueBuckets((ValueBucket*)malloc(m_Capacity * sizeof(ValueBucket))), m_Size(0),
+						m_BucketSizes((uint8_t*)malloc(m_Capacity * sizeof(uint8_t)))
+				{
+					assert(m_KeyBuckets && m_ValueBuckets && m_BucketSizes);
+					memset(m_KeyBuckets, 0, m_Capacity * sizeof(KeyBucket));	
+					memset(m_ValueBuckets, 0, m_Capacity * sizeof(ValueBucket));
+					memset(m_BucketSizes, 0, m_Capacity * sizeof(uint8_t));
+				}
+
+				Dictionary(Dictionary&& other) 
+					: m_Capacity(other.m_Capacity), m_KeyBuckets(other.m_KeyBuckets), 
+						m_ValueBuckets(other.m_ValueBuckets), m_BucketSizes(other.m_BucketSizes), m_Size(other.m_Size) {
+					other.m_KeyBuckets = nullptr;
+					other.m_ValueBuckets = nullptr;
+					other.m_BucketSizes = nullptr;
+				}
+
+				~Dictionary() {
+					free(m_KeyBuckets);
+					free(m_ValueBuckets);
+					free(m_BucketSizes);
+				}
+
+				bool Contains(const char* key) const {
+					uint64_t hash = String::Hash()(key);
+					size_t index = hash % m_Capacity;
+					uint8_t bucketSize = m_BucketSizes[index];
+					KeyBucket& keyBucket = m_KeyBuckets[index];
+					for (size_t i = 0; i < bucketSize; i++) {
+						if (!strcmp(key, keyBucket[i])) {
+							return true;
+						}
+					}
+					return false;
+				}
+
+				template<typename... Args>
+				ValueType* Emplace(const char* key, Args&&... args) {
+					if ((float)m_Size / m_Capacity > 0.9f) {
+						PrintWarning("dictionary is close to full (in function UI::Dictionary::Emplace)!");
+					}
+					uint64_t hash = String::Hash()(key);
+					size_t index = hash % m_Capacity;
+					uint8_t& bucketSize = m_BucketSizes[index];
+					KeyBucket& keyBucket = m_KeyBuckets[index];
+					ValueBucket& valueBucket = m_ValueBuckets[index];
+					if (bucketSize) {
+						for (size_t i = 0; i < bucketSize; i++) {
+							if (!strcmp(key, keyBucket[i])) {
+								return nullptr;
+							}
+						}
+						PrintError(ErrorOrigin::UI, "bad hash (in function UI::Dictionary::Emplace)!");
+						if (bucketSize >= max_bucket_size) {
+							PrintError(ErrorOrigin::UI, "bucket was full (in function UI::Dictionary::Emplace)!");
+							return nullptr;
+						}
+					}
+					++m_Size;
+					keyBucket[bucketSize] = key;
+					return new(&valueBucket[bucketSize++]) ValueType(std::forward<Args>(args)...);
+				}
+
+				ValueType* Insert(const char* key, const ValueType& value) {
+					if ((float)m_Size / m_Capacity > 0.9f) {
+						PrintWarning("dictionary is close to full (in function UI::Dictionary::Insert)!");
+					}
+					uint64_t hash = String::Hash()(key);
+					size_t index = hash % m_Capacity;
+					uint8_t& bucketSize = m_BucketSizes[index];
+					KeyBucket& keyBucket = m_KeyBuckets[index];
+					ValueBucket& valueBucket = m_ValueBuckets[index];
+					if (bucketSize) {
+						for (size_t i = 0; i < bucketSize; i++) {
+							if (!strcmp(key, keyBucket[i])) {
+								return nullptr;
+							}
+						}
+						PrintError(ErrorOrigin::UI, "bad hash (in function UI::Dictionary::Insert)!");
+						if (bucketSize >= max_bucket_size) {
+							PrintError(ErrorOrigin::UI, "bucket was full (in function UI::Dictionary::Insert)!");
+							return nullptr;
+						}
+					}
+					++m_Size;
+
+					keyBucket[bucketSize] = key;
+					return &(valueBucket[bucketSize++] = value);
+				}
+			};
 
 			struct Pipeline2D {
 
@@ -1108,7 +1222,7 @@ layout(location = 1) in vec2 inUV;
 layout(location = 0) out vec2 outUV;
 
 layout(push_constant) uniform PushConstant {
-	layout(offset = 0) mat4 c_Transform
+	layout(offset = 0) mat4 c_Transform;
 } pc;
 
 void main() {
@@ -1119,6 +1233,8 @@ void main() {
 
 				static constexpr const char* fragment_shader = R"(
 #version 450
+
+#extension GL_EXT_nonuniform_qualifier : require
 
 layout(location = 0) in vec2 inUV;
 
@@ -1131,16 +1247,418 @@ layout(push_constant) uniform PushConstant {
 } pc;
 
 void main() {
-	outColor = texture(textures[pc.c_TextureIndex], inUV);
+	outColor = texture(textures[nonuniformEXT(pc.c_TextureIndex)], inUV);
 }
 				)";
 
-				Renderer& m_Renderer;
+				static constexpr uint32_t quad_vertex_count = 4;
+
+				static constexpr Vertex quad_vertices[quad_vertex_count] {
+
+					{
+						.m_Position { -1.0f, 1.0f, 0.0f },
+						.m_UV { 0.0f, 1.0f },
+					},
+					{
+						.m_Position { 1.0f, 1.0f, 0.0f },
+						.m_UV { 1.0f, 1.0f },
+					},
+					{
+						.m_Position { -1.0f, -1.0f, 0.0f },
+						.m_UV { 0.0f, 0.0f },
+					},
+					{
+						.m_Position { 1.0f, -1.0f, 0.0f },
+						.m_UV { 1.0f, 0.0f },
+					},
+				};
+
+				static constexpr uint32_t quad_index_count = 6;
+
+				static constexpr uint32_t quad_indices[quad_index_count] {
+					3, 2, 0,
+					1, 3, 0,
+				};
+
 				VkPipeline m_Pipeline;
 				VkPipelineLayout m_PipelineLayout;
+				VkDescriptorSetLayout m_DescriptorSetLayout;
+			};
 
-				Pipeline2D(Renderer& renderer) 
-					: m_Renderer(renderer), m_Pipeline(VK_NULL_HANDLE), m_PipelineLayout(VK_NULL_HANDLE) {
+			struct Rect {
+
+				IntVec2 m_Min{};
+				IntVec2 m_Max{};
+
+				bool IsPointInside(IntVec2 point) const {
+					return point.x >= m_Min.x && point.y >= m_Min.y 
+						&& point.x <= m_Max.x && point.y <= m_Max.y;
+				}
+
+				Vec2 CalcMiddle() const {
+					return Vec2(m_Min.x + m_Max.x / 2.0f, m_Min.y + m_Max.y / 2.0f);
+				}
+
+				void CalcTransform(Vec2_T<uint32_t> renderResolution, Mat4& out) const {
+					out.columns[0] = Vec4((float)(m_Max.x - m_Min.x) / renderResolution.x, 0.0f, 0.0f, 0.0f);
+					out.columns[1] = Vec4(0.0f, (float)(m_Max.y - m_Min.y) / renderResolution.y, 0.0f, 0.0f);
+					out.columns[2] = Vec4(0.0f, 0.0f, 1.0f, 0.0f);
+					Vec2 pos = CalcMiddle();
+					out.columns[3] = Vec4(pos.x / renderResolution.x * 2.0f - 1.0f, pos.y / renderResolution.y * 2.0f - 1.0f, 0.0f, 1.0f);
+				}
+			};
+
+			class Button {
+			public:
+
+				typedef bool (*Pipeline2DRenderCallback)(const Button& button, VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex);
+				
+				const char* const m_StringID;
+				Rect m_Rect{};
+
+				void (*m_HoverCallback)(Button& button){};
+
+				Pipeline2DRenderCallback m_Pipeline2DRenderCallback{};
+				Mat4 m_Transform{};
+
+				IntVec2 GetPos() {
+					return { m_Rect.m_Min.x, m_Rect.m_Max.y };
+				}
+
+				void SetPos(IntVec2 pos, Vec2_T<uint32_t> renderResolution) {
+					IntVec2 oldPos = GetPos();
+					IntVec2 deltaPos = pos - oldPos;
+					IntVec2 size = m_Rect.m_Max - m_Rect.m_Min;
+					m_Rect.m_Min = { pos.x, pos.y - size.y };
+					m_Rect.m_Max = { pos.x + size.x, pos.y };
+					m_Rect.CalcTransform(renderResolution, m_Transform);
+				}
+
+				bool RenderCallback2D(VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex) const {
+					return m_Pipeline2DRenderCallback && m_Pipeline2DRenderCallback(*this, outTextureDescriptor, outTextureIndex);
+				}
+
+				uint64_t operator()() {
+					return String::Hash()(m_StringID);
+				}
+			};
+
+			enum class WindowState {
+				Closed = 0,
+				Focused = 1,
+				Unfocused = 2,
+			};
+
+			/*! @brief UI window class
+			*/
+			class Window {
+			public:
+
+				typedef bool (*Pipeline2DRenderCallback)(const Window& button, VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex);
+
+				static constexpr size_t max_buttons = 250;
+				
+				UI& m_UI;
+				const char* const m_StringID;
+				WindowState m_State;
+
+				Rect m_Rect;
+
+				Pipeline2DRenderCallback m_Pipeline2DRenderCallback{};
+				Mat4 m_Transform{};
+
+				Dictionary<Button> m_ButtonLookUp;
+				DynamicArray<Button*> m_Buttons;
+
+				Window(UI& UI, const char* stringID, WindowState state, const Rect& rect) 
+					: m_UI(UI), m_StringID(stringID), m_State(state), m_Rect(rect), m_ButtonLookUp(max_buttons * 2), m_Buttons() {
+					m_Buttons.Reserve(max_buttons);
+					m_Rect.CalcTransform(m_UI.m_Engine.GetRenderResolution(), m_Transform);
+				}
+
+				void Render(VkCommandBuffer commandBuffer) const {
+					VkDescriptorSet texDescriptor = VK_NULL_HANDLE;
+					uint32_t texIndex = 0;
+					VkPipelineLayout pipelineLayout = m_UI.m_Pipeline2D.m_PipelineLayout;
+					vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_UI.m_Pipeline2D.m_Pipeline);
+					if (m_Pipeline2DRenderCallback && m_Pipeline2DRenderCallback(*this, texDescriptor, texIndex)) {
+						vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
+							0, 1, &texDescriptor, 0, nullptr);
+						vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &m_Transform);
+						vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16, &texIndex);
+					}
+					for (Button* button : m_Buttons) {
+						if (button->RenderCallback2D(texDescriptor, texIndex)) {
+							vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 
+								0, 1, &texDescriptor, 0, nullptr);
+							vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &button->m_Transform);
+							vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16, &texIndex);
+						}
+					}
+				};
+
+				bool CheckHover(IntVec2 cursorPos) {
+					if (m_Rect.IsPointInside(cursorPos)) {
+						for (Button* button : m_Buttons) {
+							assert(button);
+							if ((button->m_Rect.IsPointInside(cursorPos))) {
+								button->m_HoverCallback(*button);
+								break;
+							}
+						}
+						return true;
+					}
+					return false;
+				}
+
+				void RenderResolutionChange(Vec2_T<uint32_t> renderResolution) {
+					m_Rect.CalcTransform(renderResolution, m_Transform);
+					for (Button* button : m_Buttons) {
+						assert(button);
+						button->m_Rect.CalcTransform(renderResolution, button->m_Transform);
+					}
+				}
+
+				IntVec2 GetPos() {
+					return { m_Rect.m_Min.x, m_Rect.m_Max.y };
+				}
+
+				/*! @brief Sets the position of window.
+				* @param[in] pos: New window position from top left of the window.
+				*/
+				void SetPosition(IntVec2 pos) {
+					IntVec2 oldPos = GetPos();
+					IntVec2 deltaPos = pos - oldPos;
+					IntVec2 size = m_Rect.m_Max - m_Rect.m_Min;
+					m_Rect.m_Min = { pos.x, pos.y };
+					m_Rect.m_Max = pos + size;
+					Vec2_T<uint32_t> renderResolution = m_UI.m_Engine.GetRenderResolution();
+					m_Rect.CalcTransform(renderResolution, m_Transform);
+					for (Button* button : m_Buttons) {
+						assert(button);
+						Rect& rect = button->m_Rect;
+						IntVec2 buttonSize = rect.m_Max - rect.m_Min;
+						IntVec2 buttonPos = button->GetPos() + deltaPos;
+					}
+				}
+
+				uint64_t operator()() {
+					return String::Hash()(m_StringID);
+				}
+			};
+
+		private:
+
+			static inline DynamicArray<GLFWwindow*> s_GLFWwindows{};
+			static inline DynamicArray<UI*> s_UIs{};
+
+			static UI* FindUI(const GLFWwindow* pGlfwWindow) {
+				size_t count = s_GLFWwindows.m_Size;
+				for (size_t i = 0; i < count; i++) {
+					if (s_GLFWwindows[i] == pGlfwWindow) {
+						return s_UIs[i];
+					}
+				}
+				return nullptr;
+			}
+
+		public:
+
+			MeshData m_QuadMesh2DData{};
+
+			Dictionary<Window> m_WindowLookUp;
+			DynamicArray<Window*> m_Windows{};
+
+			IntVec2 m_CursorPosition{};
+
+			Engine& m_Engine;
+			Pipeline2D m_Pipeline2D{};
+			StaticMesh m_StaticQuadMesh2D;
+
+			UI(Engine& engine, size_t maxWindows) 
+				: m_Engine(engine), m_Pipeline2D(), m_StaticQuadMesh2D(engine), m_WindowLookUp(maxWindows * 2) {
+				m_Windows.Reserve(maxWindows);
+				s_UIs.Reserve(4);
+				s_GLFWwindows.Reserve(4);
+			}
+
+		private:
+
+			void Initialize() {
+				s_UIs.PushBack(this);
+				GLFWwindow* pGLFWwindow = s_GLFWwindows.PushBack(m_Engine.m_Renderer.m_Window);
+
+				assert(s_GLFWwindows.Size() == s_UIs.Size());
+
+				glfwSetCursorPosCallback(pGLFWwindow, 
+					[](GLFWwindow* pGLFWWindow, double xPos, double yPos) {
+						UI* pUI = FindUI(pGLFWWindow);
+						if (!pUI) {
+							PrintError(ErrorOrigin::UI, 
+								"failed to find UI (in GLFW cursor pos callback)!");
+							return;
+						}
+						pUI->m_CursorPosition = { (int)xPos, (int)yPos };
+						for (Window* window : pUI->m_Windows) {
+							assert(window);
+							if (window->CheckHover(pUI->m_CursorPosition)) {
+								break;
+							}
+						}
+
+					}
+				);
+				if (!m_StaticQuadMesh2D.CreateBuffers(Pipeline2D::quad_vertex_count, Pipeline2D::quad_vertices, 
+					Pipeline2D::quad_index_count, Pipeline2D::quad_indices)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create static 2D quad mesh (function StaticMesh::CreateBuffers in UI constructor)!");
+				}
+
+				m_QuadMesh2DData = m_StaticQuadMesh2D.GetMeshData();
+
+				Renderer& renderer = m_Engine.m_Renderer;
+
+				{
+
+					Renderer::Shader vertexShader(renderer);
+					Renderer::Shader fragmentShader(renderer);
+
+					if (!vertexShader.Compile(Pipeline2D::vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to compile vertex shader for UI::Pipeline2D (function Renderer::Shader::Compile in UI::Pipeline2D constructor)!");
+					}
+					if (!fragmentShader.Compile(Pipeline2D::fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to compile vertex shader for UI::Pipeline2D (function Renderer::Shader::Compile in UI::Pipeline2D constructor)!");
+					}
+
+					VkShaderModule vertexShaderModule = vertexShader.CreateShaderModule();
+					VkShaderModule fragmentShaderModule = fragmentShader.CreateShaderModule();
+
+					const VkPipelineShaderStageCreateInfo shaderStages[2] {
+						{
+							.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+							.pNext = nullptr,
+							.flags = 0,
+							.stage = VK_SHADER_STAGE_VERTEX_BIT,
+							.module = vertexShaderModule,
+							.pName = "main",
+							.pSpecializationInfo = nullptr,
+						},
+						{
+							.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+							.pNext = nullptr,
+							.flags = 0,
+							.stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+							.module = fragmentShaderModule,
+							.pName = "main",
+							.pSpecializationInfo = nullptr,
+						},
+					};
+
+					VkVertexInputBindingDescription vertexBinding {
+						.binding = 0,
+						.stride = sizeof(Vertex),
+						.inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+					};
+
+					VkPipelineVertexInputStateCreateInfo vertexInputStateInfo {
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.vertexBindingDescriptionCount = 1,
+						.pVertexBindingDescriptions = &vertexBinding,
+						.vertexAttributeDescriptionCount = Pipeline2D::vertex_input_attributes_count,
+						.pVertexAttributeDescriptions = Pipeline2D::vertex_input_attributes,
+					};
+
+					VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateInfo {
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+						.primitiveRestartEnable = VK_FALSE,
+					};
+
+					VkPipelineViewportStateCreateInfo viewPortStateInfo {
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.viewportCount = 1,
+						.pViewports = nullptr,
+						.scissorCount = 1,
+						.pScissors = nullptr,
+					};
+
+					VkPipelineRasterizationStateCreateInfo rasterizationStateInfo {
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.depthClampEnable = VK_FALSE,
+						.rasterizerDiscardEnable = VK_FALSE,
+						.polygonMode = VK_POLYGON_MODE_FILL,
+						.cullMode = VK_CULL_MODE_NONE,
+						.frontFace = VK_FRONT_FACE_CLOCKWISE,
+						.depthBiasClamp = VK_FALSE,
+						.lineWidth = 1.0f,
+					};
+
+					VkPipelineMultisampleStateCreateInfo multisampleStateInfo {
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.rasterizationSamples = renderer.GetMaxColorSamples(),
+						.sampleShadingEnable = VK_TRUE,
+						.minSampleShading = 0.2f,
+						.pSampleMask = nullptr,
+						.alphaToCoverageEnable = VK_FALSE,
+						.alphaToOneEnable = VK_FALSE,
+					};
+
+					VkPipelineColorBlendAttachmentState colorBlendAttachment {
+						.blendEnable = VK_TRUE,
+						.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+						.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+						.colorBlendOp = VK_BLEND_OP_ADD,
+						.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+						.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+						.alphaBlendOp = VK_BLEND_OP_ADD,
+						.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+					};
+
+					VkPipelineColorBlendStateCreateInfo colorBlendStateInfo {
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.logicOpEnable = VK_FALSE,
+						.attachmentCount = 1,
+						.pAttachments = &colorBlendAttachment,
+						.blendConstants = { 0, 0, 0, 0 },
+					};
+
+					VkDynamicState dynamicStates[2] {
+						VK_DYNAMIC_STATE_VIEWPORT,
+						VK_DYNAMIC_STATE_SCISSOR,
+					};
+
+					VkPipelineDynamicStateCreateInfo dynamicStateInfo {
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.dynamicStateCount = 2,
+						.pDynamicStates = dynamicStates,
+					};
+
+					VkPipelineRenderingCreateInfo renderingInfo {
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+						.pNext = nullptr,
+						.viewMask = 0,
+						.colorAttachmentCount = 1,
+						.pColorAttachmentFormats = &renderer.m_SwapchainSurfaceFormat.format,
+						.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
+						.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+					};
+
 					VkPushConstantRange pushConstantRanges[2] {
 						{
 							.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
@@ -1153,193 +1671,117 @@ void main() {
 							.size = 16,
 						},
 					};
-					m_PipelineLayout = m_Renderer.CreatePipelineLayout(0, nullptr, 2, pushConstantRanges);
-					if (m_PipelineLayout == VK_NULL_HANDLE) {
+
+					VkPipelineLayoutCreateInfo pipelineLayoutInfo {
+						.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.setLayoutCount = 0,
+						.pSetLayouts = nullptr,
+						.pushConstantRangeCount = 2,
+						.pPushConstantRanges = pushConstantRanges,
+					};
+
+					VkDescriptorSetLayoutBinding descriptorSetLayoutBinding {
+						.binding = 0,
+						.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+						.descriptorCount = 64,
+						.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+						.pImmutableSamplers = nullptr,
+					};
+
+					VkDescriptorBindingFlags textureArrayDescriptorBindingFlags = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+
+					VkDescriptorSetLayoutBindingFlagsCreateInfo descriptorSetLayoutBindingFlagsInfo {
+						.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+						.pNext = nullptr,
+						.bindingCount = 1,
+						.pBindingFlags = &textureArrayDescriptorBindingFlags,
+					};
+
+					m_Pipeline2D.m_DescriptorSetLayout 
+						= renderer.CreateDescriptorSetLayout(&descriptorSetLayoutBindingFlagsInfo, 1, &descriptorSetLayoutBinding);
+
+					if (m_Pipeline2D.m_DescriptorSetLayout == VK_NULL_HANDLE) {
 						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create pipeline layout for UI::Pipeline2D (funcion Renderer::CreatePipelineLayout in UI::Pipeline2D constructor)!");
+							"failed to create descriptor set layout for 2D UI pipeline (function Renderer::CreateDescriptorSetLayout in UI constructor)!");
 					}
-				}
 
-				~Pipeline2D() {
-					vkDestroyPipeline(m_Renderer.m_VulkanDevice, m_Pipeline, m_Renderer.m_VulkanAllocationCallbacks);
-					vkDestroyPipelineLayout(m_Renderer.m_VulkanDevice, m_PipelineLayout, m_Renderer.m_VulkanAllocationCallbacks);
-				}
-			};
+					m_Pipeline2D.m_PipelineLayout = renderer.CreatePipelineLayout(1, &m_Pipeline2D.m_DescriptorSetLayout, 2, pushConstantRanges);
 
-			Engine& m_Engine;
-			Pipeline2D m_Pipeline2D;
+					if (m_Pipeline2D.m_PipelineLayout == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create pipeline layout for 2D UI pipeline (function Renderer::CreatePipelineLayout in UI constructor)!");
+					}
 
-			UI(Engine& engine) : m_Engine(engine), m_Pipeline2D(engine.m_Renderer) {
-				Renderer& renderer = engine.m_Renderer;
-				Renderer::Shader vertexShader(renderer);
-				Renderer::Shader fragmentShader(renderer);
-				if (!vertexShader.Compile(Pipeline2D::vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile vertex shader for UI::Pipeline2D (function Renderer::Shader::Compile in UI::Pipeline2D constructor)!");
-				}
-				if (!fragmentShader.Compile(Pipeline2D::fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile vertex shader for UI::Pipeline2D (function Renderer::Shader::Compile in UI::Pipeline2D constructor)!");
-				}
-
-				VkShaderModule vertexShaderModule = vertexShader.CreateShaderModule();
-				VkShaderModule fragmentShaderModule = fragmentShader.CreateShaderModule();
-
-				const VkPipelineShaderStageCreateInfo shaderStages[2] {
-					{
-						.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-						.pNext = nullptr,
+					VkGraphicsPipelineCreateInfo pipelineInfo {
+						.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+						.pNext = &renderingInfo,
 						.flags = 0,
-						.stage = VK_SHADER_STAGE_VERTEX_BIT,
-						.module = vertexShaderModule,
-						.pName = "main",
-						.pSpecializationInfo = nullptr,
-					},
-					{
-						.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-						.pNext = nullptr,
-						.flags = 0,
-						.stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-						.module = fragmentShaderModule,
-						.pName = "main",
-						.pSpecializationInfo = nullptr,
-					},
-				};
-
-				VkVertexInputBindingDescription vertexBinding {
-					.binding = 0,
-					.stride = sizeof(Vertex),
-					.inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-				};
-
-				VkPipelineVertexInputStateCreateInfo vertexInputStateInfo {
-					.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.vertexBindingDescriptionCount = 1,
-					.pVertexBindingDescriptions = &vertexBinding,
-					.vertexAttributeDescriptionCount = Pipeline2D::vertex_input_attributes_count,
-					.pVertexAttributeDescriptions = Pipeline2D::vertex_input_attributes,
-				};
-
-				VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateInfo {
-					.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-					.primitiveRestartEnable = VK_FALSE,
-				};
-
-				VkPipelineViewportStateCreateInfo viewPortStateInfo {
-					.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.viewportCount = 1,
-					.pViewports = nullptr,
-					.scissorCount = 1,
-					.pScissors = nullptr,
-				};
-
-				VkPipelineRasterizationStateCreateInfo rasterizationStateInfo {
-					.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.depthClampEnable = VK_FALSE,
-					.rasterizerDiscardEnable = VK_FALSE,
-					.polygonMode = VK_POLYGON_MODE_FILL,
-					.cullMode = VK_CULL_MODE_NONE,
-					.frontFace = VK_FRONT_FACE_CLOCKWISE,
-					.depthBiasClamp = VK_FALSE,
-					.lineWidth = 1.0f,
-				};
-
-				VkPipelineMultisampleStateCreateInfo multisampleStateInfo {
-					.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.rasterizationSamples = renderer.GetMaxColorSamples(),
-					.sampleShadingEnable = VK_TRUE,
-					.minSampleShading = 0.2f,
-					.pSampleMask = nullptr,
-					.alphaToCoverageEnable = VK_FALSE,
-					.alphaToOneEnable = VK_FALSE,
-				};
-
-				VkPipelineColorBlendAttachmentState colorBlendAttachment {
-					.blendEnable = VK_TRUE,
-					.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-					.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-					.colorBlendOp = VK_BLEND_OP_ADD,
-					.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-					.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-					.alphaBlendOp = VK_BLEND_OP_ADD,
-					.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-				};
-
-				VkPipelineColorBlendStateCreateInfo colorBlendStateInfo {
-					.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.logicOpEnable = VK_FALSE,
-					.attachmentCount = 1,
-					.pAttachments = &colorBlendAttachment,
-					.blendConstants = { 0, 0, 0, 0 },
-				};
-
-				VkDynamicState dynamicStates[2] {
-					VK_DYNAMIC_STATE_VIEWPORT,
-					VK_DYNAMIC_STATE_SCISSOR,
-				};
-
-				VkPipelineDynamicStateCreateInfo dynamicStateInfo {
-					.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.dynamicStateCount = 2,
-					.pDynamicStates = dynamicStates,
-				};
-
-				VkPipelineRenderingCreateInfo renderingInfo {
-					.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-					.pNext = nullptr,
-					.viewMask = 0,
-					.colorAttachmentCount = 1,
-					.pColorAttachmentFormats = &renderer.m_SwapchainSurfaceFormat.format,
-					.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
-					.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
-				};
-
-				VkGraphicsPipelineCreateInfo pipelineInfo {
-					.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-					.pNext = &renderingInfo,
-					.flags = 0,
-					.stageCount = 2,
-					.pStages = shaderStages,
-					.pVertexInputState = &vertexInputStateInfo,
-					.pInputAssemblyState = &inputAssemblyStateInfo,
-					.pTessellationState = nullptr,
-					.pViewportState = &viewPortStateInfo,
-					.pRasterizationState = &rasterizationStateInfo,
-					.pMultisampleState = &multisampleStateInfo,
-					.pDepthStencilState = nullptr,
-					.pColorBlendState = &colorBlendStateInfo,
-					.pDynamicState = &dynamicStateInfo,
-					.layout = m_Pipeline2D.m_PipelineLayout,
-					.renderPass = VK_NULL_HANDLE,
-					.subpass = 0,
-					.basePipelineHandle = VK_NULL_HANDLE,
-					.basePipelineIndex = 0,
-				};
-				if (!renderer.CreateGraphicsPipelines(1, &pipelineInfo, &m_Pipeline2D.m_Pipeline)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create UI pipelines (function Renderer::CreateGraphicsPipelines in UI constructor)!");
+						.stageCount = 2,
+						.pStages = shaderStages,
+						.pVertexInputState = &vertexInputStateInfo,
+						.pInputAssemblyState = &inputAssemblyStateInfo,
+						.pTessellationState = nullptr,
+						.pViewportState = &viewPortStateInfo,
+						.pRasterizationState = &rasterizationStateInfo,
+						.pMultisampleState = &multisampleStateInfo,
+						.pDepthStencilState = nullptr,
+						.pColorBlendState = &colorBlendStateInfo,
+						.pDynamicState = &dynamicStateInfo,
+						.layout = m_Pipeline2D.m_PipelineLayout,
+						.renderPass = VK_NULL_HANDLE,
+						.subpass = 0,
+						.basePipelineHandle = VK_NULL_HANDLE,
+						.basePipelineIndex = 0,
+					};
+					if (!renderer.CreateGraphicsPipelines(1, &pipelineInfo, &m_Pipeline2D.m_Pipeline)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create UI pipelines (function Renderer::CreateGraphicsPipelines in UI constructor)!");
+					}
+					vkDestroyShaderModule(renderer.m_VulkanDevice, vertexShaderModule, renderer.m_VulkanAllocationCallbacks);
+					vkDestroyShaderModule(renderer.m_VulkanDevice, fragmentShaderModule, renderer.m_VulkanAllocationCallbacks);
 				}
-				vkDestroyShaderModule(renderer.m_VulkanDevice, vertexShaderModule, renderer.m_VulkanAllocationCallbacks);
-				vkDestroyShaderModule(renderer.m_VulkanDevice, fragmentShaderModule, renderer.m_VulkanAllocationCallbacks);
 			}
+
+		public:
 
 			UI(const UI&) = delete;
 			UI(UI&&) = delete;
+
+			Window* AddWindow(const char* stringID, WindowState state, IntVec2 pos, Vec2_T<uint32_t> size) {
+				if (m_WindowLookUp.Contains(stringID)) {
+					PrintError(ErrorOrigin::UI, 
+						"attempting to add window with an already existing string ID (in function UI::AddWindow)!");
+					return nullptr;
+				}
+				Window* res = m_WindowLookUp.Emplace(stringID, *this, stringID, state, 
+					Rect { .m_Min { pos.x, pos.y }, .m_Max { pos.x + (int)size.x, pos.y + (int)size.y } });
+				if (!res) {
+					PrintError(ErrorOrigin::UI, "failed to add window (function UI::Dictionary::Emplace in function UI::AddWindow)!");
+					return nullptr;
+				}
+				m_Windows.PushBack(res);
+				return res;
+			}
+
+		private:
+
+			void SwapchainCreateCallback(Vec2_T<uint32_t> renderResolution) {
+				for (Window* window : m_Windows) {
+					assert(window);
+					window->RenderResolutionChange(renderResolution);
+				}
+			}
+
+			void Terminate() {
+				m_StaticQuadMesh2D.Terminate();
+				m_Engine.m_Renderer.DestroyPipeline(m_Pipeline2D.m_Pipeline);
+				m_Engine.m_Renderer.DestroyPipelineLayout(m_Pipeline2D.m_PipelineLayout);
+				m_Engine.m_Renderer.DestroyDescriptorSetLayout(m_Pipeline2D.m_DescriptorSetLayout);
+			}
+
+		public:
 		};
 
 		class EntityConstructor {
@@ -1351,6 +1793,7 @@ void main() {
 
 		const uint32_t m_Initialized;
 
+		UI m_UI;
 		Renderer m_Renderer;
 		TextRenderer m_TextRenderer;
 
@@ -1366,7 +1809,20 @@ void main() {
 		CameraData2 m_GameCameraData2{};
 		CameraData2 m_DebugCameraData2{};
 
-		Mesh<MeshType::Static> m_StaticQuadMesh;
+		StaticMesh m_StaticQuadMesh;
+
+		static void CriticalError(ErrorOrigin origin, const char* err) {
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
+				"Engine called a critical error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
+			s_engine_instance->~Engine();
+			s_engine_instance = nullptr;
+			fmt::print(fmt::emphasis::bold, "Stopping program execution...\n");
+			glfwTerminate();
+#ifdef DEBUG
+			assert(false);
+#endif
+			exit(EXIT_FAILURE);
+		}
 
 		static void RendererCriticalErrorCallback(const Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkResult vkErr) {
 			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
@@ -1380,6 +1836,9 @@ void main() {
 			}
 			fmt::print(fmt::emphasis::bold, "Stopping program execution...\n");
 			glfwTerminate();
+#ifdef DEBUG
+			assert(false);
+#endif
 			exit(EXIT_FAILURE);
 		}
 
@@ -1396,10 +1855,16 @@ void main() {
 			}
 			fmt::print(fmt::emphasis::bold, "Stopping program execution...\n");
 			glfwTerminate();
+#ifdef DEBUG
+			assert(false);
+#endif
 			exit(EXIT_FAILURE);
 		}
 
-		static void SwapchainCreateCallback(const Renderer* renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews) {
+		static void SwapchainCreateCallback(const Renderer& renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews) {
+			assert(s_engine_instance);
+			Vec2_T<uint32_t> renderResolution { extent.width, extent.height };
+			s_engine_instance->m_UI.SwapchainCreateCallback(renderResolution);
 		}
 
 		static inline bool UpdateEngineInstance(Engine* engine) {
@@ -1412,14 +1877,17 @@ void main() {
 			return true;
 		}	
 
-		Engine(const char* appName, GLFWwindow* window, bool includeImGui, size_t maxFontCount, size_t entityConstructorCount, 
+		Engine(const char* appName, GLFWwindow* window, size_t maxUIWindows, size_t entityConstructorCount, 
 			EntityConstructor* pEntityConstructors, size_t entityReservation)
 			: m_Initialized(UpdateEngineInstance(this)), 
+				m_UI(*this, maxUIWindows),
 				m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, 
-					includeImGui, RendererCriticalErrorCallback, SwapchainCreateCallback),
-				m_TextRenderer(m_Renderer, maxFontCount, TextRendererCriticalErrorCallback),
+					false, RendererCriticalErrorCallback, SwapchainCreateCallback),
+				m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
 				m_EntityAllocator(), m_EntityConstructorCount(entityConstructorCount), m_pEntityConstructors(pEntityConstructors),
-				m_StaticQuadMesh(*this) {
+				m_StaticQuadMesh(*this) 
+		{
+			m_UI.Initialize();
 			m_Entities.Reserve(entityReservation);
 			static constexpr Vertex quadVertices[4] {
 				{
@@ -1450,8 +1918,12 @@ void main() {
 			m_StaticQuadMesh.CreateBuffers(4, quadVertices, 6, quadIndices);
 		}
 
+		Engine(const Engine&) = delete;
+		Engine(Engine&&) = delete;
+
 		~Engine() {
 			m_StaticQuadMesh.Terminate();
+			m_UI.Terminate();
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
 			for (Entity* entity : m_Entities) {
@@ -1460,24 +1932,23 @@ void main() {
 			}
 		}
 
-		static void CriticalError(ErrorOrigin origin, const char* err) {
-			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
-				"Engine called a critical error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
-			s_engine_instance->~Engine();
-			s_engine_instance = nullptr;
-			fmt::print(fmt::emphasis::bold, "Stopping program execution...\n");
-			glfwTerminate();
-			exit(EXIT_FAILURE);
+		Vec2_T<uint32_t> GetRenderResolution() {
+			return { m_Renderer.m_SwapchainExtent.width, m_Renderer.m_SwapchainExtent.height };
+		}
+
+		UI& GetUI() {
+			return m_UI;
 		}
 
 		GraphicsPipeline& AddGraphicsPipeline(VkPipeline pipeline, VkPipelineLayout pipelineLayout, 
-			uint32_t descriptorSetCount, size_t entityReserve) {
+			uint32_t pushConstantCount, uint32_t descriptorSetCount, size_t entityReserve) {
 			if (pipeline == VK_NULL_HANDLE || pipelineLayout == VK_NULL_HANDLE) {
 				CriticalError(ErrorOrigin::Uncategorized, "attempting to add graphics pipeline that's null (function AddGraphicsPipeline)!");
 			}
 			GraphicsPipeline& res = m_GraphicsPipelines.EmplaceBack();
-			res.m_GpuPipeline = pipeline;
-			res.m_GpuPipelineLayout = pipelineLayout;
+			res.m_Pipeline = pipeline;
+			res.m_PushConstantCount = pushConstantCount;
+			res.m_PipelineLayout = pipelineLayout;
 			res.m_DescriptorSetCount = descriptorSetCount;
 			res.m_Entites.Reserve(entityReserve);
 			return res;
@@ -1526,7 +1997,7 @@ void main() {
 				CameraData1* cameras[2] = { &m_GameCamera, &m_DebugCamera };
 				for (size_t i = 0; i < 1; i++) {
 					for (GraphicsPipeline& pipeline : m_GraphicsPipelines) {
-						vkCmdBindPipeline(drawData.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_GpuPipeline);
+						vkCmdBindPipeline(drawData.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_Pipeline);
 						for (Entity* entity : pipeline.m_Entites) {
 							VkDescriptorSet* pDescriptorSets = nullptr;
 							uint32_t meshCount = 0;
@@ -1534,7 +2005,7 @@ void main() {
 							entity->RenderUpdate(pipeline, *cameras[i], pipeline.m_DescriptorSetCount, &pDescriptorSets, meshCount, &meshes);
 							if (pDescriptorSets) {
 								vkCmdBindDescriptorSets(drawData.commandBuffer, 
-									VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_GpuPipelineLayout, 0, pipeline.m_DescriptorSetCount, pDescriptorSets, 
+									VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_PipelineLayout, 0, pipeline.m_DescriptorSetCount, pDescriptorSets, 
 									0, nullptr);
 							}
 							if (meshCount && !meshes) {
@@ -1558,10 +2029,9 @@ void main() {
 		}
 	};
 
-	typedef Engine::MeshType MeshType;
-	typedef Engine::Mesh<MeshType::Static> StaticMesh;
-	typedef Engine::TextureType TextureType;
-	typedef Engine::Texture<TextureType::Static> StaticTexture;
+	typedef Engine::UI UI;
+	typedef Engine::StaticMesh StaticMesh;
+	typedef Engine::StaticTexture StaticTexture;
 	typedef Engine::Entity Entity;
 	typedef Engine::GraphicsPipeline GraphicsPipeline;
 	typedef Engine::CameraData1 CameraData;
