@@ -146,11 +146,11 @@ namespace engine {
 			if (ftRes) {
 				if (ftRes == FT_Err_Unknown_File_Format) {
 					PrintError(ErrorOrigin::FreeType, 
-						"failed to load font due to unknown file format (function FT_New_Face in function CreateFontTexture)", ftRes);
+						"failed to load font due to unknown file format (function FT_New_Face in function CreateGlyphAtlas)", ftRes);
 				}
 				else {
 					PrintError(ErrorOrigin::FreeType, 
-						"failed to open font file (function FT_New_Face in function CreateFontTexture)!", ftRes);
+						"failed to open font file (function FT_New_Face in function CreateGlyphAtlas)!", ftRes);
 				}
 				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "failed to load font {}\n", fontFileName);
 				return {};
@@ -243,7 +243,7 @@ namespace engine {
 					*/
 				}
 			}
-			FtCheck(FT_Done_Face(face), "failed to terminate FreeType face (function FT_Done_Face in function CreateFontTexture)!");
+			FtCheck(FT_Done_Face(face), "failed to terminate FreeType face (function FT_Done_Face in function CreateGlyphAtlas)!");
 			return true;
 		}
 
@@ -309,21 +309,60 @@ namespace engine {
 			Middle = 1,
 		};
 
+		static constexpr inline uint8_t ClampComponent(uint32_t comp) {
+			return comp & ~255 ? 255 : (uint8_t)comp;
+		}
+
+		static constexpr inline uint8_t GetComponentRGBA(uint32_t color, uint32_t component) {
+			return (uint8_t)(color << 8 * (3 - component) >> 24);
+		}
+
+		static constexpr inline uint32_t BlendTextColorRGBA(uint32_t t, uint32_t bg) {
+			uint8_t bgA = bg >> 24;
+			if (!(bg >> 24)) {
+				return t;
+			}
+			uint8_t tA = t >> 24;	
+			return ClampComponent((GetComponentRGBA(t, 0) * tA + GetComponentRGBA(bg, 0) * (255 - tA)) / 255)
+				+ (ClampComponent((GetComponentRGBA(t, 1) * tA + GetComponentRGBA(bg, 1) * (255 - tA)) / 255) << 8)
+				+ (ClampComponent((GetComponentRGBA(t, 2) * tA + GetComponentRGBA(bg, 2) * (255 - tA)) / 255) << 16)
+				+ (ClampComponent(bgA + tA) << 24);
+		}
+
+		struct RenderTextInfo {
+			const GlyphAtlas& m_GlyphAtlas;
+			Vec2_T<uint32_t> m_Spacing;
+			uint32_t m_TextColor;
+			uint32_t m_BackGroundColor;
+		};
+
 		template<TextAlignment text_alignment_T = TextAlignment::Left>
-		TextImage RenderText(const char* text, const GlyphAtlas& atlas, uint32_t color,
-			Vec2_T<uint32_t> frameExtent, Vec2_T<uint32_t> spacing) {
+		TextImage RenderText(const char* text, const RenderTextInfo& renderInfo, Vec2_T<uint32_t> frameExtent, uint32_t* bgImage = nullptr) {
 			static_assert(sizeof(uint32_t) == 4, "size of uint32_t was not 4!");
+			static_assert(sizeof(uint8_t) == 1, "size of uint8_t was not 1!");
 			if (frameExtent.x == 0 || frameExtent.y == 0) {
 				PrintError(ErrorOrigin::Uncategorized, "frame size was 0 (in function TextRenderer::RenderText)!");
 				return {};
 			}
+			const GlyphAtlas& atlas = renderInfo.m_GlyphAtlas;
+			Vec2_T<uint32_t> spacing = renderInfo.m_Spacing;
 			TextImage res{};
 			res.m_Extent = frameExtent;
 			size_t resPixelCount = res.m_Extent.x * res.m_Extent.y;
 			size_t allocationSize = resPixelCount * 4;
 			res.m_Image = (uint32_t*)malloc(allocationSize);
 			if (res.m_Image) {
-				memset(res.m_Image, 0, allocationSize);
+				if (bgImage) {
+					memcpy(res.m_Image, bgImage, allocationSize);
+				}
+				else if (renderInfo.m_BackGroundColor) {
+					for (size_t i = 0; i < resPixelCount; i++) {
+						res.m_Image[i] = renderInfo.m_BackGroundColor;
+					}
+				}
+				else {
+					memset(res.m_Image, 0, allocationSize);
+				}
 			}
 			else {
 				PrintError(ErrorOrigin::Uncategorized, "failed to allocate memory (function malloc in function RenderText)!");
@@ -378,13 +417,15 @@ namespace engine {
 								assert(atlasIndex < atlasPixelCount && resImageIndex < resPixelCount);
 								float val = (float)atlas.m_Atlas[atlasIndex] / 255;
 								if (val != 0.0f) {
-									uint32_t trueColor = color;
-									uint8_t* pTrueColor = (uint8_t*)&trueColor;
-									const uint8_t* pColor = (uint8_t*)&color;
-									for (size_t i = 0; i < 4; i++) {
-										pTrueColor[i] = val * pColor[i];
-									}
-									res.m_Image[resImageIndex] = trueColor;
+									const uint8_t* pColor = (uint8_t*)&renderInfo.m_TextColor;
+									uint8_t trueColor[4] {
+										(uint8_t)(val * pColor[0]),
+										(uint8_t)(val * pColor[1]),
+										(uint8_t)(val * pColor[2]),
+										(uint8_t)(val * pColor[3]),
+									};
+									uint32_t& bgCol = res.m_Image[resImageIndex];
+									bgCol = BlendTextColorRGBA(*(uint32_t*)trueColor, bgCol);
 								}
 								++pen.x;
 							}
@@ -432,13 +473,15 @@ namespace engine {
 								assert(resImageIndex < resPixelCount && atlasImageIndex < atlasPixelCount);
 								float val = (float)atlas.m_Atlas[atlasImageIndex] / 255;
 								if (val != 0.0f) {
-									uint32_t trueColor = color;
-									uint8_t* pTrueColor = (uint8_t*)&trueColor;
-									const uint8_t* pColor = (uint8_t*)&color;
-									for (size_t i = 0; i < 4; i++) {
-										pTrueColor[i] = val * pColor[i];
-									}
-									res.m_Image[resImageIndex] = trueColor;
+									const uint8_t* pColor = (uint8_t*)&renderInfo.m_TextColor;
+									uint8_t trueColor[4] {
+										(uint8_t)(val * pColor[0]),
+										(uint8_t)(val * pColor[1]),
+										(uint8_t)(val * pColor[2]),
+										(uint8_t)(val * pColor[3]),
+									};
+									uint32_t& bgCol = res.m_Image[resImageIndex];
+									bgCol = BlendTextColorRGBA(*(uint32_t*)trueColor, bgCol);
 								}
 								++pen.x;
 							}
