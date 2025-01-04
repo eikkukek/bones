@@ -29,10 +29,10 @@ namespace engine {
 	static_assert(sizeof(size_t) >= 4, "size of size_t isn't big enough!");
 
 	constexpr inline uint32_t PackColorRBGA(const Vec4& color) {
-		return ((uint32_t)(color.w * 255) << 24) 
-			+ ((uint32_t)(color.z * 255) << 16)
+		return (uint32_t)(color.x * 255)
 			+ ((uint32_t)(color.y * 255) << 8)
-			+ (uint32_t)(color.x * 255);
+			+ ((uint32_t)(color.z * 255) << 16)
+			+ ((uint32_t)(color.w * 255) << 24);
 	}
 
 	class Renderer {
