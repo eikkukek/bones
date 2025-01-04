@@ -4,6 +4,8 @@
 #include "text_renderer.hpp"
 #include "math.hpp"
 #include "vulkan/vulkan_core.h"
+#define STB_IMAGE_IMPLEMENTATION
+#include "third_party/stb_image.h"
 #include <assert.h>
 #include <cstdio>
 #include <cstdlib>
@@ -36,9 +38,10 @@ namespace engine {
 			OutOfMemory = 4,
 			IndexOutOfBounds = 5,
 			Vulkan = 6,
-			Entity = 7,
-			DynamicArray = 8,
-			FileParsing = 9,
+			Stb = 7,
+			Entity = 8,
+			DynamicArray = 9,
+			FileParsing = 10,
 			MaxEnum,
 		};
 
@@ -51,6 +54,7 @@ namespace engine {
 				"OutOfMemory",
 				"IndexOutOfBounds",
 				"Vulkan",
+				"stb",
 				"Entity",
 				"DynamicArray",
 				"FileParsing",
@@ -1917,6 +1921,22 @@ void main() {
 			const char* m_TypeName;
 			Entity* (*m_NewEntityFunction)(EntityAllocator&);
 		};
+
+		static bool LoadImage(const char* fileName, uint32_t components, uint8_t*& outPixels, Vec2_T<uint32_t>& outExtent) {
+			int x, y, texChannels;
+			outPixels = stbi_load(fileName, &x, &y, &texChannels, components);
+			if (!outPixels) {
+				PrintError(ErrorOrigin::Stb, 
+					"failed to load image (function stbi_load in function LoadImage)!");
+				return false;
+			}
+			outExtent = { (uint32_t)x, (uint32_t)y };
+			return true;
+		}
+
+		static void FreeImage(uint8_t* pixels) {
+			free(pixels);
+		}
 
 		inline static Engine* s_engine_instance = nullptr;
 
