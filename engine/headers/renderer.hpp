@@ -265,6 +265,17 @@ namespace engine {
 			Shader(Renderer& renderer) noexcept 
 				: m_Renderer(renderer), m_GlslangShader(nullptr), m_GlslangProgram(nullptr) {}
 
+			~Shader() {
+				if (m_GlslangShader) {
+					glslang_shader_delete(m_GlslangShader);
+					m_GlslangShader = nullptr;
+				}
+				if (m_GlslangProgram) {
+					glslang_program_delete(m_GlslangProgram);
+					m_GlslangProgram = nullptr;
+				}
+			}
+
 			static void PrintShaderMessage(const char* log, const char* dLog) {
 				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "{}\n{}", log, dLog);
 			}
@@ -383,17 +394,6 @@ namespace engine {
 					return VK_NULL_HANDLE;
 				}
 				return res;
-			}
-
-			~Shader() {
-				if (m_GlslangShader) {
-					glslang_shader_delete(m_GlslangShader);
-					m_GlslangShader = nullptr;
-				}
-				if (m_GlslangProgram) {
-					glslang_program_delete(m_GlslangProgram);
-					m_GlslangProgram = nullptr;
-				}
 			}
 		};
 
@@ -832,6 +832,147 @@ namespace engine {
 			State state{};
 		};
 
+		class GraphicsPipelineDefaults {
+		public:
+
+			static constexpr VkPipelineRenderingCreateInfo GetRenderingCreateInfo(uint32_t colorAttachmentCount, const VkFormat* colorAttachmentFormats, 
+					VkFormat depthAttachmentFormat, VkFormat depthStencilFormat = VK_FORMAT_UNDEFINED) {
+				VkPipelineRenderingCreateInfo res {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+					.pNext = nullptr,
+					.viewMask = 0,
+					.colorAttachmentCount = colorAttachmentCount,
+					.pColorAttachmentFormats = colorAttachmentFormats,
+					.depthAttachmentFormat = depthStencilFormat,
+					.stencilAttachmentFormat = depthAttachmentFormat,
+				};
+				return res;
+			}
+
+			static constexpr VkPipelineShaderStageCreateInfo GetShaderStageInfo(VkShaderModule shadermodule, VkShaderStageFlagBits shaderStage) {
+				VkPipelineShaderStageCreateInfo res {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.stage = shaderStage,
+					.module = shadermodule,
+					.pName = "main",
+					.pSpecializationInfo = nullptr,
+				};
+				return res;
+			};
+
+			static constexpr VkPipelineVertexInputStateCreateInfo GetVertexInputStateInfo(uint32_t bindingCount, const VkVertexInputBindingDescription* bindings,
+					uint32_t attributeCount, const VkVertexInputAttributeDescription* attributes) {
+				VkPipelineVertexInputStateCreateInfo res {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.vertexBindingDescriptionCount = bindingCount,
+					.pVertexBindingDescriptions = bindings,
+					.vertexAttributeDescriptionCount = attributeCount,
+					.pVertexAttributeDescriptions = attributes,
+				};
+				return res;
+			};
+
+			static constexpr VkPipelineInputAssemblyStateCreateInfo input_assembly_state {
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+				.primitiveRestartEnable = VK_FALSE,
+			};
+
+			static constexpr VkPipelineViewportStateCreateInfo viewport_state {
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.viewportCount = 1,
+				.pViewports = nullptr,
+				.scissorCount = 1,
+				.pScissors = nullptr,
+			};
+
+			static constexpr VkPipelineRasterizationStateCreateInfo rasterization_state {
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.depthClampEnable = VK_FALSE,
+				.rasterizerDiscardEnable = VK_FALSE,
+				.polygonMode = VK_POLYGON_MODE_FILL,
+				.cullMode = VK_CULL_MODE_BACK_BIT,
+				.frontFace = VK_FRONT_FACE_CLOCKWISE,
+				.depthBiasEnable = VK_FALSE,
+				.depthBiasConstantFactor = VK_FALSE,
+				.depthBiasClamp = 0.0f,
+				.depthBiasSlopeFactor = 0.0f,
+				.lineWidth = 1.0f,
+			};
+
+			static constexpr VkPipelineMultisampleStateCreateInfo multisample_state {
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+				.sampleShadingEnable = VK_FALSE,
+				.minSampleShading = 0.0f,
+				.pSampleMask = nullptr,
+				.alphaToCoverageEnable = VK_FALSE,
+				.alphaToOneEnable = VK_FALSE,
+			};
+
+			static constexpr VkPipelineDepthStencilStateCreateInfo depth_stencil_state {
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.depthTestEnable = VK_TRUE,
+				.depthWriteEnable = VK_TRUE,
+				.depthCompareOp = VK_COMPARE_OP_LESS,
+				.depthBoundsTestEnable = VK_FALSE,
+				.stencilTestEnable = VK_FALSE,
+				.front {},
+				.back {},
+				.minDepthBounds = 0.0f,
+				.maxDepthBounds = 1.0f,
+			};
+
+			static constexpr VkPipelineColorBlendAttachmentState color_blend_attachment_state {
+				.blendEnable = VK_TRUE,
+				.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+				.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+				.colorBlendOp = VK_BLEND_OP_ADD,
+				.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+				.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+				.alphaBlendOp = VK_BLEND_OP_ADD,
+				.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+			};
+
+			static constexpr VkPipelineColorBlendStateCreateInfo color_blend_state {
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.logicOpEnable = VK_FALSE,
+				.logicOp = VK_LOGIC_OP_COPY,
+				.attachmentCount = 0,
+				.pAttachments = 0,
+				.blendConstants { 0.0f, 0.0f, 0.0f, 0.0f },
+			};
+
+			static constexpr VkDynamicState dynamic_states[2] {
+				VK_DYNAMIC_STATE_VIEWPORT,
+				VK_DYNAMIC_STATE_SCISSOR,
+			};
+
+			static constexpr VkPipelineDynamicStateCreateInfo dynamic_state {
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.dynamicStateCount = 2,
+				.pDynamicStates = dynamic_states,
+			};
+		};
+
 		static constexpr uint32_t desired_frames_in_flight = 2;
 
 		static constexpr const char* vulkan_swapchain_extension_name = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
@@ -891,10 +1032,11 @@ namespace engine {
 		CommandBufferFreeList m_TransferCommandBufferFreeList;
 		CommandBufferFreeList m_GraphicsCommandBufferFreeList;
 
-		VkSampleCountFlags m_ColorMsaaSamples = 1;
-		VkSampleCountFlags m_DepthMsaaSamples = 1;
-		VkSurfaceKHR m_Surface = VK_NULL_HANDLE;
 		uint32_t m_MaxFragmentOutPutAttachments;
+		VkSampleCountFlags m_ColorMsaaSamples = VK_SAMPLE_COUNT_1_BIT;
+		VkSampleCountFlags m_DepthMsaaSamples = VK_SAMPLE_COUNT_1_BIT;
+		VkSurfaceFormatKHR m_SwapchainSurfaceFormat{};
+		VkFormat m_DepthOnlyFormat{};
 
 		Stack::Array<Fence> m_InFlightEarlyGraphicsFences { 0, nullptr };
 		Stack::Array<Fence> m_InFlightTransferFences { 0, nullptr };
@@ -912,6 +1054,7 @@ namespace engine {
 
 		VkQueue m_PresentQueue = VK_NULL_HANDLE;
 		VkExtent2D m_SwapchainExtent = { 0, 0 };
+
 		uint32_t m_FramesInFlight = 0;
 		uint32_t m_CurrentFrame = 0;
 
@@ -924,8 +1067,8 @@ namespace engine {
 
 		GLFWwindow* m_Window = nullptr;
 		VkSwapchainKHR m_Swapchain = VK_NULL_HANDLE;
+		VkSurfaceKHR m_Surface = VK_NULL_HANDLE;
 		Stack::Array<VkImage> m_SwapchainImages { 0, 0 };
-		VkSurfaceFormatKHR m_SwapchainSurfaceFormat{};
 		VkPresentModeKHR m_PresentMode{};
 		SwapchainCreateCallback m_SwapchainCreateCallback;
 
@@ -1834,6 +1977,10 @@ namespace engine {
 
 		void DestroyPipeline(VkPipeline pipeline) {
 			vkDestroyPipeline(m_VulkanDevice, pipeline, m_VulkanAllocationCallbacks);
+		}
+
+		void DestroyShaderModule(VkShaderModule module) {
+			vkDestroyShaderModule(m_VulkanDevice, module, m_VulkanAllocationCallbacks);
 		}
 
 		bool FindMemoryTypeIndex(uint32_t typeFilter, VkMemoryPropertyFlags properties, uint32_t& outIndex) const {
