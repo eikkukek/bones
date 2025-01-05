@@ -98,7 +98,7 @@ void main() {
 		};
 
 		engine::Engine::Vertex::GetVertexAttributes(vertexInputStateInfo.vertexAttributeDescriptionCount,
-			&vertexInputStateInfo.pVertexAttributeDescriptions);
+			(VkVertexInputAttributeDescription*&)vertexInputStateInfo.pVertexAttributeDescriptions);
 
 		VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateInfo {
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -327,6 +327,15 @@ public:
 	}
 };
 
+class TestCreature {
+public:
+
+	engine::World& m_World;
+	engine::Creature& m_Creature;
+
+	TestCreature(engine::World& world) : m_World(world), m_Creature(world.AddCreature({})) {}
+};
+
 int main() {
 	using namespace engine;
 	glfwInit();
@@ -363,6 +372,11 @@ int main() {
 		outTextureIndex = 0;
 		return true;
 	};
+
+	World& world = engine.LoadWorld({}, { 32, 32 }, { 32, 32 });
+
+	TestCreature testCreature(world);
+
 	while (!glfwWindowShouldClose(pWindow)) {
 		glfwPollEvents();
 		uiWindow->SetPosition(UI.m_CursorPosition);

@@ -85,7 +85,7 @@ namespace engine {
 		public:
 
 			typedef T* Iterator;
-			typedef T* const ConstIterator;
+			typedef const T* ConstIterator;
 
 			T* m_Data;
 			size_t m_Size;
@@ -177,7 +177,11 @@ namespace engine {
 				return &m_Data[diff];
 			}
 
-			Iterator begin() const {
+			Iterator begin() {
+				return m_Data;
+			}
+
+			ConstIterator begin() const {
 				return m_Data;
 			}
 
@@ -229,7 +233,7 @@ namespace engine {
 			private:
 
 				const Set& m_Set;
-				DynamicArray<size_t>::Iterator m_IndexIter;
+				DynamicArray<size_t>::ConstIterator m_IndexIter;
 				size_t m_BucketIndex;
 
 			public:
@@ -629,7 +633,17 @@ namespace engine {
 		};
 
 		struct Vertex {
-			static void GetVertexAttributes(uint32_t& outCount, const VkVertexInputAttributeDescription** outAttributes) {
+
+			static const VkVertexInputBindingDescription& GetVertexBinding() {
+				constexpr static VkVertexInputBindingDescription binding {
+					.binding = 0,
+					.stride = sizeof(Vertex),
+					.inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+				};
+				return binding;
+			}
+
+			static void GetVertexAttributes(uint32_t& outCount, VkVertexInputAttributeDescription*& outAttributes) {
 				static constexpr uint32_t attribute_count = 5;
 				static constexpr VkVertexInputAttributeDescription attributes[attribute_count] {
 					{ .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Position) },
@@ -638,9 +652,10 @@ namespace engine {
 					{ .location = 3, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Tangent) },
 					{ .location = 4, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, m_Bitangent) },
 				};
-				*outAttributes = attributes;
+				outAttributes = (VkVertexInputAttributeDescription*)attributes;
 				outCount = attribute_count;
 			}
+
 			Vec3 m_Position;
 			Vec3 m_Normal;
 			Vec2 m_UV;
@@ -1282,7 +1297,7 @@ namespace engine {
 			}
 
 			static void ResetInput() {
-				Key* const keysEnd = s_ActiveKeys.end();
+				const Key* keysEnd = s_ActiveKeys.end();
 				for (Key* iter = s_ActiveKeys.begin(); iter != keysEnd;) {
 					size_t index = (size_t)*iter;
 					if (s_HeldKeys[index]) {
@@ -1295,7 +1310,7 @@ namespace engine {
 					s_PressedKeys[index] = s_ReleasedKeys[index] = false;
 				}
 
-				MouseButton* const mouseButtonsEnd = s_ActiveMouseButtons.end();
+				const MouseButton* mouseButtonsEnd = s_ActiveMouseButtons.end();
 				for (MouseButton* iter = s_ActiveMouseButtons.begin(); iter != mouseButtonsEnd;) {
 					size_t index = (size_t)*iter;
 					if (s_HeldMouseButtons[index]) {
@@ -2246,7 +2261,7 @@ void main() {
 					m_Max.y > other.m_Min.y && other.m_Max.y > m_Min.y;
 			}
 
-			Vec2 Dimensions() const {
+			Vec2_T<T> Dimensions() const {
 				return m_Max - m_Min;
 			}
 		};
@@ -2285,15 +2300,14 @@ void main() {
 			}
 		};
 
-		class Chunk {
-		public:
+		struct Chunk {
 
-			const Rect<int> m_BoundingBox;
-			const Vec2_T<uint32_t> m_ChunkCoords;
-			DynamicArray<const Ground*> m_Grounds;
+			const Rect<float> m_BoundingBox;
+			const Vec2_T<uint32_t> m_ChunkMatrixCoords;
+			DynamicArray<const Ground*> m_Grounds{};
 			
-			Chunk(Vec2_T<uint32_t> chunkCoords, Vec2_T<uint32_t> dimensions, IntVec2 min) noexcept : 
-				m_BoundingBox { .m_Min { min }, .m_Max { min + dimensions } }, m_ChunkCoords(chunkCoords), m_Grounds() {}
+			Chunk(Vec2_T<uint32_t> chunkCoords, Vec2 min, Vec2_T<uint32_t> dimensions) noexcept : 
+				m_BoundingBox { .m_Min { min }, .m_Max { min + dimensions } }, m_ChunkMatrixCoords(chunkCoords), m_Grounds() {}
 
 			bool IsPointInside(const Vec3& point) const {
 				return m_BoundingBox.IsPointInside(Vec2(point.x, point.z));
@@ -2309,34 +2323,54 @@ void main() {
 			}
 		};
 
-		class Creature {
-		public:
+		struct WorldPipelineRenderData {
+			MeshData m_MeshData{};
+			VkDescriptorSet m_MatricesDescriptorSet{};
+		};
 
-			Creature(const Chunk* chunk, const Vec3& position) 
-				: m_Chunk(chunk), m_Position(position) {}
+		class Creature {
+			friend class Engine;
+
+		private:
+
+			Creature(const Vec3& position, const Chunk* chunk) : m_Position(position), m_Chunk(chunk) {
+				assert(chunk);
+				const Ground* ground = chunk->FindGround(position);
+				m_Position.y = ground ? ground->GetHeightAtPosition(position) : 0.0f;
+			}
 
 			const Chunk* m_Chunk;
 			Vec3 m_Position;
 
-			Vec3 (*m_MovementUpdate)(const Creature& creature, bool& ignoreGround);
+		public:
 
-			Vec3 GetNewPosition(bool& ignoreGround) const {
-				if (m_MovementUpdate) {
-					return m_MovementUpdate(*this, ignoreGround);
+			Vec3(*m_MovementVectorUpdate)(const Creature& creature){};
+			void (*m_MoveCallback)(const Creature& creature, const Vec3& position){};
+			void (*m_WorldPipelineRenderUpdate)(const Creature& creature, uint32_t& outRenderDataCount, WorldPipelineRenderData*& outPipelineRenderDatas){};
+
+		private:
+
+			Vec3 GetMovementVector() const {
+				if (m_MovementVectorUpdate) {
+					return m_MovementVectorUpdate(*this);
 				}
-				return {};
+				return m_Position;
 			}
 
 			void Move(const Vec3& position, const Ground* ground) {
+				if (!ground) {
+					return;
+				}
 				m_Position = position;
-				if (ground) {
-					float height = ground->GetHeightAtPosition(m_Position);
-					if (height == std::numeric_limits<float>::max()) {
-						PrintError(ErrorOrigin::GameLogic, 
-							"moving creature on ground that's outside the creature's position (function Ground::GetHeightAtPosition in function Creature::Move)!");
-						return;
-					}
-					m_Position.z = height;
+				float height = ground->GetHeightAtPosition(m_Position);
+				assert(height != std::numeric_limits<float>::max());
+				m_Position.z = height;
+				m_MoveCallback(*this, m_Position);
+			}
+
+			void WorldPipelineRenderUpdate(uint32_t& outRenderDataCount, WorldPipelineRenderData*& outPipelineRenderDatas) const {
+				if (m_WorldPipelineRenderUpdate) {
+					m_WorldPipelineRenderUpdate(*this, outRenderDataCount, outPipelineRenderDatas);
 				}
 			}
 		};
@@ -2344,21 +2378,218 @@ void main() {
 		class World {
 		public:
 
-			DynamicArray<Ground> m_Grounds;
-			DynamicArray<Chunk> m_Chunks;
-			Vec2_T<uint32_t> m_ChunksExtent;
+			friend class Engine;
 
-			World() : m_Grounds(), m_Chunks(), m_ChunksExtent() {}
+			struct Pipeline {
+				VkPipeline m_Pipeline{};
+				VkPipelineLayout m_PipelineLayout{};
+				VkDescriptorSetLayout m_DescriptorSetLayout{};
+			};
 
-			void Load(DynamicArray<Ground>&& grounds, Vec2_T<uint32_t> chunkDimensions, Vec2_T<uint32_t> chunksExtent) {
-				m_Grounds.Clear();
+			static constexpr const char* world_pipeline_vertex_shader = R"(
+#version 450
+
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUV;
+layout(location = 3) in vec3 inTangent;
+layout(location = 4) in vec3 inBitangent;
+
+layout(location = 0) out vec3 outPosition;
+
+layout(set = 0, binding = 0) uniform CameraMatrices {
+	mat4 c_Projection;
+	mat4 c_View;
+} camera_matrices;
+
+layout(push_constant) uniform PushConstant {
+	layout(offset = 0) mat4 c_Transform;
+} pc;
+
+void main() {
+	outPosition = inPosition;
+	gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(inPosition, 1.0f);
+}
+			)";
+
+			static constexpr const char* world_pipeline_fragment_shader = R"(
+#version 450
+
+layout(location = 0) in vec3 inPosition;
+
+layout(location = 0) out vec4 outColor;
+
+void main() {
+	outColor = vec4(inPosition, 1.0f);
+}
+			)";
+		private:
+
+			Engine& m_Engine;
+
+			DynamicArray<Ground> m_Grounds{};
+			DynamicArray<Chunk> m_ChunkMatrix{};
+			Vec2_T<uint32_t> m_ChunkMatrixSize{};
+			Rect<float> m_WorldRect{};
+			DynamicArray<Creature> m_Creatures{};
+
+			Vec2_T<uint32_t> m_ChunkDimensions{};
+
+			DynamicArray<VkImageView> m_DepthImageViews{};
+			Pipeline m_Pipeline{};
+
+			DynamicArray<VkImage> m_DepthImages{};
+
+			World(Engine& engine) : m_Engine(engine) {}
+
+			World(const World&) = delete;
+			World(World&&) = delete;
+
+		public:
+
+			Vec2_T<bool> IsOnBorder(const Vec3& position) {
+				Vec2 dimensionsHalf = m_WorldRect.Dimensions() / 2;
+				Vec2 pos = Vec2(position.x, position.z) + dimensionsHalf;
+				Vec2 frac(pos.x / m_ChunkDimensions.x, pos.y / m_ChunkDimensions.y);
+				IntVec2 intgr = frac;
+				return { frac.x == (float)intgr.x, frac.y == (float)intgr.y };
+			}
+
+			Creature& AddCreature(const Vec3& position) {
+				if (!m_ChunkMatrix.m_Size) {
+					CriticalError(ErrorOrigin::GameLogic, 
+						"attempting to add a creature to an empty world (in function World::AddCreature)!");
+				}
+				Vec3 pos(Clamp(position.x, m_WorldRect.m_Min.x + 0.01f, m_WorldRect.m_Max.x - 0.01f), 0.0f, Clamp(position.z, m_WorldRect.m_Min.y + 0.01f, m_WorldRect.m_Max.y - 0.01f));
+				Vec2_T<bool> isOnBorder = IsOnBorder(position);
+				if (isOnBorder.x) {
+					pos.x += 0.01f;
+				}
+				if (isOnBorder.y) {
+					pos.z += 0.01f;
+				}
+				for (const Chunk& chunk : m_ChunkMatrix) {
+					if (chunk.IsPointInside(pos)) {
+						return m_Creatures.EmplaceBack(pos, &chunk);
+					}
+				}
+				assert(false);
+			}
+
+		private:
+
+			void Initialize() {
+				Renderer& renderer = m_Engine.m_Renderer;
+				VkDescriptorSetLayoutBinding set0Binding0 {
+					.binding = 0,
+					.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+					.descriptorCount = 1,
+					.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+					.pImmutableSamplers = nullptr,
+				};
+				m_Pipeline.m_DescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 1, & set0Binding0);
+				if (m_Pipeline.m_DescriptorSetLayout == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create pipeline layout for world pipeline (function Renderer::CreateDescriptorSetLayout in function World::CreatePipeline)!");
+				}
+				VkPushConstantRange pushConstantRange {
+					.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+					.offset = 0,
+					.size = 64,
+				};
+				m_Pipeline.m_PipelineLayout = renderer.CreatePipelineLayout(1, &m_Pipeline.m_DescriptorSetLayout, 1, &pushConstantRange);
+
+				Renderer::Shader vertexShader(renderer);
+				Renderer::Shader fragmentShader(renderer);
+
+				if (!vertexShader.Compile(world_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to compile vertex shader code (function Renderer::Shader::Compile in function World::CreatePipeline)!");
+				}
+
+				if (!fragmentShader.Compile(world_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to compile fragment shader code (function Renderer::Shader::Compile in function World::CreatePipeline)!");
+				}
+
+				VkShaderModule shaderModules[2] {
+					vertexShader.CreateShaderModule(),
+					fragmentShader.CreateShaderModule(),
+				};
+
+				if (shaderModules[0] == VK_NULL_HANDLE || shaderModules[1] == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to create shader modules for world pipeline (function Renderer::Shader::CreateShaderModule in function World::Initialize)!");
+				}
+
+				VkPipelineShaderStageCreateInfo shaderStageCreateInfos[2] {
+					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(shaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
+					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(shaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
+				};
+
+				VkPipelineRenderingCreateInfo renderingInfo 
+					= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &m_Engine.m_Renderer.m_SwapchainSurfaceFormat.format, m_Engine.m_Renderer.m_DepthOnlyFormat);
+
+				const VkVertexInputBindingDescription& vertexBinding = Vertex::GetVertexBinding();
+				uint32_t attributeCount;
+				VkVertexInputAttributeDescription* vertexAttributes;
+				Vertex::GetVertexAttributes(attributeCount, vertexAttributes);
+
+				VkPipelineVertexInputStateCreateInfo vertexInputState = Renderer::GraphicsPipelineDefaults::GetVertexInputStateInfo(1, &vertexBinding, attributeCount, vertexAttributes);
+
+				VkPipelineColorBlendStateCreateInfo colorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
+				colorBlendState.attachmentCount = 1;
+				colorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
+
+				VkGraphicsPipelineCreateInfo pipelineInfo {
+					.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+					.pNext = &renderingInfo,
+					.stageCount = 2,
+					.pStages = shaderStageCreateInfos,
+					.pVertexInputState = &vertexInputState,
+					.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
+					.pTessellationState = nullptr,
+					.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
+					.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
+					.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
+					.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
+					.pColorBlendState = &colorBlendState,
+					.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
+					.layout = m_Pipeline.m_PipelineLayout,
+					.renderPass = VK_NULL_HANDLE,
+					.subpass = 0,
+					.basePipelineHandle = VK_NULL_HANDLE,
+					.basePipelineIndex = 0,
+				};
+
+				if (!renderer.CreateGraphicsPipelines(1, &pipelineInfo, &m_Pipeline.m_Pipeline)) {
+					CriticalError(ErrorOrigin::Renderer, "failed to create world graphics pipeline (function Renderer::CreateGraphicsPipelines in function World::CreatePipeline)!");
+				}
+
+				renderer.DestroyShaderModule(shaderModules[0]);
+				renderer.DestroyShaderModule(shaderModules[1]);
+			}
+
+			void Terminate() {
+				Renderer& renderer = m_Engine.m_Renderer;
+				renderer.DestroyPipeline(m_Pipeline.m_Pipeline);
+				renderer.DestroyPipelineLayout(m_Pipeline.m_PipelineLayout);
+				renderer.DestroyDescriptorSetLayout(m_Pipeline.m_DescriptorSetLayout);
+			}
+
+			void Load(DynamicArray<Ground>&& grounds, Vec2_T<uint32_t> chunkDimensions, Vec2_T<uint32_t> chunkMatrixSize) {
 				new (&m_Grounds) DynamicArray<Ground>(std::move(grounds));
-				m_Chunks.Clear();
-				m_Chunks.Reserve(chunksExtent.x * chunksExtent.y);
-				for (size_t x = 0; x < chunksExtent.x; x++) {
-					for (size_t y = 0; y < chunksExtent.y; y++) {
+				m_ChunkDimensions = chunkDimensions;
+				m_ChunkMatrixSize = chunkMatrixSize;
+				m_ChunkMatrix.Reserve(m_ChunkMatrixSize.x * m_ChunkMatrixSize.y);
+				Vec2 worldDimensions(m_ChunkMatrixSize.x * m_ChunkDimensions.x, m_ChunkMatrixSize.y * m_ChunkDimensions.y);
+				m_WorldRect.m_Max = Vec2(worldDimensions.x / 2.0f, worldDimensions.y / 2.0f);
+				m_WorldRect.m_Min = -m_WorldRect.m_Max;
+				for (size_t x = 0; x < m_ChunkMatrixSize.x; x++) {
+					for (size_t y = 0; y < m_ChunkMatrixSize.y; y++) {
 						Chunk& chunk 
-							= m_Chunks.EmplaceBack(Vec2_T<uint32_t>(x, y), chunkDimensions, x * chunkDimensions.x, y * chunkDimensions.y);
+							= m_ChunkMatrix.EmplaceBack(Vec2_T<uint32_t>(x, y), 
+								Vec2(m_WorldRect.m_Min.x + x * m_ChunkDimensions.x, m_WorldRect.m_Min.y + y * m_ChunkDimensions.y), m_ChunkDimensions);
 						for (const Ground& ground : m_Grounds) {
 							if (chunk.m_BoundingBox.OverLaps(ground.m_BoundingBox)) {
 								chunk.m_Grounds.PushBack(&ground);
@@ -2368,16 +2599,64 @@ void main() {
 				}
 			}
 
-			Chunk* GetChunk(Vec2_T<uint32_t> chunkCoords) {
-				uint32_t index = chunkCoords.x * m_ChunksExtent.y + chunkCoords.y;
-				if (index >= m_Chunks.m_Size) {
-					return nullptr;
+			void Unload() {
+				m_Grounds.Clear();
+				m_ChunkMatrix.Clear();
+				m_Creatures.Clear();
+			};
+
+			void Render(const Renderer::DrawData& drawData) const {
+				{
+					VkRenderingAttachmentInfo colorAttachment {
+						.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+						.pNext = nullptr,
+						.imageView = drawData.m_SwapchainImageView,
+						.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+						.resolveMode = VK_RESOLVE_MODE_NONE,
+						.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+						.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+						.clearValue { 0, 0, 0, 0 },
+					};
+					VkRenderingInfo renderingInfo {
+						.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.renderArea { .offset {}, .extent { m_Engine.m_Renderer.m_SwapchainExtent } },
+						.layerCount = 1,
+						.viewMask = 0,
+						.colorAttachmentCount = 1,
+						.pColorAttachments = &colorAttachment,
+					};
+					vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
+					for (const Creature& creature : m_Creatures) {
+						uint32_t renderDataCount = 0;
+						WorldPipelineRenderData* pipelineDatas = nullptr;
+						creature.WorldPipelineRenderUpdate(renderDataCount, pipelineDatas);
+						if (pipelineDatas) {
+							for (size_t i = 0; i < renderDataCount; i++) {
+								WorldPipelineRenderData& pipelineData = pipelineDatas[i];
+								vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline.m_PipelineLayout, 
+									0, 1, &pipelineData.m_MatricesDescriptorSet, 0, nullptr);
+								vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 0, 1, pipelineData.m_MeshData.m_VertexBuffers, pipelineData.m_MeshData.m_VertexBufferOffsets);
+								vkCmdBindIndexBuffer(drawData.m_CommandBuffer, pipelineData.m_MeshData.m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+								vkCmdDrawIndexed(drawData.m_CommandBuffer, pipelineData.m_MeshData.m_IndexCount, 1, 0, 0, 0);
+							}
+						}
+					}
+					vkCmdEndRendering(drawData.m_CommandBuffer);
 				}
-				return &m_Chunks[index];
 			}
 
-			Vec2_T<bool> BoundsCheck(Vec2_T<uint32_t> chunckCoords) {
-				return { chunckCoords.x >= m_ChunksExtent.x, chunckCoords.y >= m_ChunksExtent.y };
+			Chunk* GetChunk(Vec2_T<uint32_t> chunkMatrixCoords) {
+				uint32_t index = chunkMatrixCoords.x * m_ChunkMatrixSize.y + chunkMatrixCoords.y;
+				if (index >= m_ChunkMatrix.m_Size) {
+					return nullptr;
+				}
+				return &m_ChunkMatrix[index];
+			}
+
+			Vec2_T<bool> BoundsCheck(Vec2_T<uint32_t> chunkMatrixCoords) {
+				return { chunkMatrixCoords.x >= m_ChunkMatrixSize.x, chunkMatrixCoords.y >= m_ChunkMatrixSize.y };
 			}
 		};
 
@@ -2396,7 +2675,6 @@ void main() {
 		Set<Entity*, Entity::Hash> m_Entities{};
 		DynamicArray<GraphicsPipeline> m_GraphicsPipelines{};
 
-		DynamicArray<Creature> m_Creatures{};
 		World m_World;
 		DynamicArray<Ground> m_Grounds{};
 
@@ -2422,6 +2700,12 @@ void main() {
 			assert(false);
 #endif
 			exit(EXIT_FAILURE);
+		}
+
+		static void Assert(bool expression, ErrorOrigin origin, const char* err) {
+			if (!expression) {
+				CriticalError(origin, err);
+			}
 		}
 
 		static void RendererCriticalErrorCallback(const Renderer* renderer, Renderer::ErrorOrigin origin, const char* err, VkResult vkErr) {
@@ -2478,17 +2762,19 @@ void main() {
 		}	
 
 		Engine(const char* appName, GLFWwindow* window, size_t maxUIWindows, size_t entityConstructorCount, 
-			EntityConstructor* pEntityConstructors, size_t entityReservation)
-			: m_Initialized(UpdateEngineInstance(this)), 
-				m_UI(*this, maxUIWindows),
-				m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, 
-					false, RendererCriticalErrorCallback, SwapchainCreateCallback),
-				m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
-				m_EntityAllocator(), m_EntityConstructorCount(entityConstructorCount), m_pEntityConstructors(pEntityConstructors),
-				m_StaticQuadMesh(*this) 
+				EntityConstructor* pEntityConstructors, size_t entityReservation)
+				: m_Initialized(UpdateEngineInstance(this)), 
+					m_UI(*this, maxUIWindows),
+					m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, 
+						false, RendererCriticalErrorCallback, SwapchainCreateCallback),
+					m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
+					m_EntityAllocator(), m_EntityConstructorCount(entityConstructorCount), m_pEntityConstructors(pEntityConstructors),
+					m_StaticQuadMesh(*this),
+					m_World(*this)
 		{
 			m_UI.Initialize();
 			m_Entities.Reserve(entityReservation);
+
 			static constexpr Vertex quadVertices[4] {
 				{
 					.m_Position { -1.0f, 1.0f, 0.0f },
@@ -2511,17 +2797,22 @@ void main() {
 					.m_UV { 1.0f, 0.0f },
 				},
 			};
+
 			static constexpr uint32_t quadIndices[6] {
 				3, 2, 0,
 				1, 3, 0,
 			};
+
 			m_StaticQuadMesh.CreateBuffers(4, quadVertices, 6, quadIndices);
+
+			m_World.Initialize();
 		}
 
 		Engine(const Engine&) = delete;
 		Engine(Engine&&) = delete;
 
 		~Engine() {
+			m_World.Terminate();
 			m_StaticQuadMesh.Terminate();
 			m_UI.Terminate();
 			m_Renderer.Terminate();
@@ -2554,43 +2845,60 @@ void main() {
 			return res;
 		}
 
+		World& LoadWorld(DynamicArray<Ground>&& grounds, Vec2_T<uint32_t> chunkDimensions, Vec2_T<uint32_t> chunkMatrixSize) {
+			m_World.Unload();
+			m_World.Load(std::move(grounds), chunkDimensions, chunkMatrixSize);
+			return m_World;
+		}
+
 		void LogicUpdate() {
-			for (Creature& creature : m_Creatures) {
-				bool ignoreGround = false;
-				Vec3 position = creature.GetNewPosition(ignoreGround);
-				if (position == creature.m_Position) {
+			for (Creature& creature : m_World.m_Creatures) {
+				Vec3 movementVector = creature.GetMovementVector();
+				if (movementVector == Vec3(0.0f, movementVector.y, 0.0f)) {
 					continue;
 				}
+				Vec3 newPos = creature.m_Position + movementVector;
 				const Chunk* curChunk = creature.m_Chunk;
 				assert(curChunk);
-				Rect<int> chunkBoundingBox = curChunk->m_BoundingBox;
-				if (!curChunk->IsPointInside(creature.m_Position)) {
-					Vec2_T<int> newChunkCoords {
-						curChunk->m_ChunkCoords.x + creature.m_Position.x > curChunk->m_BoundingBox.m_Max.x ? 1 
-							: creature.m_Position.x < curChunk->m_BoundingBox.m_Min.x ? -1 : 0,
+				if (!curChunk->IsPointInside(newPos)) {
+					Vec2_T<int> newChunkMatrixCoords {
+						curChunk->m_ChunkMatrixCoords.x + newPos.x > curChunk->m_BoundingBox.m_Max.x ? 1
+							: newPos.x < curChunk->m_BoundingBox.m_Min.x ? -1 : 0,
 
-						curChunk->m_ChunkCoords.y + creature.m_Position.z > curChunk->m_BoundingBox.m_Max.y ? 1
-							: creature.m_Position.z < curChunk->m_BoundingBox.m_Min.y ? -1 : 0,
+						curChunk->m_ChunkMatrixCoords.y + newPos.z > curChunk->m_BoundingBox.m_Max.y ? 1
+							: newPos.z < curChunk->m_BoundingBox.m_Min.y ? -1 : 0,
 					};
-					Vec2_T<bool> outsideBounds = m_World.BoundsCheck(newChunkCoords);
+					Vec2_T<bool> outsideBounds = m_World.BoundsCheck(newChunkMatrixCoords);
 					if (outsideBounds.x && outsideBounds.y) {
 						fmt::print("attempting to go outside bounds!");
 						continue;
 					}
 					else if (outsideBounds.x) {
 						fmt::print("attempting to go outside bounds (x)!");
-						position.x = creature.m_Position.x;
-						newChunkCoords.x -= 1;
+						movementVector.x = 0;
+						newChunkMatrixCoords.x = curChunk->m_ChunkMatrixCoords.x;
 					}
 					else if (outsideBounds.y) {
 						fmt::print("attempting to go outside bounds (z)!");
-						position.z = creature.m_Position.z;
-						newChunkCoords.y -= 1;
+						movementVector.z = 0;
+						newChunkMatrixCoords.y = curChunk->m_ChunkMatrixCoords.y;
 					}
-					creature.m_Chunk = m_World.GetChunk(creature.m_Chunk->m_ChunkCoords);
+					creature.m_Chunk = m_World.GetChunk(creature.m_Chunk->m_ChunkMatrixCoords);
+					if (creature.m_Chunk->m_BoundingBox.m_Min.x == newPos.x) {
+						newPos.x += 0.01f;
+					}
+					else if (creature.m_Chunk->m_BoundingBox.m_Max.x == newPos.x) {
+						newPos.x -= 0.01f;
+					}
+					if (creature.m_Chunk->m_BoundingBox.m_Min.y == newPos.y) {
+						newPos.y += 0.01f;
+					}
+					else if (creature.m_Chunk->m_BoundingBox.m_Max.y == newPos.y) {
+						newPos.y -= 0.01f;
+					}
 					assert(creature.m_Chunk);
 				}
-				creature.Move(position, ignoreGround ? nullptr : creature.m_Chunk->FindGround(creature.m_Position));
+				creature.Move(newPos, creature.m_Chunk->FindGround(creature.m_Position));
 			}
 		};
 
@@ -2611,6 +2919,7 @@ void main() {
 				};
 				vkCmdSetViewport(drawData.m_CommandBuffer, 0, 1, &viewport);
 				vkCmdSetScissor(drawData.m_CommandBuffer, 0, 1, &scissor);
+				m_World.Render(drawData);
 				VkRenderingAttachmentInfo colorAttachment{
 					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
 					.pNext = nullptr,
@@ -2678,4 +2987,6 @@ void main() {
 	typedef Engine::GraphicsPipeline GraphicsPipeline;
 	typedef Engine::CameraData1 CameraData;
 	typedef Engine::MeshData MeshData;
+	typedef Engine::Creature Creature;
+	typedef Engine::World World;
 }
