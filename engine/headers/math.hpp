@@ -48,7 +48,6 @@ namespace engine {
 	};
 
 	typedef Vec2_T<float> Vec2;
-	typedef Vec2_T<double> DoubleVec2;
 	typedef Vec2_T<int> IntVec2;
 
 	template<typename T>
@@ -100,7 +99,6 @@ namespace engine {
 	};
 
 	typedef Vec3_T<float> Vec3;
-	typedef Vec3_T<double> DoubleVec3;
 	typedef Vec3_T<int> IntVec3;
 
 	template<typename T>
@@ -138,7 +136,6 @@ namespace engine {
 	};
 
 	typedef Vec4_T<float> Vec4;
-	typedef Vec4_T<double> DoubleVec4;
 	typedef Vec4_T<int> IntVec4;
 
 	template<typename T>
@@ -153,7 +150,6 @@ namespace engine {
 	};
 
 	typedef Mat2_T<float> Mat2;
-	typedef Mat2_T<double> DoubleMat2;
 
 	template<typename T>
 	struct Mat3_T {
@@ -194,7 +190,6 @@ namespace engine {
 	};
 
 	typedef Mat3_T<float> Mat3;
-	typedef Mat3_T<double> DoubleMat3;
 
 	template<typename T>
 	struct Mat4_T {
@@ -338,7 +333,6 @@ namespace engine {
 	};
 
 	typedef Mat4_T<float> Mat4;
-	typedef Mat4_T<double> DoubleMat4;
 
 	template<typename T>
 	struct Quaternion_T {
@@ -420,5 +414,4 @@ namespace engine {
 	};
 
 	typedef Quaternion_T<float> Quaternion;
-	typedef Quaternion_T<double> DoubleQuaternion;
 }
