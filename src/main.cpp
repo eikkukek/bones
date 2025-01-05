@@ -336,11 +336,16 @@ int main() {
 	engine::Engine engine("Test", pWindow, 250, 0, nullptr, 1000);
 	TextRenderer& textRenderer = engine.m_TextRenderer;
 	GlyphAtlas atlas{};
-	textRenderer.CreateGlyphAtlas("fonts\\arial_mt.ttf", 30.0f, atlas);
+	textRenderer.CreateGlyphAtlas("resources\\fonts\\arial_mt.ttf", 30.0f, atlas);
 	const char* text = "Hello, how\nis it going? AVAVAVA";
+	TextRenderer::RenderTextInfo renderInfo {
+		.m_GlyphAtlas = atlas,
+		.m_Spacing = { 2, 2 },
+		.m_TextColor = PackColorRBGA({ 1.0f, 1.0f, 1.0f, 0.8f }),
+		.m_BackGroundColor = PackColorRBGA({ 0.0f, 0.0f, 1.0f, 0.5f }),
+	};
 	TextImage textImage 
-			= textRenderer.RenderText<TextAlignment::Middle>(text, atlas, PackColorRBGA({ 1.0f, 1.0f, 1.0f, 1.0f }),
-				{ 540, 540 }, { 2, 2 });
+			= textRenderer.RenderText<TextAlignment::Middle>(text, renderInfo, { 540, 540 });
 	StaticTexture texture(engine);
 	texture.Create(VK_FORMAT_R8G8B8A8_SRGB, 4, textImage.m_Extent, textImage.m_Image);	
 	TestPipeline testPipeline(engine.m_Renderer);
