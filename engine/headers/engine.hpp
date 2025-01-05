@@ -42,6 +42,7 @@ namespace engine {
 			Entity = 8,
 			DynamicArray = 9,
 			FileParsing = 10,
+			GameLogic = 11,
 			MaxEnum,
 		};
 
@@ -58,6 +59,7 @@ namespace engine {
 				"Entity",
 				"DynamicArray",
 				"FileParsing",
+				"GameLogic",
 			};
 			if (origin == ErrorOrigin::MaxEnum) {
 				return strings[0];
@@ -90,6 +92,14 @@ namespace engine {
 			size_t m_Capacity;
 
 			DynamicArray() : m_Data(nullptr), m_Size(0), m_Capacity(0) {}
+
+			DynamicArray(size_t size) : m_Data(nullptr), m_Size(0), m_Capacity(0) {
+				if (!size) {
+					return;
+				}
+				Reserve(size * 2);
+				m_Size = size;
+			}
 
 			DynamicArray(DynamicArray&& other) noexcept 
 				: m_Data(other.m_Data), m_Size(other.m_Size), m_Capacity(other.m_Capacity) {
@@ -135,7 +145,7 @@ namespace engine {
 			}
 
 			T& PushBack(const T& value) {
-				if (m_Size == m_Capacity) {
+				if (m_Size >= m_Capacity) {
 					Reserve(m_Capacity ? m_Capacity * 2 : 2);
 				}
 				new(&m_Data[m_Size]) T(value);
@@ -144,7 +154,7 @@ namespace engine {
 
 			template<typename... Args>
 			T& EmplaceBack(Args&&... args) {
-				if (m_Size == m_Capacity) {
+				if (m_Size >= m_Capacity) {
 					Reserve(m_Capacity ? m_Capacity * 2 : 2);
 				}
 				new(&m_Data[m_Size]) T(std::forward<Args>(args)...);
@@ -1082,7 +1092,256 @@ namespace engine {
 					m_DescriptorSetCount(other.m_DescriptorSetCount), m_Entites(std::move(other.m_Entites)) {}
 
 			GraphicsPipeline(const GraphicsPipeline&) = delete;
-		};	
+		};
+
+		class Input {
+		public:
+
+			friend class Engine;
+
+			enum class Key {
+				Space = 32,
+				Apostrophe = 39,
+				Comma = 44,
+				Minus = 45,
+				Period = 46,
+				Slash = 47,
+				Zero = 48,
+				One = 49,
+				Two = 50,
+				Three = 51,
+				Four = 52,
+				Five = 53,
+				Six = 54,
+				Seven = 55,
+				Eight = 56,
+				Nine = 57,
+				Semicolon = 59,
+				Equal = 61,
+				A = 65,
+				B = 66,
+				C = 67,
+				D = 68,
+				E = 69,
+				F = 70,
+				G = 71,
+				H = 72,
+				I = 73,
+				J = 74,
+				K = 75,
+				L = 76,
+				M = 77,
+				N = 78,
+				O = 79,
+				P = 80,
+				Q = 81,
+				R = 82,
+				S = 83,
+				T = 64,
+				U = 85,
+				V = 86,
+				W = 87,
+				X = 88,
+				Y = 89,
+				Z = 90,
+				LeftBracket = 91,
+				Backslash = 92,
+				RightBracket = 93,
+				GraveAccent = 96,
+				World1 = 161,
+				World2 = 162,
+				Escape  = 256,
+				Enter = 257,
+				Tab = 258,
+				Backspace = 259,
+				Insert = 260,
+				Delete = 261,
+				Right = 262,
+				Left = 263,
+				Down = 264,
+				Up = 265,
+				PageUp = 266,
+				PageDown = 267,
+				Home = 268,
+				End = 269,
+				CapsLock = 280,
+				ScrollLock = 281,
+				NumLock = 282,
+				PrintScreen = 283,
+				Pause = 284,
+				F1 = 290,
+				F2 = 291,
+				F3 = 292,
+				F4 = 293,
+				F5 = 294,
+				F6 = 295,
+				F7 = 296,
+				F8 = 297,
+				F9 = 298,
+				F10 = 299,
+				F11 = 300,
+				F12 = 301,
+				F13 = 302,
+				F14 = 303,
+				F15 = 304,
+				F16 = 305,
+				F17 = 306,
+				F18 = 307,
+				F19 = 308,
+				F20 = 309,
+				F21 = 310,
+				F22 = 311,
+				F23 = 312,
+				F24 = 313,
+				F25 = 314,
+				KP0 = 320,
+				KP1 = 321,
+				KP2 = 322,
+				KP3 = 323,
+				KP4 = 324,
+				KP5 = 325,
+				KP6 = 326,
+				KP7 = 327,
+				KP8 = 328,
+				KP9 = 329,
+				KPDecimal = 330,
+				KPDivide = 331,
+				KPMultiply = 332,
+				KPSubtract = 333,
+				KPAdd = 334,
+				KPEnter = 335,
+				KPEqual = 336,
+				LeftShift = 340,
+				LeftControl = 341,
+				LeftAlt = 342,
+				LeftSuper = 343,
+				RightShift = 344,
+				RightControl = 345,
+				RightAlt = 346,
+				RightSuper = 347,
+				Menu = 348,
+				MaxEnum = Menu,
+			};
+
+			enum class MouseButton {
+				One = 0,
+				Two = 1,
+				Three = 2,
+				Four = 3,
+				Five = 4,
+				Six = 6,
+				Eight = 7,
+				Left = One,
+				Right = Two,
+				Middle = Three,
+				MaxEnum = Eight,
+			};
+
+		private:
+			
+			static constexpr size_t key_count = static_cast<size_t>(Key::MaxEnum) + 1;
+			static constexpr size_t mouse_button_count = static_cast<size_t>(MouseButton::MaxEnum) + 1;
+
+			static inline bool s_PressedKeys[key_count]{};
+			static inline bool s_ReleasedKeys[key_count]{};
+			static inline bool s_HeldKeys[key_count]{};
+			static inline float s_KeyValues[key_count]{};
+
+			static inline DynamicArray<Key> s_ActiveKeys{};
+
+			static inline bool s_PressedMouseButtons[mouse_button_count]{};
+			static inline bool s_ReleasedMouseButtons[mouse_button_count]{};
+			static inline bool s_HeldMouseButtons[mouse_button_count]{};
+			static inline float s_MouseButtonValues[mouse_button_count]{};
+
+			static inline DynamicArray<MouseButton> s_ActiveMouseButtons{};
+
+			static inline Vec2_T<double> s_CursorPosition{};
+			static inline Vec2_T<double> s_DeltaCursorPosition{};
+
+			static void KeyCallback(GLFWwindow*, int key, int scancode, int action, int mods) {
+				size_t index = key;
+				assert(index < key_count);
+				s_PressedKeys[index] = action == GLFW_PRESS;
+				s_ReleasedKeys[index] = action == GLFW_RELEASE;
+				s_HeldKeys[index] = action != GLFW_RELEASE;
+				if (action != GLFW_RELEASE) {
+					s_KeyValues[index] = 1.0f;
+				}
+			}
+
+			static void MouseButtonCallback(GLFWwindow*, int button, int action, int mods) {
+				size_t index = button;
+				assert(index < mouse_button_count);
+				s_PressedMouseButtons[index] = action == GLFW_PRESS;
+				s_ReleasedMouseButtons[index] = action == GLFW_RELEASE;
+				s_HeldMouseButtons[index] = action != GLFW_RELEASE;
+				if (action != GLFW_RELEASE) {
+					s_MouseButtonValues[index] = 1.0f;
+				}
+			}
+
+			static void ResetInput() {
+				Key* const keysEnd = s_ActiveKeys.end();
+				for (Key* iter = s_ActiveKeys.begin(); iter != keysEnd;) {
+					size_t index = (size_t)*iter;
+					if (s_HeldKeys[index]) {
+						++iter;
+					}
+					else {
+						s_KeyValues[index] = 0.0f;
+						iter = s_ActiveKeys.Erase(iter);
+					}
+					s_PressedKeys[index] = s_ReleasedKeys[index] = false;
+				}
+
+				MouseButton* const mouseButtonsEnd = s_ActiveMouseButtons.end();
+				for (MouseButton* iter = s_ActiveMouseButtons.begin(); iter != mouseButtonsEnd;) {
+					size_t index = (size_t)*iter;
+					if (s_HeldMouseButtons[index]) {
+						++iter;
+					}
+					else {
+						s_MouseButtonValues[index] = 0.0f;
+						iter = s_ActiveMouseButtons.Erase(iter);
+					}
+					s_PressedMouseButtons[index] = s_ReleasedMouseButtons[index] = false;
+				}
+			};
+
+			Input(GLFWwindow* pGLFWwindow) {
+				s_ActiveKeys.Reserve(key_count);
+				s_ActiveMouseButtons.Reserve(mouse_button_count);
+				glfwSetKeyCallback(pGLFWwindow, KeyCallback);
+				glfwSetMouseButtonCallback(pGLFWwindow, MouseButtonCallback);
+			};
+
+		public:
+
+			static bool WasKeyPressed(Key key) {
+				return s_PressedKeys[static_cast<size_t>(key)];
+			}
+
+			static bool WasKeyReleased(Key key) {
+				return s_ReleasedKeys[static_cast<size_t>(key)];
+			}
+
+			static bool WasKeyHeld(Key key) {
+				return s_HeldKeys[static_cast<size_t>(key)];
+			}
+
+			static bool WasMouseButtonPressed(MouseButton button) {
+				return s_PressedMouseButtons[static_cast<size_t>(button)];
+			}
+
+			static bool WasMouseButtonReleased(MouseButton button) {
+				return s_ReleasedMouseButtons[static_cast<size_t>(button)];
+			}
+
+			static bool WasMouseButtonHeld(MouseButton button) {
+				return s_HeldMouseButtons[static_cast<size_t>(button)];
+			}
+		};
 
 		class UI {
 		public:
@@ -1301,12 +1560,12 @@ void main() {
 						&& point.x <= m_Max.x && point.y <= m_Max.y;
 				}
 
-				IntVec2 Size() const {
+				IntVec2 Dimensions() const {
 					return m_Max - m_Min;
 				}
 
 				Vec2 Middle() const {
-					return m_Min + Size() / 2;
+					return m_Min + Dimensions() / 2;
 				}
 
 				void CalcTransform(Vec2_T<uint32_t> renderResolution, Mat4& out) const {
@@ -1316,42 +1575,7 @@ void main() {
 					Vec2 pos = Middle();
 					out.columns[3] = Vec4(pos.x / renderResolution.x * 2.0f - 1.0f, pos.y / renderResolution.y * 2.0f - 1.0f, 0.0f, 1.0f);
 				}
-			};
-
-			class Button {
-			public:
-
-				typedef bool (*Pipeline2DRenderCallback)(const Button& button, VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex);
-				
-				const char* const m_StringID;
-				Rect m_Rect{};
-
-				void (*m_HoverCallback)(Button& button){};
-
-				Pipeline2DRenderCallback m_Pipeline2DRenderCallback{};
-				Mat4 m_Transform{};
-
-				IntVec2 GetPos() {
-					return { m_Rect.m_Min.x, m_Rect.m_Max.y };
-				}
-
-				void SetPos(IntVec2 pos, Vec2_T<uint32_t> renderResolution) {
-					IntVec2 oldPos = GetPos();
-					IntVec2 deltaPos = pos - oldPos;
-					IntVec2 size = m_Rect.m_Max - m_Rect.m_Min;
-					m_Rect.m_Min = { pos.x, pos.y - size.y };
-					m_Rect.m_Max = { pos.x + size.x, pos.y };
-					m_Rect.CalcTransform(renderResolution, m_Transform);
-				}
-
-				bool RenderCallback2D(VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex) const {
-					return m_Pipeline2DRenderCallback && m_Pipeline2DRenderCallback(*this, outTextureDescriptor, outTextureIndex);
-				}
-
-				uint64_t operator()() {
-					return String::Hash()(m_StringID);
-				}
-			};
+			};	
 
 			enum class WindowState {
 				Closed = 0,
@@ -1366,17 +1590,50 @@ void main() {
 
 				typedef bool (*Pipeline2DRenderCallback)(const Window& window, VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex);
 
+				class Button {
+				public:
+
+					typedef bool (*Pipeline2DRenderCallback)(const Button& button, VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex);
+			
+					const char* const m_StringID;
+					IntVec2 m_LocalPosition;
+					Rect m_Rect{};
+					void (*m_HoverCallback)(Button& button){};
+					Pipeline2DRenderCallback m_Pipeline2DRenderCallback{};
+					Mat4 m_Transform{};
+
+					Button(const char* stringID, const Rect& rect) : m_StringID(stringID), m_Rect(rect) {}
+
+					IntVec2 GetLocalPosition() const {
+						return m_LocalPosition;
+					}
+
+					void SetLocalPosition(const Window& window, IntVec2 position, Vec2_T<uint32_t> renderResolution) {
+						IntVec2 oldPos = GetLocalPosition();
+						IntVec2 deltaPos = position - oldPos;
+						IntVec2 size = m_Rect.m_Max - m_Rect.m_Min;
+						m_Rect.m_Min = window.m_Rect.m_Min + position;
+						m_Rect.m_Max = m_Rect.m_Min + size;
+						m_Rect.CalcTransform(renderResolution, m_Transform);
+					}
+
+					bool RenderCallback2D(VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex) const {
+						return m_Pipeline2DRenderCallback && m_Pipeline2DRenderCallback(*this, outTextureDescriptor, outTextureIndex);
+					}
+
+					uint64_t operator()() {
+						return String::Hash()(m_StringID);
+					}
+				};
+
 				static constexpr size_t max_buttons = 250;
 				
 				UI& m_UI;
 				const char* const m_StringID;
 				WindowState m_State;
-
 				Rect m_Rect;
-
 				Pipeline2DRenderCallback m_Pipeline2DRenderCallback{};
 				Mat4 m_Transform{};
-
 				Dictionary<Button> m_ButtonLookUp;
 				DynamicArray<Button*> m_Buttons;
 
@@ -1384,6 +1641,23 @@ void main() {
 					: m_UI(UI), m_StringID(stringID), m_State(state), m_Rect(rect), m_ButtonLookUp(max_buttons * 2), m_Buttons() {
 					m_Buttons.Reserve(max_buttons);
 					m_Rect.CalcTransform(m_UI.m_Engine.GetRenderResolution(), m_Transform);
+				}
+
+				Button* AddButton(const char* stringID, Vec2_T<uint32_t> size, IntVec2 position) {
+					if (m_ButtonLookUp.Contains(stringID)) {
+						PrintError(ErrorOrigin::UI, 
+							"attempting to add button with an already existing string ID (in function UI::Window::AddButton)!");
+						return nullptr;
+					}
+					IntVec2 truePos = m_Rect.m_Min + size;
+					Button* res = m_ButtonLookUp.Emplace(stringID, stringID, 
+						Rect { .m_Min { truePos }, .m_Max { truePos + size } } );
+					if (!res) {
+						PrintError(ErrorOrigin::UI, "failed to add button (function UI::Dictionary::Emplace in function UI::Window::AddButton)!");
+						return nullptr;
+					}
+					res->m_Rect.CalcTransform(m_UI.m_Engine.GetRenderResolution(), m_Transform);
+					return m_Buttons.PushBack(res);
 				}
 
 				void Render(VkCommandBuffer commandBuffer) const {
@@ -1433,26 +1707,25 @@ void main() {
 					}
 				}
 
-				IntVec2 GetPos() {
-					return { m_Rect.m_Min.x, m_Rect.m_Max.y };
+				IntVec2 GetPosition() {
+					return m_Rect.m_Min;
 				}
 
 				/*! @brief Sets the position of window.
 				* @param[in] pos: New window position from top left of the window.
 				*/
 				void SetPosition(IntVec2 pos) {
-					IntVec2 oldPos = GetPos();
+					IntVec2 oldPos = GetPosition();
 					IntVec2 deltaPos = pos - oldPos;
 					IntVec2 size = m_Rect.m_Max - m_Rect.m_Min;
-					m_Rect.m_Min = { pos.x, pos.y };
+					m_Rect.m_Min = pos;
 					m_Rect.m_Max = pos + size;
 					Vec2_T<uint32_t> renderResolution = m_UI.m_Engine.GetRenderResolution();
 					m_Rect.CalcTransform(renderResolution, m_Transform);
 					for (Button* button : m_Buttons) {
 						assert(button);
-						Rect& rect = button->m_Rect;
-						IntVec2 buttonSize = rect.m_Max - rect.m_Min;
-						IntVec2 buttonPos = button->GetPos() + deltaPos;
+						IntVec2 buttonPos = button->GetLocalPosition();
+						button->SetLocalPosition(*this, buttonPos + deltaPos, renderResolution);
 					}
 				}
 
@@ -1460,6 +1733,8 @@ void main() {
 					return String::Hash()(m_StringID);
 				}
 			};
+
+			typedef Window::Button Button;
 
 		private:
 
@@ -1881,20 +2156,19 @@ void main() {
 				return true;
 			}
 
-			Window* AddWindow(const char* stringID, WindowState state, IntVec2 pos, Vec2_T<uint32_t> size) {
+			Window* AddWindow(const char* stringID, WindowState state, IntVec2 position, Vec2_T<uint32_t> size) {
 				if (m_WindowLookUp.Contains(stringID)) {
 					PrintError(ErrorOrigin::UI, 
 						"attempting to add window with an already existing string ID (in function UI::AddWindow)!");
 					return nullptr;
 				}
 				Window* res = m_WindowLookUp.Emplace(stringID, *this, stringID, state, 
-					Rect { .m_Min { pos.x, pos.y }, .m_Max { pos.x + (int)size.x, pos.y + (int)size.y } });
+					Rect { .m_Min { position }, .m_Max { position + size } });
 				if (!res) {
 					PrintError(ErrorOrigin::UI, "failed to add window (function UI::Dictionary::Emplace in function UI::AddWindow)!");
 					return nullptr;
 				}
-				m_Windows.PushBack(res);
-				return res;
+				return m_Windows.PushBack(res);
 			}
 
 		private:
@@ -1938,6 +2212,175 @@ void main() {
 			free(pixels);
 		}
 
+		template<typename T>
+		struct Cube {
+
+			Vec3_T<T> m_Min;
+			Vec3_T<T> m_Max;
+
+			bool IsPointInside(const Vec3& point) const {
+				return point.x > m_Min.x && point.y > m_Min.y && point.z > m_Min.z &&
+					point.x < m_Max.x && point.y < m_Max.y && point.z < m_Max.z;
+			}
+
+			Vec3 Dimensions() const {
+				return m_Max - m_Min;
+			}
+		};
+
+		template<typename T>
+		struct Rect {
+
+			Vec2_T<T> m_Min;
+			Vec2_T<T> m_Max;
+
+			template<typename U>
+			bool IsPointInside(Vec2_T<U> point) const {
+				return point.x > m_Min.x && point.y > m_Min.y &&
+					point.x < m_Max.x && point.x < m_Max.y;
+			}
+
+			template<typename U>
+			bool OverLaps(const Rect<U>& other) const {
+				return m_Max.x > other.m_Min.x && other.m_Max.x > m_Min.x &&
+					m_Max.y > other.m_Min.y && other.m_Max.y > m_Min.y;
+			}
+
+			Vec2 Dimensions() const {
+				return m_Max - m_Min;
+			}
+		};
+
+		class Ground {
+		public:
+
+			Vec3 m_Scale;
+			Vec3 m_CenterPosition;
+			Rect<float> m_BoundingBox;
+			Vec2_T<uint32_t> m_HeightMapExtent;
+			float m_HeightMapMin;
+			float m_HeightMapMax;
+			float* m_HeightMap;
+
+			void SetScale(const Vec3& scale) {
+				m_BoundingBox.m_Max = m_BoundingBox.m_Min + 
+					Vec3(m_HeightMapExtent.x * scale.x,
+						(m_HeightMapMax - m_HeightMapMin) * scale.y,
+						m_HeightMapExtent.y * scale.z);
+				m_Scale = scale;
+			}
+
+			float GetHeightAtPosition(const Vec3& position) const {
+				Vec2 pos2D(position.x, position.z);
+				if (!m_BoundingBox.IsPointInside(pos2D)) {
+				}
+				Vec3 relative = pos2D - m_BoundingBox.m_Min;
+				Vec2 dimensions = m_BoundingBox.Dimensions();
+				Vec2_T<uint32_t> heightMapCoords(relative.x / dimensions.x * m_HeightMapExtent.x,
+					relative.y / dimensions.y * m_HeightMapExtent.y);
+				size_t index = heightMapCoords.x * m_HeightMapExtent.y + heightMapCoords.y;
+				size_t heightMapSize = m_HeightMapExtent.x * m_HeightMapExtent.y;
+				assert(index < heightMapSize);
+				return m_HeightMap[index] * m_Scale.y + m_CenterPosition.y;
+			}
+		};
+
+		class Chunk {
+		public:
+
+			const Rect<int> m_BoundingBox;
+			const Vec2_T<uint32_t> m_ChunkCoords;
+			DynamicArray<const Ground*> m_Grounds;
+			
+			Chunk(Vec2_T<uint32_t> chunkCoords, Vec2_T<uint32_t> dimensions, IntVec2 min) noexcept : 
+				m_BoundingBox { .m_Min { min }, .m_Max { min + dimensions } }, m_ChunkCoords(chunkCoords), m_Grounds() {}
+
+			bool IsPointInside(const Vec3& point) const {
+				return m_BoundingBox.IsPointInside(Vec2(point.x, point.z));
+			}
+
+			const Ground* FindGround(const Vec3& position) const {
+				for (const Ground* ground : m_Grounds) {
+					if (ground->m_BoundingBox.IsPointInside(Vec2_T<float>(position.x, position.z))) {
+						return ground;
+					}
+				}
+				return nullptr;
+			}
+		};
+
+		class Creature {
+		public:
+
+			Creature(const Chunk* chunk, const Vec3& position) 
+				: m_Chunk(chunk), m_Position(position) {}
+
+			const Chunk* m_Chunk;
+			Vec3 m_Position;
+
+			Vec3 (*m_MovementUpdate)(const Creature& creature, bool& ignoreGround);
+
+			Vec3 GetNewPosition(bool& ignoreGround) const {
+				if (m_MovementUpdate) {
+					return m_MovementUpdate(*this, ignoreGround);
+				}
+				return {};
+			}
+
+			void Move(const Vec3& position, const Ground* ground) {
+				m_Position = position;
+				if (ground) {
+					float height = ground->GetHeightAtPosition(m_Position);
+					if (height == std::numeric_limits<float>::max()) {
+						PrintError(ErrorOrigin::GameLogic, 
+							"moving creature on ground that's outside the creature's position (function Ground::GetHeightAtPosition in function Creature::Move)!");
+						return;
+					}
+					m_Position.z = height;
+				}
+			}
+		};
+
+		class World {
+		public:
+
+			DynamicArray<Ground> m_Grounds;
+			DynamicArray<Chunk> m_Chunks;
+			Vec2_T<uint32_t> m_ChunksExtent;
+
+			World() : m_Grounds(), m_Chunks(), m_ChunksExtent() {}
+
+			void Load(DynamicArray<Ground>&& grounds, Vec2_T<uint32_t> chunkDimensions, Vec2_T<uint32_t> chunksExtent) {
+				m_Grounds.Clear();
+				new (&m_Grounds) DynamicArray<Ground>(std::move(grounds));
+				m_Chunks.Clear();
+				m_Chunks.Reserve(chunksExtent.x * chunksExtent.y);
+				for (size_t x = 0; x < chunksExtent.x; x++) {
+					for (size_t y = 0; y < chunksExtent.y; y++) {
+						Chunk& chunk 
+							= m_Chunks.EmplaceBack(Vec2_T<uint32_t>(x, y), chunkDimensions, x * chunkDimensions.x, y * chunkDimensions.y);
+						for (const Ground& ground : m_Grounds) {
+							if (chunk.m_BoundingBox.OverLaps(ground.m_BoundingBox)) {
+								chunk.m_Grounds.PushBack(&ground);
+							}
+						}
+					}
+				}
+			}
+
+			Chunk* GetChunk(Vec2_T<uint32_t> chunkCoords) {
+				uint32_t index = chunkCoords.x * m_ChunksExtent.y + chunkCoords.y;
+				if (index >= m_Chunks.m_Size) {
+					return nullptr;
+				}
+				return &m_Chunks[index];
+			}
+
+			Vec2_T<bool> BoundsCheck(Vec2_T<uint32_t> chunckCoords) {
+				return { chunckCoords.x >= m_ChunksExtent.x, chunckCoords.y >= m_ChunksExtent.y };
+			}
+		};
+
 		inline static Engine* s_engine_instance = nullptr;
 
 		const uint32_t m_Initialized;
@@ -1952,6 +2395,10 @@ void main() {
 
 		Set<Entity*, Entity::Hash> m_Entities{};
 		DynamicArray<GraphicsPipeline> m_GraphicsPipelines{};
+
+		DynamicArray<Creature> m_Creatures{};
+		World m_World;
+		DynamicArray<Ground> m_Grounds{};
 
 		CameraData1 m_GameCamera{};
 		CameraData1 m_DebugCamera{};
@@ -2107,6 +2554,46 @@ void main() {
 			return res;
 		}
 
+		void LogicUpdate() {
+			for (Creature& creature : m_Creatures) {
+				bool ignoreGround = false;
+				Vec3 position = creature.GetNewPosition(ignoreGround);
+				if (position == creature.m_Position) {
+					continue;
+				}
+				const Chunk* curChunk = creature.m_Chunk;
+				assert(curChunk);
+				Rect<int> chunkBoundingBox = curChunk->m_BoundingBox;
+				if (!curChunk->IsPointInside(creature.m_Position)) {
+					Vec2_T<int> newChunkCoords {
+						curChunk->m_ChunkCoords.x + creature.m_Position.x > curChunk->m_BoundingBox.m_Max.x ? 1 
+							: creature.m_Position.x < curChunk->m_BoundingBox.m_Min.x ? -1 : 0,
+
+						curChunk->m_ChunkCoords.y + creature.m_Position.z > curChunk->m_BoundingBox.m_Max.y ? 1
+							: creature.m_Position.z < curChunk->m_BoundingBox.m_Min.y ? -1 : 0,
+					};
+					Vec2_T<bool> outsideBounds = m_World.BoundsCheck(newChunkCoords);
+					if (outsideBounds.x && outsideBounds.y) {
+						fmt::print("attempting to go outside bounds!");
+						continue;
+					}
+					else if (outsideBounds.x) {
+						fmt::print("attempting to go outside bounds (x)!");
+						position.x = creature.m_Position.x;
+						newChunkCoords.x -= 1;
+					}
+					else if (outsideBounds.y) {
+						fmt::print("attempting to go outside bounds (z)!");
+						position.z = creature.m_Position.z;
+						newChunkCoords.y -= 1;
+					}
+					creature.m_Chunk = m_World.GetChunk(creature.m_Chunk->m_ChunkCoords);
+					assert(creature.m_Chunk);
+				}
+				creature.Move(position, ignoreGround ? nullptr : creature.m_Chunk->FindGround(creature.m_Position));
+			}
+		};
+
 		void Render() {
 			Renderer::DrawData drawData;
 			if (m_Renderer.BeginFrame(drawData)) {
@@ -2184,6 +2671,7 @@ void main() {
 	};
 
 	typedef Engine::UI UI;
+	typedef Engine::Input Input;
 	typedef Engine::StaticMesh StaticMesh;
 	typedef Engine::StaticTexture StaticTexture;
 	typedef Engine::Entity Entity;
