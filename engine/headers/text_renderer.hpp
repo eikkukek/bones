@@ -56,7 +56,7 @@ namespace engine {
 		struct GlyphAtlas {
 			Character m_Characters[128]{};
 			Vec2_T<uint32_t> m_Extent{};
-			uint8_t* m_Atlas{};
+			unsigned char* m_Atlas{};
 			uint32_t m_FontSize{};
 			const char* m_FileName{};
 			int m_MaxHoriBearingY{};
@@ -72,7 +72,7 @@ namespace engine {
 		const CriticalErrorCallback m_CriticalErrorCallback;
 
 		TextRenderer(Renderer& renderer, CriticalErrorCallback criticalErrorCallback) 
-			: m_Renderer(renderer), m_CriticalErrorCallback(criticalErrorCallback) {
+			: m_Renderer(renderer), m_CriticalErrorCallback(criticalErrorCallback)  {
 			FtAssert(FT_Init_FreeType(&m_FreeTypeLib), 
 				"failed to initialize FreeType (function FT_Init_FreeType in TextRenderer constructor)!");
 		}
@@ -159,25 +159,46 @@ namespace engine {
 			out.m_FileName = fontFileName;
 			uint32_t sampledImageWidth = 0;
 			uint32_t sampledImageHeight = 0;
+			unsigned char* bitmaps[128]{};
 			for (unsigned char c = 0; c < 128; c++) {
-				if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
+				if (!FtCheck(FT_Load_Char(face, c, FT_LOAD_RENDER), 
+						"failed to load font character (function FT_Load_Char in function CreateGlyphAtlas)!")) {
+					fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
+						"failed to load character {} from font {}\n", c, fontFileName);
 					continue;
 				}
 				sampledImageHeight = Max(sampledImageHeight, face->glyph->bitmap.rows);
 				out.m_MaxHoriBearingY = Max(((int)face->glyph->metrics.horiBearingY >> 6), out.m_MaxHoriBearingY);
+				Vec2_T<uint32_t> bitmapSize(face->glyph->bitmap.width, face->glyph->bitmap.rows);
 				out.m_Characters[c] = {
-					.m_Size { face->glyph->bitmap.width, face->glyph->bitmap.rows },
+					.m_Size = bitmapSize,
 					.m_Escapement { (uint32_t)face->glyph->advance.x >> 6, (uint32_t)face->glyph->advance.y >> 6 },
 					.m_Bearing { face->glyph->bitmap_left, face->glyph->bitmap_top },
 					.m_Offset = sampledImageWidth,
 				};
 				sampledImageWidth += face->glyph->bitmap.width;
+				size_t pixelCount = bitmapSize.x * bitmapSize.y;
+				if (pixelCount == 0) {
+					continue;
+				}
+				size_t allocSize = pixelCount * sizeof(unsigned char);
+				unsigned char* bitmap = bitmaps[c] = (unsigned char*)malloc(allocSize);
+				unsigned char* buf = face->glyph->bitmap.buffer;
+				for (size_t y = 0; y < bitmapSize.y; y++) {
+					for (size_t x = 0; x < bitmapSize.x; x++) {
+						size_t index = y * bitmapSize.x + x;
+						assert(index < pixelCount);
+						bitmap[index] = buf[index];
+					}
+				}
 			}
+			FtCheck(FT_Done_Face(face), "failed to terminate FreeType face (function FT_Done_Face in function CreateGlyphAtlas)!");
 			out.m_Extent = { sampledImageWidth, sampledImageHeight };
 			size_t atlasPixelCount = out.m_Extent.x * out.m_Extent.y;
-			out.m_Atlas = (uint8_t*)malloc(atlasPixelCount * sizeof(uint8_t));
+			size_t atlasAllocSize = atlasPixelCount * sizeof(unsigned char);
+			out.m_Atlas = (unsigned char*)malloc(atlasAllocSize);
 			if (out.m_Atlas) {
-				memset(out.m_Atlas, 0, atlasPixelCount);
+				memset(out.m_Atlas, 0, atlasAllocSize);
 			}
 			else {
 				PrintError(ErrorOrigin::Uncategorized, "failed to allocate glyph atlas image (function malloc in function CreateGlyphAtlas)!");
@@ -187,63 +208,29 @@ namespace engine {
 			Vec2_T<uint32_t> pen{};
 			uint32_t currentPenStartingXPos = 0;
 			for (unsigned char c = 0; c < 128; c++) {
-				if (!FtCheck(FT_Load_Char(face, c, FT_LOAD_RENDER), 
-						"failed to load font character (function FT_Load_Char in function CreateGlyphAtlas)!")) {
-					fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
-						"failed to load character {} from font {}\n", c, fontFileName);
-					continue;
-				}
 				pen.x = currentPenStartingXPos;
 				pen.y = 0;
-				uint32_t pitch = face->glyph->bitmap.pitch;
-				if (face->glyph->bitmap.width > 0) {
-					uint8_t* bitmapBuf = face->glyph->bitmap.buffer;
-					uint32_t bitmapWidth = face->glyph->bitmap.width;
-					uint32_t bitmapHeight = face->glyph->bitmap.rows;
-					uint32_t bitmapSize = bitmapWidth * bitmapHeight;
+				unsigned char* bitmap = bitmaps[c];
+				if (bitmap) {
+					Character& character = out.m_Characters[c];
+					uint32_t bitmapWidth = character.m_Size.x;
+					uint32_t bitmapHeight = character.m_Size.y;
+					uint32_t bitmapPixelCount = bitmapWidth * bitmapHeight;
 					for (uint32_t y = 0; y < bitmapHeight; y++) {
 						for (uint32_t x = 0; x < bitmapWidth; x++) {
-							uint32_t byteIndex = y * pitch + x;
-							assert(byteIndex < bitmapSize);
+							uint32_t bitmapIndex = y * bitmapWidth + x;
 							uint32_t atlasIndex = pen.y * out.m_Extent.x + pen.x;
-							assert(atlasIndex < atlasPixelCount);
-							out.m_Atlas[atlasIndex] = bitmapBuf[byteIndex];
+							assert(bitmapIndex < bitmapPixelCount && atlasIndex < atlasPixelCount);
+							out.m_Atlas[atlasIndex] = bitmap[bitmapIndex];
 							pen.x++;
 						}
 						pen.x = currentPenStartingXPos;
 						pen.y++;
 					}
 					currentPenStartingXPos += bitmapWidth;
-					/*
-					float nom = 0;
-					static constexpr float denom = 16;
-					for (uint32_t offsetY = 0; offsetY + 4 < bitmapHeight; offsetY += 4) {
-						for (uint32_t offsetX = 0; offsetX + 4 < bitmapWidth; offsetX += 4) {
-							for (uint32_t y = 0; y < 4; y++) {
-								for (uint32_t x = 0; x < 4; x++) {
-									uint32_t byteIndex = (offsetY + y) * bitmapWidth + x + offsetX;
-									assert(byteIndex < bitmapSize);
-									if (bitmapBuf[byteIndex]) {
-										nom++;
-									}
-								}
-							}
-							uint32_t atlasIndex = pen.y * out.m_Extent.x + pen.x++;
-							assert(atlasIndex < atlasPixelCount);
-							out.m_Atlas[atlasIndex] = nom / denom * 255;
-							nom = 0.0f;
-						}
-						pen.y++;
-						pen.x = currentPenStartingXPos;
-					}
-					out.m_Characters[c].m_Size = { bitmapWidth / 4, bitmapHeight / 4 };
-					out.m_Characters[c].m_Offset = currentPenStartingXPos;
-					out.m_MaxHoriBearingY = Max(out.m_MaxHoriBearingY, ((int)face->glyph->metrics.horiBearingY >> 6) / 4);
-					currentPenStartingXPos += bitmapWidth / 4;
-					*/
 				}
+				free(bitmap);
 			}
-			FtCheck(FT_Done_Face(face), "failed to terminate FreeType face (function FT_Done_Face in function CreateGlyphAtlas)!");
 			return true;
 		}
 
@@ -339,7 +326,8 @@ namespace engine {
 		template<TextAlignment text_alignment_T = TextAlignment::Left>
 		TextImage RenderText(const char* text, const RenderTextInfo& renderInfo, Vec2_T<uint32_t> frameExtent, uint32_t* bgImage = nullptr) {
 			static_assert(sizeof(uint32_t) == 4, "size of uint32_t was not 4!");
-			static_assert(sizeof(uint8_t) == 1, "size of uint8_t was not 1!");
+			static_assert(sizeof(uint8_t) == 1, "size of uin8_t was not 1!");
+			static_assert(sizeof(uint8_t) == sizeof(unsigned char), "size of unsigned char was not size of uint8_t!");
 			if (frameExtent.x == 0 || frameExtent.y == 0) {
 				PrintError(ErrorOrigin::Uncategorized, "frame size was 0 (in function TextRenderer::RenderText)!");
 				return {};
