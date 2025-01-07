@@ -2464,10 +2464,10 @@ void main() {
 			uint32_t m_HeightMapMax;
 			uint32_t* m_HeightMap;
 
-			const uint64_t m_RenderID;
+			const uint64_t m_ObjectID;
 
-			Ground(const GroundInfo& groundInfo, uint64_t renderID) 
-					: m_BoundingBox(groundInfo.m_BoundingBox), m_RenderID(renderID) {}
+			Ground(const GroundInfo& groundInfo, uint64_t objectID) 
+					: m_BoundingBox(groundInfo.m_BoundingBox), m_ObjectID(objectID) {}
 
 		public:
 
@@ -2538,8 +2538,8 @@ void main() {
 
 		private:
 
-			Creature(const Vec3& position, const Chunk* chunk, uint64_t renderID) 
-					: m_Position(position), m_Chunk(chunk), m_RenderID(renderID) {
+			Creature(const Vec3& position, const Chunk* chunk, uint64_t objectID) 
+					: m_Position(position), m_Chunk(chunk), m_ObjectID(objectID) {
 				assert(chunk);
 				Vec2_T<bool> _;
 				const Ground* ground = chunk->FindGround(position, {}, _);
@@ -2548,12 +2548,17 @@ void main() {
 
 			const Chunk* m_Chunk;
 			Vec3 m_Position;
-			const uint64_t m_RenderID;
+			const uint64_t m_ObjectID;
 
 		public:
 
-			Vec3(*m_MovementVectorUpdate)(const Creature& creature){};
+			Vec3 (*m_MovementVectorUpdate)(const Creature& creature){};
 			void (*m_MoveCallback)(const Creature& creature, const Vec3& position, const Vec3& deltaPosition){};
+			void (*m_CameraFollowCallback)(const Creature& creature, Mat4& outViewMatrix);
+
+			const Vec3& GetPosition() const {
+				return m_Position;
+			}
 
 		private:
 
@@ -2652,12 +2657,13 @@ void main() {
 
 			Engine& m_Engine;
 
-			uint64_t m_NextRenderDataID{};
+			uint64_t m_NextObjectID{};
 			DynamicArray<Ground> m_Grounds{};
 			Vec2_T<uint32_t> m_ChunkMatrixSize{};
 			DynamicArray<Chunk> m_ChunkMatrix{};
 			Rect<float> m_WorldRect{};
 			DynamicArray<Creature> m_Creatures{};
+			uint64_t m_CameraFollowObjectID = UINT64_MAX;
 			CameraMatricesBuffer* m_CameraMatricesMap = nullptr;
 
 			Vec2_T<float> m_ChunkDimensions{};
@@ -2847,18 +2853,22 @@ void main() {
 				}
 				for (const Chunk& chunk : m_ChunkMatrix) {
 					if (chunk.IsPointInside(pos)) {
-						return m_Creatures.EmplaceBack(pos, &chunk, m_NextRenderDataID++);
+						return m_Creatures.EmplaceBack(pos, &chunk, m_NextObjectID++);
 					}
 				}
 				assert(false);
 			}
 
+			void SetCameraFollowCreature(const Creature& creature) {
+				m_CameraFollowObjectID = creature.m_ObjectID;
+			}
+
 			RenderData& AddRenderData(const Creature& creature, const Mat4& transform, const MeshData& meshData) {
-				return m_RenderDatas.EmplaceBack(creature.m_RenderID, transform, meshData);
+				return m_RenderDatas.EmplaceBack(creature.m_ObjectID, transform, meshData);
 			}
 
 			RenderData& AddRenderData(const Ground& ground, const Mat4& transform, const MeshData& meshData) {
-				return m_RenderDatas.EmplaceBack(ground.m_RenderID, transform, meshData);
+				return m_RenderDatas.EmplaceBack(ground.m_ObjectID, transform, meshData);
 			}
 
 			const DynamicArray<Ground>& GetGrounds() {
@@ -2870,7 +2880,10 @@ void main() {
 			}
 
 			bool RemoveCreature(Creature& creature) {
-				RemoveRenderDatas(creature.m_RenderID);
+				RemoveRenderDatas(creature.m_ObjectID);
+				if (m_CameraFollowObjectID == creature.m_ObjectID) {
+					m_CameraFollowObjectID = UINT64_MAX;
+				}
 				return m_Creatures.Erase(&creature);
 			}
 
@@ -2919,7 +2932,7 @@ void main() {
 			void Load(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, uint32_t groundCount, GroundInfo groundInfos[]) {
 				m_Grounds.Reserve(groundCount);
 				for (uint32_t i = 0; i < groundCount; i++) {
-					m_Grounds.EmplaceBack(groundInfos[i], m_NextRenderDataID++);
+					m_Grounds.EmplaceBack(groundInfos[i], m_NextObjectID++);
 				}
 				m_ChunkDimensions = { 
 					(float)worldDimensions.x / chunkMatrixSize.x, 
@@ -3001,6 +3014,11 @@ void main() {
 						}
 					}
 					creature.Move(newPos);
+					if (m_CameraFollowObjectID == creature.m_ObjectID) {
+						if (creature.m_CameraFollowCallback) {
+							creature.m_CameraFollowCallback(creature, m_CameraMatricesMap->m_View);
+						}
+					}
 				}
 			}
 

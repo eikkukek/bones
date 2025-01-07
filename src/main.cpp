@@ -352,6 +352,14 @@ public:
 		s_instance->m_RenderData.m_Transform[3] = Vec4(Vec3(0.0f, 0.0f, 3.0f) + position, 1.0f);
 	}
 
+	static void CameraFollowCallback(const engine::Creature& creature, engine::Mat4& outViewMatrix) {
+		using namespace engine;
+		const engine::Vec3& creaturePos = creature.GetPosition();
+		static const Vec3 cameraOffset(10.0f, 10.0f, -10.0f);
+		static const Vec3 lookAtOffset(0.0f, 0.0f, 10.0f);
+		outViewMatrix = Mat4::LookAt(creaturePos + cameraOffset, Vec3(0.0f, 1.0f, 0.0f), creaturePos + lookAtOffset);
+	}
+
 	Player(engine::World& world, engine::StaticMesh& mesh) 
 		: m_World(world), m_Creature(world.AddCreature({})), m_Mesh(mesh), 
 			m_RenderData(m_World.AddRenderData(m_Creature, {}, m_Mesh.GetMeshData())) {
@@ -361,6 +369,8 @@ public:
 		m_RenderData.m_MeshData = m_Mesh.GetMeshData();
 		m_Creature.m_MovementVectorUpdate = MovementVectorUpdate;
 		m_Creature.m_MoveCallback = MoveCallback;
+		m_Creature.m_CameraFollowCallback = CameraFollowCallback;
+		world.SetCameraFollowCreature(m_Creature);
 	}
 
 	void Update() {
@@ -419,6 +429,18 @@ int main() {
 	};
 
 	World& world = engine.LoadWorld({ 128, 128 }, { 8, 8 }, 1, &groundInfo);
+
+	const Engine::DynamicArray<Engine::Ground>& grounds = world.GetGrounds();
+
+	MeshData groundMesh = engine.m_StaticQuadMesh.GetMeshData();
+
+	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), pi / 2).AsMat4();
+	groundTransform[0] *= 10.0f;
+	groundTransform[1] *= 10.0f;
+	groundTransform[2] *= 10.0f;
+	groundTransform[3] = { 0.0f, 1.0f, 0.0f, 1.0f };
+
+	world.AddRenderData(grounds[0], groundTransform, groundMesh);
 
 	Engine::Obj sphereObj{};
 	FILE* fileStream = fopen("resources\\meshes\\sphere.obj", "r");
