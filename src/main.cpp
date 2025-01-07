@@ -285,7 +285,7 @@ public:
 			.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 			.descriptorCount = 1,
 		};
-		m_ImageDescriptorPool = m_Engine.m_Renderer.CreateDescriptorPool(1, 1, &poolSize);
+		m_ImageDescriptorPool = m_Engine.m_Renderer.CreateDescriptorPool(0, 1, 1, &poolSize);
 		engine.m_Renderer.AllocateDescriptorSets(nullptr, m_ImageDescriptorPool, 1, &m_ImageDescriptorSetLayout, &m_ImageDescriptorSet);
 		VkDescriptorImageInfo imageInfo {
 			.sampler = m_ImageSampler,
@@ -327,13 +327,18 @@ public:
 	}
 };
 
-class TestCreature {
+class Player {
 public:
-
+	
 	engine::World& m_World;
 	engine::Creature& m_Creature;
+	engine::StaticMesh m_Mesh;
+	engine::World::RenderData& m_RenderData;
 
-	TestCreature(engine::World& world) : m_World(world), m_Creature(world.AddCreature({})) {}
+
+	Player(engine::World& world, engine::StaticMesh&& mesh) 
+		: m_World(world), m_Creature(world.AddCreature({})), m_Mesh(std::move(mesh)), 
+			m_RenderData(m_World.AddRenderData(m_Creature, {}, m_Mesh.GetMeshData())) {}
 };
 
 int main() {
@@ -375,7 +380,20 @@ int main() {
 
 	World& world = engine.LoadWorld({}, { 32, 32 }, { 32, 32 });
 
-	TestCreature testCreature(world);
+	Engine::Obj sphereObj{};
+	FILE* fileStream = fopen("resources\\meshes\\sphere.obj", "r");
+	assert(sphereObj.Load(fileStream));
+	fclose(fileStream);
+
+	const Engine::DynamicArray<uint32_t>& sphereIndices = sphereObj.GetIndices();
+	Engine::DynamicArray<Engine::Vertex> sphereVertices{};
+	assert(sphereObj.GetVertices(Engine::Vertex::SetPosition, Engine::Vertex::SetUV, 
+		Engine::Vertex::SetNormal, sphereVertices));
+
+	StaticMesh playerMesh(engine);
+	playerMesh.CreateBuffers(sphereVertices.m_Size, sphereVertices.m_Data, sphereIndices.m_Size, sphereIndices.m_Data);
+
+	Player player(world, std::move(playerMesh));
 
 	while (!glfwWindowShouldClose(pWindow)) {
 		glfwPollEvents();
@@ -383,6 +401,7 @@ int main() {
 		engine.Render();
 	}
 	vkDeviceWaitIdle(engine.m_Renderer.m_VulkanDevice);	
+	player.m_Mesh.Terminate();
 	engine.m_Renderer.DestroyDescriptorPool(testUIDescriptorPool);
 	testEntity.OnTerminate();
 	testPipeline.Terminate();
