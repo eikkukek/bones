@@ -1326,6 +1326,7 @@ namespace engine {
 				s_HeldKeys[index] = action != GLFW_RELEASE;
 				if (action != GLFW_RELEASE) {
 					s_KeyValues[index] = 1.0f;
+					s_ActiveKeys.PushBack((Key)key);
 				}
 			}
 
@@ -1337,6 +1338,7 @@ namespace engine {
 				s_HeldMouseButtons[index] = action != GLFW_RELEASE;
 				if (action != GLFW_RELEASE) {
 					s_MouseButtonValues[index] = 1.0f;
+					s_ActiveMouseButtons.PushBack((MouseButton)button);
 				}
 			}
 
@@ -1388,6 +1390,10 @@ namespace engine {
 			static bool WasKeyHeld(Key key) {
 				return s_HeldKeys[static_cast<size_t>(key)];
 			}
+
+			static float ReadKeyValue(Key key) {
+				return s_KeyValues[static_cast<size_t>(key)];
+			}	
 
 			static bool WasMouseButtonPressed(MouseButton button) {
 				return s_PressedMouseButtons[static_cast<size_t>(button)];
@@ -2519,7 +2525,7 @@ void main() {
 		public:
 
 			Vec3(*m_MovementVectorUpdate)(const Creature& creature){};
-			void (*m_MoveCallback)(const Creature& creature, const Vec3& position){};
+			void (*m_MoveCallback)(const Creature& creature, const Vec3& position, const Vec3& deltaPos){};
 
 		private:
 
@@ -2531,14 +2537,19 @@ void main() {
 			}
 
 			void Move(const Vec3& position, const Ground* ground) {
-				if (!ground) {
-					return;
+				Vec3 deltaPos = position - m_Position;
+				/*
+				if (ground) {
+					m_Position = position;
+					float height = ground->GetHeightAtPosition(m_Position);
+					assert(height != std::numeric_limits<float>::max());
+					m_Position.z = height;
 				}
+				*/
 				m_Position = position;
-				float height = ground->GetHeightAtPosition(m_Position);
-				assert(height != std::numeric_limits<float>::max());
-				m_Position.z = height;
-				m_MoveCallback(*this, m_Position);
+				if (m_MoveCallback) {
+					m_MoveCallback(*this, m_Position, deltaPos);
+				}
 			}
 		};
 
@@ -2671,8 +2682,8 @@ void main() {
 					CriticalError(ErrorOrigin::Vulkan, 
 						"failed to map camera matrices buffer (function vkMapMemory in function World::Initialize)!");
 				}
-				m_CameraMatricesMap->m_Projection = Mat4::Projection(pi / 2, 1.0f, 0.0f, 10.0f);
-				m_CameraMatricesMap->m_View = Mat4(1);
+				m_CameraMatricesMap->m_Projection = Mat4::Projection(pi / 2, 1.0f, 0.01f, 10.0f);
+				m_CameraMatricesMap->m_View = Mat4::LookAt({ 0.0f, 3.0f, 0.0f }, Vec3(0.0f, 1.0f, 0.0f), Vec3(0.0f, 0.0f, 3.0f));
 				VkDescriptorPoolSize camPoolSize {
 					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 					.descriptorCount = 1,
@@ -3084,6 +3095,8 @@ void main() {
 			m_UI.Initialize();
 			m_Entities.Reserve(entityReservation);
 
+			Input input(window);
+
 			static constexpr Vertex quadVertices[4] {
 				{
 					.m_Position { -1.0f, 1.0f, 0.0f },
@@ -3209,6 +3222,7 @@ void main() {
 				}
 				creature.Move(newPos, creature.m_Chunk->FindGround(creature.m_Position));
 			}
+			Input::ResetInput();
 		};
 
 		void Render() {
