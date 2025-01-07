@@ -411,7 +411,14 @@ int main() {
 		return true;
 	};
 
-	World& world = engine.LoadWorld({}, { 64, 64 }, { 9, 9 });
+	Engine::GroundInfo groundInfo {
+		.m_BoundingBox {
+			.m_Min { -8.0f, -8.0f },
+			.m_Max { 8.0f, 8.0f },
+		}
+	};
+
+	World& world = engine.LoadWorld({ 128, 128 }, { 8, 8 }, 1, &groundInfo);
 
 	Engine::Obj sphereObj{};
 	FILE* fileStream = fopen("resources\\meshes\\sphere.obj", "r");
