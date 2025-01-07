@@ -3,6 +3,8 @@
 #include "renderer.hpp"
 #include "text_renderer.hpp"
 #include "math.hpp"
+#include "fmt/printf.h"
+#include "fmt/color.h"
 #include "vulkan/vulkan_core.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "third_party/stb_image.h"
@@ -133,6 +135,20 @@ namespace engine {
 				free(m_Data);
 				m_Capacity = capacity;
 				m_Data = temp;
+				return *this;
+			}
+
+			DynamicArray& Resize(size_t size) {
+				if (size <= m_Size) {
+					return *this;
+				}
+				if (size >= m_Capacity) {
+					Reserve(size * 2);
+				}
+				for (size_t i = m_Size; i < size; i++) {
+					new(&m_Data[i]) T();
+				}
+				m_Size = size;
 				return *this;
 			}
 
@@ -656,19 +672,33 @@ namespace engine {
 				outCount = attribute_count;
 			}
 
-			Vec3 m_Position;
-			Vec3 m_Normal;
-			Vec2 m_UV;
-			Vec3 m_Tangent;
-			Vec3 m_Bitangent;
+			static void SetPosition(Vertex& vertex, const Vec3& pos) {
+				vertex.m_Position = pos;
+			}
+
+			static void SetUV(Vertex& vertex, const Vec3& UV) {
+				vertex.m_UV = UV;
+			}
+
+			static void SetNormal(Vertex& vertex, const Vec3& normal) {
+				vertex.m_Normal = normal;
+			}
+
+			Vec3 m_Position{};
+			Vec3 m_Normal{};
+			Vec2 m_UV{};
+			Vec3 m_Tangent{};
+			Vec3 m_Bitangent{};
+
+			bool operator==(const Vertex& other) const noexcept = default;
 		};
 
 		struct MeshData {
 			uint32_t m_VertexBufferCount;
+			uint32_t m_IndexCount;
 			const VkBuffer* m_VertexBuffers;
 			const VkDeviceSize* m_VertexBufferOffsets;
 			VkBuffer m_IndexBuffer;
-			uint32_t m_IndexCount;
 		};
 
 		class StaticMesh {
@@ -691,10 +721,10 @@ namespace engine {
 				constexpr static VkDeviceSize offset = 0;
 				MeshData data {
 					.m_VertexBufferCount = 1,
+					.m_IndexCount = m_IndexCount,
 					.m_VertexBuffers = &m_VertexBuffer.m_Buffer,
 					.m_VertexBufferOffsets = &offset,
 					.m_IndexBuffer = m_IndexBuffer.m_Buffer,
-					.m_IndexCount = m_IndexCount,
 				};
 				return data;
 			}
@@ -2126,7 +2156,7 @@ void main() {
 					.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 					.descriptorCount = texture_count_T,
 				};
-				outDescriptorPool = renderer.CreateDescriptorPool(1, 1, &poolSize);
+				outDescriptorPool = renderer.CreateDescriptorPool(0, 1, 1, &poolSize);
 				if (outDescriptorPool == VK_NULL_HANDLE) {
 					PrintError(ErrorOrigin::Renderer, 
 						"failed to create descriptor pool (function Renderer::CreateDescriptorPool in function UI::CreateTexture2DArray)!");
@@ -2209,6 +2239,138 @@ void main() {
 		class EntityConstructor {
 			const char* m_TypeName;
 			Entity* (*m_NewEntityFunction)(EntityAllocator&);
+		};
+
+		struct Obj {
+
+			uint32_t m_LinesParsed = 0;
+
+			DynamicArray<Vec3> m_Vs;
+			DynamicArray<Vec3> m_Vts;
+			DynamicArray<Vec3> m_Vns;
+
+			DynamicArray<uint32_t> m_VIndices{};
+			DynamicArray<uint32_t> m_VtIndices{};
+			DynamicArray<uint32_t> m_VnIndices{};
+
+			bool Load(FILE* fileStream) {
+				if (!fileStream) {
+					return false;
+				}
+				char buf[3];
+				buf[2] = '\0';
+				uint32_t maxVIndex{}, maxVtIndex{}, maxVnIndex {};
+				while (true) {
+					buf[0] = fgetc(fileStream);
+					if (buf[0] == EOF) {
+						break;
+					}
+					if (buf[0] == '\n') {
+						continue;
+					}
+					++m_LinesParsed;
+					buf[1] = fgetc(fileStream);
+					if (buf[1] == EOF) {
+						break;
+					}
+					if (buf[1] == ' ') {
+						buf[1] = 0;
+					}
+					if (buf[0] == 'v') {
+						if (buf[1]) {
+							if (buf[1] == 't') {
+								long fPos = ftell(fileStream);
+								Vec3& vt = m_Vts.EmplaceBack();
+								if (fscanf(fileStream, "%f%f%f", &vt.x, &vt.y, &vt.z) != 3) {
+									fseek(fileStream, fPos, SEEK_SET);
+								}
+								for (char c = fgetc(fileStream); c != '\n' && c != EOF; c = fgetc(fileStream)) {}
+							}
+							else if (buf[1] == 'n') {
+								long fPos = ftell(fileStream);
+								Vec3& vn = m_Vns.EmplaceBack();
+								if (fscanf(fileStream, "%f%f%f", &vn.x, &vn.y, &vn.z) != 3) {
+									fseek(fileStream, fPos, SEEK_SET);
+								}
+								for (char c = fgetc(fileStream); c != '\n' && c != EOF; c = fgetc(fileStream)) {}
+							}
+						}
+						else {
+							long fPos = ftell(fileStream);
+							Vec3& v = m_Vs.EmplaceBack();
+							if (fscanf(fileStream, "%f%f%f", &v.x, &v.y, &v.z) != 3) {
+								fseek(fileStream, fPos, SEEK_SET);
+							}
+							for (char c = fgetc(fileStream); c != '\n' && c != EOF; c = fgetc(fileStream)) {}
+						}
+						continue;
+					}
+					if (buf[0] == 'f') {
+						long fPos = ftell(fileStream);
+						bool failed = false;
+						for (size_t i = 0; i < 3; i++) {
+							uint32_t& vI = m_VIndices.EmplaceBack();
+							uint32_t& vtI = m_VtIndices.EmplaceBack();
+							int res = fscanf(fileStream, "%i/%i", &vI, &vtI);
+							if (res != 2) {
+								m_LinesParsed = 0;
+								return false;
+							}
+							--vI;
+							--vtI;
+							maxVIndex = Max(vI, maxVIndex);
+							maxVtIndex = Max(vtI, maxVtIndex);
+							if (fgetc(fileStream) == '/') {
+								uint32_t& vnI = m_VnIndices.EmplaceBack();
+								if (fscanf(fileStream, "%i", &vnI) != 1) {
+									m_LinesParsed = 0;
+									return false;
+								}
+								--vnI;
+								maxVnIndex = Max(vnI, maxVnIndex);
+							}
+						}
+						for (char c = fgetc(fileStream); c != '\n' && c != EOF; c = fgetc(fileStream)) {}
+						continue;
+					}
+					for (char c = fgetc(fileStream); c != '\n' && c != EOF; c = fgetc(fileStream)) {}
+				}
+				if (!(m_VIndices.Size() == m_VtIndices.Size() &&
+					(!m_VnIndices.Size() || m_VnIndices.Size() == m_VtIndices.Size()) &&
+					maxVIndex < m_Vs.Size() && maxVtIndex < m_Vts.Size() && maxVnIndex < m_Vns.Size())) {
+					m_LinesParsed = 0;
+					return false;
+				}
+				return true;
+			}
+
+			const DynamicArray<uint32_t>& GetIndices() {
+				return m_VIndices;
+			}
+
+			template<typename VertexType>
+			bool GetVertices(void (*setPos)(Vertex&, const Vec3&), void (*setUV)(Vertex&, const Vec3&), 
+					void (*setNormal)(Vertex&, const Vec3&), DynamicArray<VertexType>& outVertices) {
+				if (m_LinesParsed == 0) {
+					PrintError(ErrorOrigin::FileParsing, 
+						"attempting to get vertices from Engine::Obj which failed to parse (in function Obj::GetVertices)!");
+					return false;
+				}
+				outVertices.Resize(m_Vs.m_Size);
+				for (uint32_t i = 0; i < m_VIndices.m_Size; i++) {
+					uint32_t vertexIndex = m_VIndices[i];
+					VertexType newVertex{};
+					setPos(newVertex, m_Vs[vertexIndex]);
+					setUV(newVertex, m_Vts[m_VtIndices[i]]);
+					setNormal(newVertex, m_Vns[m_VnIndices[i]]);
+					VertexType& vertex = outVertices[vertexIndex];
+					if (vertex == newVertex) {
+						continue;
+					}
+					vertex = newVertex;
+				}
+				return true;
+			}
 		};
 
 		static bool LoadImage(const char* fileName, uint32_t components, uint8_t*& outPixels, Vec2_T<uint32_t>& outExtent) {
@@ -2323,17 +2485,14 @@ void main() {
 			}
 		};
 
-		struct WorldPipelineRenderData {
-			MeshData m_MeshData{};
-			VkDescriptorSet m_MatricesDescriptorSet{};
-		};
-
 		class Creature {
+
 			friend class Engine;
 
 		private:
 
-			Creature(const Vec3& position, const Chunk* chunk) : m_Position(position), m_Chunk(chunk) {
+			Creature(const Vec3& position, const Chunk* chunk, uint64_t renderID) 
+					: m_Position(position), m_Chunk(chunk), m_RenderID(renderID) {
 				assert(chunk);
 				const Ground* ground = chunk->FindGround(position);
 				m_Position.y = ground ? ground->GetHeightAtPosition(position) : 0.0f;
@@ -2341,12 +2500,12 @@ void main() {
 
 			const Chunk* m_Chunk;
 			Vec3 m_Position;
+			const uint64_t m_RenderID;
 
 		public:
 
 			Vec3(*m_MovementVectorUpdate)(const Creature& creature){};
 			void (*m_MoveCallback)(const Creature& creature, const Vec3& position){};
-			void (*m_WorldPipelineRenderUpdate)(const Creature& creature, uint32_t& outRenderDataCount, WorldPipelineRenderData*& outPipelineRenderDatas){};
 
 		private:
 
@@ -2367,23 +2526,34 @@ void main() {
 				m_Position.z = height;
 				m_MoveCallback(*this, m_Position);
 			}
-
-			void WorldPipelineRenderUpdate(uint32_t& outRenderDataCount, WorldPipelineRenderData*& outPipelineRenderDatas) const {
-				if (m_WorldPipelineRenderUpdate) {
-					m_WorldPipelineRenderUpdate(*this, outRenderDataCount, outPipelineRenderDatas);
-				}
-			}
 		};
 
 		class World {
-		public:
 
 			friend class Engine;
 
+		public:
+
 			struct Pipeline {
-				VkPipeline m_Pipeline{};
-				VkPipelineLayout m_PipelineLayout{};
-				VkDescriptorSetLayout m_DescriptorSetLayout{};
+				VkPipeline m_Pipeline = VK_NULL_HANDLE;
+				VkPipelineLayout m_PipelineLayout = VK_NULL_HANDLE;
+				VkDescriptorSetLayout m_DescriptorSetLayout = VK_NULL_HANDLE;
+			};
+
+			struct RenderData {
+				friend class World;
+
+				RenderData(uint64_t renderID, const Mat4& transform, const MeshData& meshData) noexcept 
+					: m_RenderID(renderID), m_Transform(transform), m_MeshData(meshData) {}
+
+				const uint64_t m_RenderID;
+				Mat4 m_Transform;
+				MeshData m_MeshData;
+			};
+
+			struct CameraMatricesBuffer {
+				Mat4 m_Projection;
+				Mat4 m_View;
 			};
 
 			static constexpr const char* world_pipeline_vertex_shader = R"(
@@ -2423,15 +2593,20 @@ void main() {
 	outColor = vec4(inPosition, 1.0f);
 }
 			)";
+
 		private:
 
 			Engine& m_Engine;
 
+			uint64_t m_NextRenderDataID{};
 			DynamicArray<Ground> m_Grounds{};
-			DynamicArray<Chunk> m_ChunkMatrix{};
 			Vec2_T<uint32_t> m_ChunkMatrixSize{};
+			DynamicArray<Chunk> m_ChunkMatrix{};
 			Rect<float> m_WorldRect{};
 			DynamicArray<Creature> m_Creatures{};
+			DynamicArray<RenderData> m_RenderDatas{};
+			VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
+			CameraMatricesBuffer* m_CameraMatricesMap = nullptr;
 
 			Vec2_T<uint32_t> m_ChunkDimensions{};
 
@@ -2439,47 +2614,18 @@ void main() {
 			Pipeline m_Pipeline{};
 
 			DynamicArray<VkImage> m_DepthImages{};
+			VkDescriptorPool m_CameraMatricesDescriptorPool = VK_NULL_HANDLE;
+			Renderer::Buffer m_CameraMatricesBuffer;
 
-			World(Engine& engine) : m_Engine(engine) {}
+			World(Engine& engine) : m_Engine(engine), m_CameraMatricesBuffer(m_Engine.m_Renderer) {}
 
 			World(const World&) = delete;
 			World(World&&) = delete;
 
-		public:
-
-			Vec2_T<bool> IsOnBorder(const Vec3& position) {
-				Vec2 dimensionsHalf = m_WorldRect.Dimensions() / 2;
-				Vec2 pos = Vec2(position.x, position.z) + dimensionsHalf;
-				Vec2 frac(pos.x / m_ChunkDimensions.x, pos.y / m_ChunkDimensions.y);
-				IntVec2 intgr = frac;
-				return { frac.x == (float)intgr.x, frac.y == (float)intgr.y };
-			}
-
-			Creature& AddCreature(const Vec3& position) {
-				if (!m_ChunkMatrix.m_Size) {
-					CriticalError(ErrorOrigin::GameLogic, 
-						"attempting to add a creature to an empty world (in function World::AddCreature)!");
-				}
-				Vec3 pos(Clamp(position.x, m_WorldRect.m_Min.x + 0.01f, m_WorldRect.m_Max.x - 0.01f), 0.0f, Clamp(position.z, m_WorldRect.m_Min.y + 0.01f, m_WorldRect.m_Max.y - 0.01f));
-				Vec2_T<bool> isOnBorder = IsOnBorder(position);
-				if (isOnBorder.x) {
-					pos.x += 0.01f;
-				}
-				if (isOnBorder.y) {
-					pos.z += 0.01f;
-				}
-				for (const Chunk& chunk : m_ChunkMatrix) {
-					if (chunk.IsPointInside(pos)) {
-						return m_Creatures.EmplaceBack(pos, &chunk);
-					}
-				}
-				assert(false);
-			}
-
-		private:
-
 			void Initialize() {
+
 				Renderer& renderer = m_Engine.m_Renderer;
+
 				VkDescriptorSetLayoutBinding set0Binding0 {
 					.binding = 0,
 					.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -2490,7 +2636,7 @@ void main() {
 				m_Pipeline.m_DescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 1, & set0Binding0);
 				if (m_Pipeline.m_DescriptorSetLayout == VK_NULL_HANDLE) {
 					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create pipeline layout for world pipeline (function Renderer::CreateDescriptorSetLayout in function World::CreatePipeline)!");
+						"failed to create pipeline layout for world pipeline (function Renderer::CreateDescriptorSetLayout in function World::Initialize)!");
 				}
 				VkPushConstantRange pushConstantRange {
 					.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
@@ -2499,17 +2645,53 @@ void main() {
 				};
 				m_Pipeline.m_PipelineLayout = renderer.CreatePipelineLayout(1, &m_Pipeline.m_DescriptorSetLayout, 1, &pushConstantRange);
 
+				if (!m_CameraMatricesBuffer.Create(sizeof(CameraMatricesBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create camera matrices buffer (function Renderer::Buffer::Create in function World::Initialize)!");
+				}
+				VkResult vkRes = vkMapMemory(renderer.m_VulkanDevice, m_CameraMatricesBuffer.m_VulkanDeviceMemory, 0, 
+					sizeof(CameraMatricesBuffer), 0, (void**)&m_CameraMatricesMap);
+				if (vkRes != VK_SUCCESS) {
+					CriticalError(ErrorOrigin::Vulkan, 
+						"failed to map camera matrices buffer (function vkMapMemory in function World::Initialize)!");
+				}
+				m_CameraMatricesMap->m_Projection = Mat4();
+				m_CameraMatricesMap->m_View = Mat4();
+				VkDescriptorPoolSize camPoolSize {
+					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+					.descriptorCount = 1,
+				};
+				m_CameraMatricesDescriptorPool = renderer.CreateDescriptorPool(0, 1, 1, &camPoolSize);
+				if (m_CameraMatricesDescriptorPool == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create camera matrices descriptor pool (function Renderer::CreateDescriptorPool in function World::Initialize)");
+				}
+				if (!renderer.AllocateDescriptorSets(nullptr, m_CameraMatricesDescriptorPool, 1, 
+						&m_Pipeline.m_DescriptorSetLayout, &m_CameraMatricesDescriptorSet)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to allocate camera matrices descriptor set (function Renderer::AllocateDescriptorSets in function World::Initialize)!");
+				}
+				VkDescriptorBufferInfo cameraDecriptorBufferInfo {
+					.buffer = m_CameraMatricesBuffer.m_Buffer,
+					.offset = 0,
+					.range = 64,
+				};
+				VkWriteDescriptorSet cameraDescriptorSetWrite = Renderer::GetDescriptorWrite(nullptr, 0, m_CameraMatricesDescriptorSet,
+					VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &cameraDecriptorBufferInfo);
+				renderer.UpdateDescriptorSets(1, &cameraDescriptorSetWrite);
+
 				Renderer::Shader vertexShader(renderer);
 				Renderer::Shader fragmentShader(renderer);
 
 				if (!vertexShader.Compile(world_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
 					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile vertex shader code (function Renderer::Shader::Compile in function World::CreatePipeline)!");
+						"failed to compile vertex shader code (function Renderer::Shader::Compile in function World::Initialize)!");
 				}
 
 				if (!fragmentShader.Compile(world_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
 					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile fragment shader code (function Renderer::Shader::Compile in function World::CreatePipeline)!");
+						"failed to compile fragment shader code (function Renderer::Shader::Compile in function World::Initialize)!");
 				}
 
 				VkShaderModule shaderModules[2] {
@@ -2563,7 +2745,7 @@ void main() {
 				};
 
 				if (!renderer.CreateGraphicsPipelines(1, &pipelineInfo, &m_Pipeline.m_Pipeline)) {
-					CriticalError(ErrorOrigin::Renderer, "failed to create world graphics pipeline (function Renderer::CreateGraphicsPipelines in function World::CreatePipeline)!");
+					CriticalError(ErrorOrigin::Renderer, "failed to create world graphics pipeline (function Renderer::CreateGraphicsPipelines in function World::Initialize)!");
 				}
 
 				renderer.DestroyShaderModule(shaderModules[0]);
@@ -2575,6 +2757,64 @@ void main() {
 				renderer.DestroyPipeline(m_Pipeline.m_Pipeline);
 				renderer.DestroyPipelineLayout(m_Pipeline.m_PipelineLayout);
 				renderer.DestroyDescriptorSetLayout(m_Pipeline.m_DescriptorSetLayout);
+			}
+
+		public:
+
+			Vec2_T<bool> IsOnBorder(const Vec3& position) {
+				Vec2 dimensionsHalf = m_WorldRect.Dimensions() / 2;
+				Vec2 pos = Vec2(position.x, position.z) + dimensionsHalf;
+				Vec2 frac(pos.x / m_ChunkDimensions.x, pos.y / m_ChunkDimensions.y);
+				IntVec2 intgr = frac;
+				return { frac.x == (float)intgr.x, frac.y == (float)intgr.y };
+			}
+
+			Creature& AddCreature(const Vec3& position) {
+				if (!m_ChunkMatrix.m_Size) {
+					CriticalError(ErrorOrigin::GameLogic, 
+						"attempting to add a creature to an empty world (in function World::AddCreature)!");
+				}
+				Vec3 pos(Clamp(position.x, m_WorldRect.m_Min.x + 0.01f, m_WorldRect.m_Max.x - 0.01f), 0.0f, 
+					Clamp(position.z, m_WorldRect.m_Min.y + 0.01f, m_WorldRect.m_Max.y - 0.01f));
+				Vec2_T<bool> isOnBorder = IsOnBorder(position);
+				if (isOnBorder.x) {
+					pos.x += 0.01f;
+				}
+				if (isOnBorder.y) {
+					pos.z += 0.01f;
+				}
+				for (const Chunk& chunk : m_ChunkMatrix) {
+					if (chunk.IsPointInside(pos)) {
+						return m_Creatures.EmplaceBack(pos, &chunk, m_NextRenderDataID++);
+					}
+				}
+				assert(false);
+			}
+
+			RenderData& AddRenderData(const Creature& creature, const Mat4& transform, const MeshData& meshData) {
+				return m_RenderDatas.EmplaceBack(creature.m_RenderID, transform, meshData);
+			}
+
+			Engine& GetEngine() const {
+				return m_Engine;
+			}
+
+			bool RemoveCreature(Creature& creature) {
+				RemoveRenderDatas(creature.m_RenderID);
+				return m_Creatures.Erase(&creature);
+			}
+
+		private:
+
+			void RemoveRenderDatas(uint64_t renderID) {
+				auto end = m_RenderDatas.end();
+				for (auto iter = m_RenderDatas.begin(); iter != end;) {
+					if (iter->m_RenderID == renderID) {
+						iter = m_RenderDatas.Erase(iter);
+						continue;
+					}
+					++iter;
+				}
 			}
 
 			void Load(DynamicArray<Ground>&& grounds, Vec2_T<uint32_t> chunkDimensions, Vec2_T<uint32_t> chunkMatrixSize) {
@@ -2597,12 +2837,18 @@ void main() {
 						}
 					}
 				}
+				static VkDescriptorPoolSize cameraMatrixPoolSize {
+					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+					.descriptorCount = 1,
+				};
 			}
 
 			void Unload() {
+				m_CameraMatricesDescriptorPool = VK_NULL_HANDLE;
 				m_Grounds.Clear();
 				m_ChunkMatrix.Clear();
 				m_Creatures.Clear();
+				m_RenderDatas.Clear();
 			};
 
 			void Render(const Renderer::DrawData& drawData) const {
@@ -2628,20 +2874,15 @@ void main() {
 						.pColorAttachments = &colorAttachment,
 					};
 					vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
-					for (const Creature& creature : m_Creatures) {
-						uint32_t renderDataCount = 0;
-						WorldPipelineRenderData* pipelineDatas = nullptr;
-						creature.WorldPipelineRenderUpdate(renderDataCount, pipelineDatas);
-						if (pipelineDatas) {
-							for (size_t i = 0; i < renderDataCount; i++) {
-								WorldPipelineRenderData& pipelineData = pipelineDatas[i];
-								vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline.m_PipelineLayout, 
-									0, 1, &pipelineData.m_MatricesDescriptorSet, 0, nullptr);
-								vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 0, 1, pipelineData.m_MeshData.m_VertexBuffers, pipelineData.m_MeshData.m_VertexBufferOffsets);
-								vkCmdBindIndexBuffer(drawData.m_CommandBuffer, pipelineData.m_MeshData.m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-								vkCmdDrawIndexed(drawData.m_CommandBuffer, pipelineData.m_MeshData.m_IndexCount, 1, 0, 0, 0);
-							}
-						}
+					vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline.m_PipelineLayout, 
+						0, 1, &m_CameraMatricesDescriptorSet, 0, nullptr);
+					for (const RenderData& data : m_RenderDatas) {
+						vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipeline.m_PipelineLayout, 
+							VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &data.m_Transform);
+						vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 0, 1, data.m_MeshData.m_VertexBuffers, 
+							data.m_MeshData.m_VertexBufferOffsets);
+						vkCmdBindIndexBuffer(drawData.m_CommandBuffer, data.m_MeshData.m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+						vkCmdDrawIndexed(drawData.m_CommandBuffer, data.m_MeshData.m_IndexCount, 1, 0, 0, 0);
 					}
 					vkCmdEndRendering(drawData.m_CommandBuffer);
 				}
