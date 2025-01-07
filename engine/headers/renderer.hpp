@@ -843,8 +843,8 @@ namespace engine {
 					.viewMask = 0,
 					.colorAttachmentCount = colorAttachmentCount,
 					.pColorAttachmentFormats = colorAttachmentFormats,
-					.depthAttachmentFormat = depthStencilFormat,
-					.stencilAttachmentFormat = depthAttachmentFormat,
+					.depthAttachmentFormat = depthAttachmentFormat,
+					.stencilAttachmentFormat = depthStencilFormat,
 				};
 				return res;
 			}
@@ -1096,6 +1096,26 @@ namespace engine {
 			return true;
 		}
 
+		VkFormat FindSupportedFormat(uint32_t candidateCount, VkFormat candidates[],
+				VkImageTiling tiling, VkFormatFeatureFlags features) {
+			for (uint32_t i = 0; i < candidateCount; i++) {
+				VkFormat format = candidates[i];
+				VkFormatProperties properties;
+				vkGetPhysicalDeviceFormatProperties(m_Gpu, format, &properties);
+				if (tiling == VK_IMAGE_TILING_OPTIMAL) {
+					if ((properties.optimalTilingFeatures & features) == features) {
+						return format;
+					}
+				}
+				else if (tiling == VK_IMAGE_TILING_LINEAR) {
+					if ((properties.optimalTilingFeatures & features) == features) {
+						return format;
+					}
+				}
+			}
+			return VK_FORMAT_UNDEFINED;
+		}
+
 		Renderer(const char* appName, uint32_t appVersion, GLFWwindow* window, bool includeImGui, 
 			CriticalErrorCallback criticalErrorCallback, SwapchainCreateCallback swapchainCreateCallback)
 			: m_SingleThreadStack(single_thread_stack_size, (uint8_t*)malloc(single_thread_stack_size)), 
@@ -1282,6 +1302,15 @@ namespace engine {
 			m_GraphicsQueueFamilyIndex = bestGpuQueueFamilyIndices[0];
 			m_TransferQueueFamilyIndex = bestGpuQueueFamilyIndices[1];
 			m_PresentQueueFamilyIndex = bestGpuQueueFamilyIndices[2];
+
+			VkFormat depthOnlyFormatCandidate = VK_FORMAT_D32_SFLOAT;
+			m_DepthOnlyFormat = FindSupportedFormat(1, &depthOnlyFormatCandidate,
+				VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
+
+			if (m_DepthOnlyFormat == VK_FORMAT_UNDEFINED) {
+				m_CriticalErrorCallback(this, ErrorOrigin::Vulkan,
+					"failed to find suitable depth only format!", VK_SUCCESS);
+			}
 
 			VkDeviceQueueCreateInfo deviceQueueInfos[3];
 			float queuePriority = 1.0f;
@@ -1871,6 +1900,114 @@ namespace engine {
 			return VK_NULL_HANDLE;
 		}
 
+		VkImage CreateImage(VkImageType type, VkFormat format, const VkExtent3D& extent, 
+				uint32_t mipLevels, uint32_t arrayLayers, VkSampleCountFlagBits samples,
+				VkImageTiling tiling, VkImageUsageFlags usage, VkSharingMode sharingMode, 
+				uint32_t queueFamilyIndexCount, const uint32_t* pQueueFamilyIndices) const {
+			VkImageCreateInfo imageInfo {
+				.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.imageType = VK_IMAGE_TYPE_2D,
+				.format = format,
+				.extent = extent,
+				.mipLevels = mipLevels,
+				.arrayLayers = arrayLayers,
+				.samples = samples,
+				.tiling = tiling,
+				.usage = usage,
+				.sharingMode = sharingMode,
+				.queueFamilyIndexCount = queueFamilyIndexCount,
+				.pQueueFamilyIndices = pQueueFamilyIndices,
+				.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+			};
+			VkImage res{};
+			if (!VkCheck(vkCreateImage(m_VulkanDevice, &imageInfo, m_VulkanAllocationCallbacks, &res), 
+					"failed to create image (function vkCreateImage in function CreateImage)!")) {
+				return VK_NULL_HANDLE;
+			}
+			return res;
+		}
+
+		void DestroyImage(VkImage image) const {
+			vkDestroyImage(m_VulkanDevice, image, m_VulkanAllocationCallbacks);
+		}
+
+		VkDeviceMemory AllocateImageMemory(VkImage image, VkMemoryPropertyFlags memoryProperties) const {
+			if (image == VK_NULL_HANDLE) {
+				PrintError(ErrorOrigin::Vulkan, 
+					"attempting to allocate image memory for image that's null (in function AllocateImageMemory)!");
+				return VK_NULL_HANDLE;
+			}
+			VkMemoryRequirements memRequirements;
+			vkGetImageMemoryRequirements(m_VulkanDevice, image, &memRequirements);
+			VkMemoryAllocateInfo allocInfo {
+				.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+				.pNext = nullptr,
+				.allocationSize = memRequirements.size,
+			};
+			if (!FindMemoryTypeIndex(memRequirements.memoryTypeBits, memoryProperties, allocInfo.memoryTypeIndex)) {
+				PrintError(ErrorOrigin::Vulkan, 
+						"failed to find memory type index (function FindMemoryTypeIndex in funcion AllocateImageMemory)");
+				return VK_NULL_HANDLE;
+			}
+			VkDeviceMemory res;
+			if (!VkCheck(vkAllocateMemory(m_VulkanDevice, &allocInfo, m_VulkanAllocationCallbacks, &res), 
+					"failed to allocate memory (function vkAllocateMemory in function AllocateImageMemory)!")) {
+				return VK_NULL_HANDLE;
+			}
+			if (!VkCheck(vkBindImageMemory(m_VulkanDevice, image, res, 0),
+					"failed to bind image memory (function vkBindImageMemory in functio AllocateImageMemory)!")) {
+				vkFreeMemory(m_VulkanDevice, res, m_VulkanAllocationCallbacks);
+				return VK_NULL_HANDLE;
+			}
+			return res;
+		}
+
+		void FreeVulkanDeviceMemory(VkDeviceMemory deviceMemory) const {
+			vkFreeMemory(m_VulkanDevice, deviceMemory, m_VulkanAllocationCallbacks);
+		}	
+
+		VkImageView CreateImageView(VkImage image, VkImageViewType type, VkFormat format, VkImageAspectFlags aspect, 
+				uint32_t baseMipLevel = 0, uint32_t levelCount = 1, 
+				uint32_t baseArrayLayer = 0, uint32_t layerCount = 1) const {
+			if (image == VK_NULL_HANDLE) {
+				PrintError(ErrorOrigin::Vulkan, 
+					"attempting to create image view of image that's null (in function CreateImageView)!");
+			}
+			VkImageViewCreateInfo imageViewInfo {
+				.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.image = image,
+				.viewType = type,
+				.format = format,
+				.components { 
+					.r = VK_COMPONENT_SWIZZLE_IDENTITY,
+					.g = VK_COMPONENT_SWIZZLE_IDENTITY,
+					.b = VK_COMPONENT_SWIZZLE_IDENTITY,
+					.a = VK_COMPONENT_SWIZZLE_IDENTITY,
+				},
+				.subresourceRange {
+					.aspectMask = aspect,
+					.baseMipLevel = baseMipLevel,
+					.levelCount = levelCount,
+					.baseArrayLayer = baseArrayLayer,
+					.layerCount = layerCount,
+				}
+			};
+			VkImageView res;
+			if (!VkCheck(vkCreateImageView(m_VulkanDevice, &imageViewInfo, m_VulkanAllocationCallbacks, &res), 
+					"failed to create image view (function vkCreateImageView in function CreateImageView)!")) {
+				return VK_NULL_HANDLE;
+			}
+			return res;
+		}
+
+		void DestroyImageView(VkImageView imageView) const {
+			vkDestroyImageView(m_VulkanDevice, imageView, m_VulkanAllocationCallbacks);
+		}
+
 		VkDescriptorSetLayout CreateDescriptorSetLayout(const void* pNext, uint32_t bindingCount, VkDescriptorSetLayoutBinding* pBindings) const {
 			VkDescriptorSetLayoutCreateInfo createInfo {
 				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -2017,9 +2154,11 @@ namespace engine {
 		struct DrawData {
 			VkCommandBuffer m_CommandBuffer;
 			VkImageView m_SwapchainImageView;
+			uint32_t m_CurrentFrame;
 		};
 
 		bool BeginFrame(DrawData& outDrawData) {
+
 			static constexpr uint64_t frame_timeout = 2000000000;
 
 			if (m_Swapchain == VK_NULL_HANDLE || m_SwapchainExtent.width == 0 || m_SwapchainExtent.height == 0) {
@@ -2221,6 +2360,7 @@ namespace engine {
 			}
 			outDrawData.m_SwapchainImageView = m_SwapchainImageViews[m_CurrentFrame];
 			outDrawData.m_CommandBuffer = m_RenderCommandBuffers[m_CurrentFrame];
+			outDrawData.m_CurrentFrame = m_CurrentFrame;
 			vkResetCommandBuffer(outDrawData.m_CommandBuffer, 0);
 			VkCommandBufferBeginInfo commandBufferBeginInfo {
 				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
