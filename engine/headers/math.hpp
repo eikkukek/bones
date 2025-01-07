@@ -3,6 +3,7 @@
 #include "algorithm.hpp"
 #include <cstdio>
 #include <math.h>
+#include <assert.h>
 
 namespace engine {
 
@@ -321,7 +322,7 @@ namespace engine {
 			return result;
 		}
 
-		constexpr inline Vec4_T<T>& operator[](size_t index) { if (index >= size) { printf("index out of bounds (Mat4_T operator[])"); return Vec4_T<T>(); } return columns[index]; }
+		constexpr inline Vec4_T<T>& operator[](size_t index) { assert(index <= size); return columns[index]; }
 
 		constexpr inline explicit operator Mat4_T() const noexcept {
 			return Mat4_T((Vec3_T<T>)columns[0], (Vec3_T<T>)columns[1], (Vec3_T<T>)columns[2]);
