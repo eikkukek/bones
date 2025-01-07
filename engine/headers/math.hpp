@@ -265,7 +265,7 @@ namespace engine {
 
 		static constexpr inline Mat4_T LookAt(const Vec3_T<T>& eyePosition, const Vec3_T<T>& upDirection, const Vec3_T<T>& lookAtPosition) noexcept {
 			Vec3_T<T> pos = eyePosition;
-			pos.y = -pos.y;
+			//pos.y = -pos.y;
 			Vec3_T<T> front = (lookAtPosition - pos).Normalized();
 			Vec3_T<T> right = Vec3_T<T>::Cross(upDirection.Normalized(), front).Normalized();
 			Vec3_T<T> up = Vec3_T<T>::Cross(front, right).Normalized();
@@ -294,9 +294,9 @@ namespace engine {
 			Mat4_T result{};
 			result[0].x = 1 / (aspectRatio * halfTan);
 			result[1].y = 1 / halfTan;
-			result[2].z = (zFar + zNear) / (zFar - zNear);
+			result[2].z = (zFar - zNear) / (zFar + zNear);
 			result[2].w = 1;
-			result[3].z = (2 * zFar * zNear) / (zFar - zNear);
+			result[3].z = (-2 * zFar * zNear) / (zFar + zNear);
 			return result;
 		}
 
