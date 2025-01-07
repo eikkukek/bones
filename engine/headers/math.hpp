@@ -265,7 +265,7 @@ namespace engine {
 
 		static constexpr inline Mat4_T LookAt(const Vec3_T<T>& eyePosition, const Vec3_T<T>& upDirection, const Vec3_T<T>& lookAtPosition) noexcept {
 			Vec3_T<T> pos = eyePosition;
-			//pos.y = -pos.y;
+			pos.y = -pos.y;
 			Vec3_T<T> front = (lookAtPosition - pos).Normalized();
 			Vec3_T<T> right = Vec3_T<T>::Cross(upDirection.Normalized(), front).Normalized();
 			Vec3_T<T> up = Vec3_T<T>::Cross(front, right).Normalized();
