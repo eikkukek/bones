@@ -329,24 +329,62 @@ public:
 
 class Player {
 public:
+
+	static inline Player* s_instance = nullptr;
 	
 	engine::World& m_World;
 	engine::Creature& m_Creature;
-	engine::StaticMesh m_Mesh;
+	engine::StaticMesh& m_Mesh;
 	engine::World::RenderData& m_RenderData;
+	engine::Quaternion m_Rotation;
 
+	static engine::Vec3 MovementVectorUpdate(const engine::Creature& creature) {
+		using namespace engine;
+		using Key = Input::Key;
+		return Vec3(
+				Input::ReadKeyValue(Key::D) - Input::ReadKeyValue(Key::A),
+				0.0f,
+				Input::ReadKeyValue(Key::W) - Input::ReadKeyValue(Key::S)) * 0.001f;
+	}
 
-	Player(engine::World& world, engine::StaticMesh&& mesh) 
-		: m_World(world), m_Creature(world.AddCreature({})), m_Mesh(std::move(mesh)), 
+	static void MoveCallback(const engine::Creature& creature, const engine::Vec3& position, const engine::Vec3& deltaPosition) {
+		using namespace engine;
+		s_instance->m_RenderData.m_Transform[3] = Vec4(Vec3(0.0f, 0.0f, 3.0f) + position, 1.0f);
+	}
+
+	Player(engine::World& world, engine::StaticMesh& mesh) 
+		: m_World(world), m_Creature(world.AddCreature({})), m_Mesh(mesh), 
 			m_RenderData(m_World.AddRenderData(m_Creature, {}, m_Mesh.GetMeshData())) {
+		s_instance = this;
 		m_RenderData.m_Transform = engine::Mat4(1);
 		m_RenderData.m_Transform[3].z = 3;
+		m_RenderData.m_MeshData = m_Mesh.GetMeshData();
+		m_Creature.m_MovementVectorUpdate = MovementVectorUpdate;
+		m_Creature.m_MoveCallback = MoveCallback;
+	}
+
+	void Update() {
+		using namespace engine;
+		static float currentRot;
+		float speed = 0.001f;
+		m_Rotation = Quaternion::AxisRotation(Vec3(0.0f, 1.0f, 0.0f), currentRot);
+		currentRot = currentRot + speed;
+		m_RenderData.m_Transform = m_Rotation.AsMat4();
 		m_RenderData.m_MeshData = m_Mesh.GetMeshData();
 	}
 };
 
 int main() {
 	using namespace engine;
+	Engine::DynamicArray<int> ints{};
+	ints.PushBack(1);
+	ints.PushBack(2);
+	ints.PushBack(3);
+	ints.PushBack(4);
+	ints.Erase(ints.begin() + 1);
+	for (int num : ints) {
+		fmt::print("{}", num);
+	}
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
@@ -397,10 +435,11 @@ int main() {
 	StaticMesh playerMesh(engine);
 	playerMesh.CreateBuffers(sphereVertices.m_Size, sphereVertices.m_Data, sphereIndices.m_Size, sphereIndices.m_Data);
 
-	Player player(world, std::move(playerMesh));
+	Player player(world, playerMesh);
 
 	while (!glfwWindowShouldClose(pWindow)) {
 		glfwPollEvents();
+		engine.LogicUpdate();
 		uiWindow->SetPosition(UI.m_CursorPosition);
 		engine.Render();
 	}
