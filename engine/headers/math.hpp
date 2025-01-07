@@ -130,6 +130,8 @@ namespace engine {
 
 		constexpr inline explicit operator Vec3_T<T>() const noexcept { return Vec3_T<T>(x, y, z); }
 		constexpr inline explicit operator Vec2_T<T>() const noexcept { return Vec2_T<T>(x, y); }
+
+		constexpr inline T& operator[](size_t index) const { assert(index < size); return ((T*)this)[index]; }
 	};
 
 	typedef Vec4_T<float> Vec4;
@@ -291,23 +293,24 @@ namespace engine {
 
 		static constexpr inline Mat4_T Projection(T radFovY, T aspectRatio, T zNear, T zFar) noexcept {
 			T halfTan = tan(radFovY / 2);
-			Mat4_T result{};
-			result[0].x = 1 / (aspectRatio * halfTan);
-			result[1].y = 1 / halfTan;
-			result[2].z = (zFar - zNear) / (zFar + zNear);
-			result[2].w = 1;
-			result[3].z = (-2 * zFar * zNear) / (zFar + zNear);
+			Mat4_T result(1);
+			result[0][0] = 1 / (aspectRatio * halfTan);
+			result[1][1] = 1 / halfTan;
+			result[2][2] = (zFar - zNear) / (zFar + zNear);
+			result[2][3] = 1;
+			result[3][2] = (-2 * zFar * zNear) / (zFar + zNear);
 			return result;
 		}
 
 		static constexpr inline Mat4_T Orthogonal(T leftPlane, T rightPlane, T bottomPlane, T topPlane, T nearPlane, T farPlane) noexcept {
 			Mat4_T result{};
-			result[0].x = Cast(2) / (rightPlane - leftPlane);
-			result[1].y = Cast(2) / (topPlane - bottomPlane);
-			result[2].z = Cast(2) / (nearPlane + farPlane);
-			result[3].x = -(rightPlane + leftPlane) / (rightPlane - leftPlane);
-			result[3].y = -(bottomPlane + topPlane) / (bottomPlane - topPlane);
-			result[3].z = nearPlane / (nearPlane + farPlane);
+			result[0][0] = Cast(2) / (rightPlane - leftPlane);
+			result[1][1] = Cast(2) / (topPlane - bottomPlane);
+			result[2][2] = Cast(2) / (nearPlane + farPlane);
+			result[3][0] = - (rightPlane + leftPlane) / (rightPlane - leftPlane);
+			result[3][1] = - (bottomPlane + topPlane) / (bottomPlane - topPlane);
+			result[3][2] = nearPlane / (nearPlane + farPlane);
+			result[3][3] = Cast(1);
 			return result;
 		}
 
