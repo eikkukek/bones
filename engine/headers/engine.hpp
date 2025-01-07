@@ -2753,9 +2753,11 @@ void main() {
 			}
 
 			void Terminate() {
+				m_CameraMatricesBuffer.Terminate();
 				Renderer& renderer = m_Engine.m_Renderer;
 				renderer.DestroyPipeline(m_Pipeline.m_Pipeline);
 				renderer.DestroyPipelineLayout(m_Pipeline.m_PipelineLayout);
+				renderer.DestroyDescriptorPool(m_CameraMatricesDescriptorPool);
 				renderer.DestroyDescriptorSetLayout(m_Pipeline.m_DescriptorSetLayout);
 			}
 
@@ -2837,14 +2839,9 @@ void main() {
 						}
 					}
 				}
-				static VkDescriptorPoolSize cameraMatrixPoolSize {
-					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-					.descriptorCount = 1,
-				};
 			}
 
 			void Unload() {
-				m_CameraMatricesDescriptorPool = VK_NULL_HANDLE;
 				m_Grounds.Clear();
 				m_ChunkMatrix.Clear();
 				m_Creatures.Clear();
@@ -2874,6 +2871,7 @@ void main() {
 						.pColorAttachments = &colorAttachment,
 					};
 					vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
+					vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline.m_Pipeline);
 					vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline.m_PipelineLayout, 
 						0, 1, &m_CameraMatricesDescriptorSet, 0, nullptr);
 					for (const RenderData& data : m_RenderDatas) {
