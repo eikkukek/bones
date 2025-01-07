@@ -1891,11 +1891,11 @@ namespace engine {
 			vkDestroyDescriptorSetLayout(m_VulkanDevice, layout, m_VulkanAllocationCallbacks);
 		}
 
-		VkDescriptorPool CreateDescriptorPool(uint32_t maxSets, uint32_t poolSizeCount, VkDescriptorPoolSize poolSizes[]) const {
+		VkDescriptorPool CreateDescriptorPool(VkDescriptorPoolCreateFlags flags, uint32_t maxSets, uint32_t poolSizeCount, VkDescriptorPoolSize poolSizes[]) const {
 			VkDescriptorPoolCreateInfo poolInfo {
 				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
 				.pNext = nullptr,
-				.flags = 0,
+				.flags = flags,
 				.maxSets = maxSets,
 				.poolSizeCount = poolSizeCount,
 				.pPoolSizes = poolSizes,
@@ -1938,6 +1938,21 @@ namespace engine {
 			}
 			return true;
 		}
+
+		static VkWriteDescriptorSet GetDescriptorWrite(const void* pNext, uint32_t binding, VkDescriptorSet set, VkDescriptorType type,
+				VkDescriptorImageInfo* pImageInfo, VkDescriptorBufferInfo* pBufferInfo, uint32_t dstArrayElement = 0, uint32_t descriptorCount = 1) {
+			return {
+				.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+				.pNext = pNext,
+				.dstSet = set,
+				.dstBinding = binding,
+				.dstArrayElement = dstArrayElement,
+				.descriptorCount = descriptorCount,
+				.descriptorType = type,
+				.pImageInfo = pImageInfo,
+				.pBufferInfo = pBufferInfo,
+			};
+		};
 
 		void UpdateDescriptorSets(uint32_t writeCount, const VkWriteDescriptorSet* writes) const {
 			vkUpdateDescriptorSets(m_VulkanDevice, writeCount, writes, 0, nullptr);
