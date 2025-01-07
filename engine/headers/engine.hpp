@@ -1343,8 +1343,7 @@ namespace engine {
 			}
 
 			static void ResetInput() {
-				const Key* keysEnd = s_ActiveKeys.end();
-				for (Key* iter = s_ActiveKeys.begin(); iter != keysEnd;) {
+				for (Key* iter = s_ActiveKeys.begin(); iter != s_ActiveKeys.end();) {
 					size_t index = (size_t)*iter;
 					if (s_HeldKeys[index]) {
 						++iter;
@@ -1356,8 +1355,7 @@ namespace engine {
 					s_PressedKeys[index] = s_ReleasedKeys[index] = false;
 				}
 
-				const MouseButton* mouseButtonsEnd = s_ActiveMouseButtons.end();
-				for (MouseButton* iter = s_ActiveMouseButtons.begin(); iter != mouseButtonsEnd;) {
+				for (MouseButton* iter = s_ActiveMouseButtons.begin(); iter != s_ActiveMouseButtons.end();) {
 					size_t index = (size_t)*iter;
 					if (s_HeldMouseButtons[index]) {
 						++iter;
@@ -2434,7 +2432,7 @@ void main() {
 			template<typename U>
 			bool IsPointInside(Vec2_T<U> point) const {
 				return point.x > m_Min.x && point.y > m_Min.y &&
-					point.x < m_Max.x && point.x < m_Max.y;
+					point.x < m_Max.x && point.y < m_Max.y;
 			}
 
 			template<typename U>
@@ -2631,7 +2629,7 @@ void main() {
 			DynamicArray<Creature> m_Creatures{};
 			CameraMatricesBuffer* m_CameraMatricesMap = nullptr;
 
-			Vec2_T<uint32_t> m_ChunkDimensions{};
+			Vec2_T<float> m_ChunkDimensions{};
 
 			DynamicArray<VkImageView> m_DepthImageViews{};
 			Pipeline m_Pipeline{};
@@ -2683,7 +2681,7 @@ void main() {
 						"failed to map camera matrices buffer (function vkMapMemory in function World::Initialize)!");
 				}
 				m_CameraMatricesMap->m_Projection = Mat4::Projection(pi / 2, 1.0f, 0.01f, 10.0f);
-				m_CameraMatricesMap->m_View = Mat4::LookAt({ 0.0f, 3.0f, 0.0f }, Vec3(0.0f, 1.0f, 0.0f), Vec3(0.0f, 0.0f, 3.0f));
+				m_CameraMatricesMap->m_View = Mat4::LookAt({ 0.0f, 0.0f, 0.0f }, Vec3(0.0f, 1.0f, 0.0f), Vec3(0.0f, 0.0f, 3.0f));
 				VkDescriptorPoolSize camPoolSize {
 					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 					.descriptorCount = 1,
@@ -2812,7 +2810,8 @@ void main() {
 					VkImage& depthImage = m_DepthImages[i];
 					VkDeviceMemory& depthImageMemory = m_DepthImagesMemory[i];
 					VkImageView& depthImageView = m_DepthImageViews[i];
-					depthImage = renderer.CreateImage(VK_IMAGE_TYPE_2D, depthFormat, depthImageExtent, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
+					depthImage = renderer.CreateImage(VK_IMAGE_TYPE_2D, depthFormat, depthImageExtent, 1, 1, 
+						VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
 							VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_SHARING_MODE_EXCLUSIVE, 1, &renderer.m_GraphicsQueueFamilyIndex);
 					if (depthImage == VK_NULL_HANDLE) {
 						CriticalError(ErrorOrigin::Renderer, 
@@ -2828,6 +2827,59 @@ void main() {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to create world depth image view (function Renderer::CreateImageView in function World::Initialize)!");
 					}
+				}
+			}
+
+			void LogicUpdate() {
+				for (Creature& creature : m_Creatures) {
+					Vec3 movementVector = creature.GetMovementVector();
+					if (movementVector == Vec3(0.0f, movementVector.y, 0.0f)) {
+						continue;
+					}
+					Vec3 newPos = creature.m_Position + movementVector;
+					const Chunk* curChunk = creature.m_Chunk;
+					assert(curChunk);
+					if (!curChunk->IsPointInside(newPos)) {
+						Vec2_T<uint32_t> newChunkMatrixCoords {
+							curChunk->m_ChunkMatrixCoords.x + (newPos.x >= curChunk->m_BoundingBox.m_Max.x ? 1
+								: newPos.x <= curChunk->m_BoundingBox.m_Min.x ? -1 : 0),
+
+							curChunk->m_ChunkMatrixCoords.y + (newPos.z >= curChunk->m_BoundingBox.m_Max.y ? 1
+								: newPos.z <= curChunk->m_BoundingBox.m_Min.y ? -1 : 0),
+						};
+						Vec2_T<bool> outsideBounds = BoundsCheck(newChunkMatrixCoords);
+						if (outsideBounds.x && outsideBounds.y) {
+							continue;
+						}
+						else if (outsideBounds.x) {
+							newPos.x -= movementVector.x;
+							newChunkMatrixCoords.x = curChunk->m_ChunkMatrixCoords.x;
+						}
+						else if (outsideBounds.y) {
+							newPos.z -= movementVector.z;
+							newChunkMatrixCoords.y = curChunk->m_ChunkMatrixCoords.y;
+						}
+						const Chunk* newChunk = GetChunk(newChunkMatrixCoords);
+						if (newChunk != creature.m_Chunk) {
+							creature.m_Chunk = newChunk;
+							assert(creature.m_Chunk);
+							if (creature.m_Chunk->m_BoundingBox.m_Min.x == newPos.x) {
+								newPos.x += 0.01f;
+							}
+							else if (creature.m_Chunk->m_BoundingBox.m_Max.x == newPos.x) {
+								newPos.x -= 0.01f;
+							}
+							if (creature.m_Chunk->m_BoundingBox.m_Min.y == newPos.z) {
+								newPos.z += 0.01f;
+							}
+							else if (creature.m_Chunk->m_BoundingBox.m_Max.y == newPos.z) {
+								newPos.z -= 0.01f;
+							}
+							fmt::print("chunk change to coords ({}, {})\n",
+								creature.m_Chunk->m_ChunkMatrixCoords.x, creature.m_Chunk->m_ChunkMatrixCoords.y);
+						}
+					}
+					creature.Move(newPos, creature.m_Chunk->FindGround(creature.m_Position));
 				}
 			}
 
@@ -2938,19 +2990,22 @@ void main() {
 				}
 			}
 
-			void Load(DynamicArray<Ground>&& grounds, Vec2_T<uint32_t> chunkDimensions, Vec2_T<uint32_t> chunkMatrixSize) {
+			void Load(DynamicArray<Ground>&& grounds, Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize) {
 				new (&m_Grounds) DynamicArray<Ground>(std::move(grounds));
-				m_ChunkDimensions = chunkDimensions;
+				m_ChunkDimensions = { 
+					(float)worldDimensions.x / chunkMatrixSize.x, 
+					(float)worldDimensions.y / chunkMatrixSize.y,
+				};
 				m_ChunkMatrixSize = chunkMatrixSize;
 				m_ChunkMatrix.Reserve(m_ChunkMatrixSize.x * m_ChunkMatrixSize.y);
-				Vec2 worldDimensions(m_ChunkMatrixSize.x * m_ChunkDimensions.x, m_ChunkMatrixSize.y * m_ChunkDimensions.y);
 				m_WorldRect.m_Max = Vec2(worldDimensions.x / 2.0f, worldDimensions.y / 2.0f);
 				m_WorldRect.m_Min = -m_WorldRect.m_Max;
 				for (size_t x = 0; x < m_ChunkMatrixSize.x; x++) {
 					for (size_t y = 0; y < m_ChunkMatrixSize.y; y++) {
-						Chunk& chunk 
-							= m_ChunkMatrix.EmplaceBack(Vec2_T<uint32_t>(x, y), 
-								Vec2(m_WorldRect.m_Min.x + x * m_ChunkDimensions.x, m_WorldRect.m_Min.y + y * m_ChunkDimensions.y), m_ChunkDimensions);
+						Chunk& chunk = m_ChunkMatrix.EmplaceBack(Vec2_T<uint32_t>(x, y), 
+								Vec2(m_WorldRect.m_Min.x + x * m_ChunkDimensions.x, 
+									m_WorldRect.m_Min.y + y * m_ChunkDimensions.y), 
+									m_ChunkDimensions);
 						for (const Ground& ground : m_Grounds) {
 							if (chunk.m_BoundingBox.OverLaps(ground.m_BoundingBox)) {
 								chunk.m_Grounds.PushBack(&ground);
@@ -3167,61 +3222,14 @@ void main() {
 			return res;
 		}
 
-		World& LoadWorld(DynamicArray<Ground>&& grounds, Vec2_T<uint32_t> chunkDimensions, Vec2_T<uint32_t> chunkMatrixSize) {
+		World& LoadWorld(DynamicArray<Ground>&& grounds, Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize) {
 			m_World.Unload();
-			m_World.Load(std::move(grounds), chunkDimensions, chunkMatrixSize);
+			m_World.Load(std::move(grounds), worldDimensions, chunkMatrixSize);
 			return m_World;
 		}
 
 		void LogicUpdate() {
-			for (Creature& creature : m_World.m_Creatures) {
-				Vec3 movementVector = creature.GetMovementVector();
-				if (movementVector == Vec3(0.0f, movementVector.y, 0.0f)) {
-					continue;
-				}
-				Vec3 newPos = creature.m_Position + movementVector;
-				const Chunk* curChunk = creature.m_Chunk;
-				assert(curChunk);
-				if (!curChunk->IsPointInside(newPos)) {
-					Vec2_T<int> newChunkMatrixCoords {
-						curChunk->m_ChunkMatrixCoords.x + newPos.x > curChunk->m_BoundingBox.m_Max.x ? 1
-							: newPos.x < curChunk->m_BoundingBox.m_Min.x ? -1 : 0,
-
-						curChunk->m_ChunkMatrixCoords.y + newPos.z > curChunk->m_BoundingBox.m_Max.y ? 1
-							: newPos.z < curChunk->m_BoundingBox.m_Min.y ? -1 : 0,
-					};
-					Vec2_T<bool> outsideBounds = m_World.BoundsCheck(newChunkMatrixCoords);
-					if (outsideBounds.x && outsideBounds.y) {
-						fmt::print("attempting to go outside bounds!");
-						continue;
-					}
-					else if (outsideBounds.x) {
-						fmt::print("attempting to go outside bounds (x)!");
-						movementVector.x = 0;
-						newChunkMatrixCoords.x = curChunk->m_ChunkMatrixCoords.x;
-					}
-					else if (outsideBounds.y) {
-						fmt::print("attempting to go outside bounds (z)!");
-						movementVector.z = 0;
-						newChunkMatrixCoords.y = curChunk->m_ChunkMatrixCoords.y;
-					}
-					creature.m_Chunk = m_World.GetChunk(creature.m_Chunk->m_ChunkMatrixCoords);
-					if (creature.m_Chunk->m_BoundingBox.m_Min.x == newPos.x) {
-						newPos.x += 0.01f;
-					}
-					else if (creature.m_Chunk->m_BoundingBox.m_Max.x == newPos.x) {
-						newPos.x -= 0.01f;
-					}
-					if (creature.m_Chunk->m_BoundingBox.m_Min.y == newPos.y) {
-						newPos.y += 0.01f;
-					}
-					else if (creature.m_Chunk->m_BoundingBox.m_Max.y == newPos.y) {
-						newPos.y -= 0.01f;
-					}
-					assert(creature.m_Chunk);
-				}
-				creature.Move(newPos, creature.m_Chunk->FindGround(creature.m_Position));
-			}
+			m_World.LogicUpdate();
 			Input::ResetInput();
 		};
 
