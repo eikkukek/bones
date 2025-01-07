@@ -44,7 +44,7 @@ namespace engine {
 		constexpr inline Vec2_T operator-(Vec2_T other) const noexcept { return Vec2_T(x - other.x, y - other.y); }
 		constexpr inline Vec2_T& operator+=(Vec2_T other) noexcept { x += other.x; y += other.y; return *this; }
 
-		constexpr inline bool operator==(Vec2_T other) noexcept { return x == other.x && y == other.y; }
+		constexpr inline bool operator==(const Vec2_T& other) const noexcept = default;
 	};
 
 	typedef Vec2_T<float> Vec2;
@@ -90,9 +90,7 @@ namespace engine {
 		constexpr inline Vec3_T& operator+=(const Vec3_T& other) noexcept { x += other.x; y += other.y; z += other.z; return *this; }
 		constexpr inline Vec3_T& operator*=(float scalar) noexcept { x *= scalar; y *= scalar; z *= scalar; return *this; }
 
-		constexpr inline bool operator==(const Vec3_T& other) const noexcept { return x == other.x && y == other.y && z == other.z; }
-
-		constexpr inline T& operator[](size_t index) { if (index >= size) { printf("index out of bounds (Vec3_T operator[])"); return T(); } return (T*)&x; }
+		constexpr inline bool operator==(const Vec3_T& other) const noexcept = default;
 
 		constexpr explicit operator Vec4_T<T>() const noexcept;
 		constexpr inline explicit operator Vec2_T<T>() const noexcept { return Vec2_T<T>(x, y); }
@@ -127,9 +125,7 @@ namespace engine {
 		constexpr inline Vec4_T operator*(T scalar) const noexcept { return Vec4_T(x * scalar, y * scalar, z * scalar, w * scalar); }
 		constexpr inline Vec4_T& operator*=(T scalar) noexcept { x *= scalar; y *= scalar; z *= scalar; w *= scalar; return *this; }
 
-		constexpr inline bool operator==(const Vec4_T& other) const noexcept { 
-			return x == other.x && y == other.y && z == other.z && w == other.w; 
-		}
+		constexpr inline bool operator==(const Vec4_T& other) const noexcept = default;
 
 		constexpr inline explicit operator Vec3_T<T>() const noexcept { return Vec3_T<T>(x, y, z); }
 		constexpr inline explicit operator Vec2_T<T>() const noexcept { return Vec2_T<T>(x, y); }
