@@ -344,7 +344,7 @@ public:
 		return Vec3(
 				Input::ReadKeyValue(Key::D) - Input::ReadKeyValue(Key::A),
 				0.0f,
-				Input::ReadKeyValue(Key::W) - Input::ReadKeyValue(Key::S)) * 0.001f;
+				Input::ReadKeyValue(Key::W) - Input::ReadKeyValue(Key::S)) * 0.01f;
 	}
 
 	static void MoveCallback(const engine::Creature& creature, const engine::Vec3& position, const engine::Vec3& deltaPosition) {
@@ -376,15 +376,6 @@ public:
 
 int main() {
 	using namespace engine;
-	Engine::DynamicArray<int> ints{};
-	ints.PushBack(1);
-	ints.PushBack(2);
-	ints.PushBack(3);
-	ints.PushBack(4);
-	ints.Erase(ints.begin() + 1);
-	for (int num : ints) {
-		fmt::print("{}", num);
-	}
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
@@ -420,7 +411,7 @@ int main() {
 		return true;
 	};
 
-	World& world = engine.LoadWorld({}, { 32, 32 }, { 32, 32 });
+	World& world = engine.LoadWorld({}, { 64, 64 }, { 9, 9 });
 
 	Engine::Obj sphereObj{};
 	FILE* fileStream = fopen("resources\\meshes\\sphere.obj", "r");
