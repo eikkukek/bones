@@ -185,7 +185,7 @@ namespace engine {
 			}
 
 			Iterator Erase(Iterator where) {
-				ptrdiff_t diff = m_Data - where;
+				ptrdiff_t diff = where - m_Data;
 				if (diff < 0 || diff >= m_Size) {
 					PrintError(ErrorOrigin::DynamicArray, 
 						"attempting to erase from dynamic array with an iterator that's outside the bounds of the array (function Erase)!");
