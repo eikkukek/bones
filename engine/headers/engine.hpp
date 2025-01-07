@@ -2446,17 +2446,32 @@ void main() {
 			}
 		};
 
-		class Ground {
-		public:
+		struct GroundInfo {
+			Rect<float> m_BoundingBox{};
+		};
 
+		class Ground {
+
+			friend class Engine;
+
+		private:
+
+			Rect<float> m_BoundingBox;
 			Vec3 m_Scale;
 			Vec3 m_CenterPosition;
-			Rect<float> m_BoundingBox;
 			Vec2_T<uint32_t> m_HeightMapExtent;
-			float m_HeightMapMin;
-			float m_HeightMapMax;
-			float* m_HeightMap;
+			uint32_t m_HeightMapMin;
+			uint32_t m_HeightMapMax;
+			uint32_t* m_HeightMap;
 
+			const uint64_t m_RenderID;
+
+			Ground(const GroundInfo& groundInfo, uint64_t renderID) 
+					: m_BoundingBox(groundInfo.m_BoundingBox), m_RenderID(renderID) {}
+
+		public:
+
+			/*
 			void SetScale(const Vec3& scale) {
 				m_BoundingBox.m_Max = m_BoundingBox.m_Min + 
 					Vec3(m_HeightMapExtent.x * scale.x,
@@ -2464,11 +2479,14 @@ void main() {
 						m_HeightMapExtent.y * scale.z);
 				m_Scale = scale;
 			}
+			*/
 
 			float GetHeightAtPosition(const Vec3& position) const {
 				Vec2 pos2D(position.x, position.z);
 				if (!m_BoundingBox.IsPointInside(pos2D)) {
+					return std::numeric_limits<float>::max();
 				}
+				return 0.0f;
 				Vec3 relative = pos2D - m_BoundingBox.m_Min;
 				Vec2 dimensions = m_BoundingBox.Dimensions();
 				Vec2_T<uint32_t> heightMapCoords(relative.x / dimensions.x * m_HeightMapExtent.x,
@@ -2476,7 +2494,7 @@ void main() {
 				size_t index = heightMapCoords.x * m_HeightMapExtent.y + heightMapCoords.y;
 				size_t heightMapSize = m_HeightMapExtent.x * m_HeightMapExtent.y;
 				assert(index < heightMapSize);
-				return m_HeightMap[index] * m_Scale.y + m_CenterPosition.y;
+				return (float)m_HeightMap[index] / UINT32_MAX * m_Scale.y + m_CenterPosition.y;
 			}
 		};
 
@@ -2486,16 +2504,27 @@ void main() {
 			const Vec2_T<uint32_t> m_ChunkMatrixCoords;
 			DynamicArray<const Ground*> m_Grounds{};
 			
-			Chunk(Vec2_T<uint32_t> chunkCoords, Vec2 min, Vec2_T<uint32_t> dimensions) noexcept : 
+			Chunk(Vec2_T<uint32_t> chunkCoords, Vec2 min, Vec2 dimensions) noexcept : 
 				m_BoundingBox { .m_Min { min }, .m_Max { min + dimensions } }, m_ChunkMatrixCoords(chunkCoords), m_Grounds() {}
 
 			bool IsPointInside(const Vec3& point) const {
 				return m_BoundingBox.IsPointInside(Vec2(point.x, point.z));
 			}
 
-			const Ground* FindGround(const Vec3& position) const {
+			const Ground* FindGround(const Vec3& oldPosition, const Vec3& deltaPosition, Vec2_T<bool>& outAxisBlocked) const {
+				outAxisBlocked = { false, false };
+				Vec2 newPosTopView(oldPosition.x + deltaPosition.x, oldPosition.z + deltaPosition.z);
+				Vec2 oldPositionTopView(oldPosition.x, oldPosition.z);
 				for (const Ground* ground : m_Grounds) {
-					if (ground->m_BoundingBox.IsPointInside(Vec2_T<float>(position.x, position.z))) {
+					Rect<float> boundingBox = ground->m_BoundingBox;
+					if (boundingBox.IsPointInside(newPosTopView)) {
+						return ground;
+					}
+					else if (boundingBox.IsPointInside(oldPositionTopView)) {
+						outAxisBlocked = {
+							boundingBox.m_Min.x >= newPosTopView.x || boundingBox.m_Max.x <= newPosTopView.x,
+							boundingBox.m_Min.y >= newPosTopView.y || boundingBox.m_Max.y <= newPosTopView.y,
+						};
 						return ground;
 					}
 				}
@@ -2512,7 +2541,8 @@ void main() {
 			Creature(const Vec3& position, const Chunk* chunk, uint64_t renderID) 
 					: m_Position(position), m_Chunk(chunk), m_RenderID(renderID) {
 				assert(chunk);
-				const Ground* ground = chunk->FindGround(position);
+				Vec2_T<bool> _;
+				const Ground* ground = chunk->FindGround(position, {}, _);
 				m_Position.y = ground ? ground->GetHeightAtPosition(position) : 0.0f;
 			}
 
@@ -2523,7 +2553,7 @@ void main() {
 		public:
 
 			Vec3(*m_MovementVectorUpdate)(const Creature& creature){};
-			void (*m_MoveCallback)(const Creature& creature, const Vec3& position, const Vec3& deltaPos){};
+			void (*m_MoveCallback)(const Creature& creature, const Vec3& position, const Vec3& deltaPosition){};
 
 		private:
 
@@ -2534,17 +2564,18 @@ void main() {
 				return m_Position;
 			}
 
-			void Move(const Vec3& position, const Ground* ground) {
+			void Move(const Vec3& position) {
+				assert(m_Chunk);
 				Vec3 deltaPos = position - m_Position;
-				/*
+				Vec2_T<bool> axisBlocked;
+				const Ground* ground = m_Chunk->FindGround(m_Position, deltaPos, axisBlocked);
 				if (ground) {
-					m_Position = position;
+					m_Position.x = !axisBlocked.x ? position.x : m_Position.x;
+					m_Position.z = !axisBlocked.y ? position.z : m_Position.z; 
 					float height = ground->GetHeightAtPosition(m_Position);
 					assert(height != std::numeric_limits<float>::max());
-					m_Position.z = height;
+					m_Position.y = height;
 				}
-				*/
-				m_Position = position;
 				if (m_MoveCallback) {
 					m_MoveCallback(*this, m_Position, deltaPos);
 				}
@@ -2790,6 +2821,61 @@ void main() {
 				}
 			}
 
+		public:
+
+			Vec2_T<bool> IsOnBorder(const Vec3& position) {
+				Vec2 dimensionsHalf = m_WorldRect.Dimensions() / 2;
+				Vec2 pos = Vec2(position.x, position.z) + dimensionsHalf;
+				Vec2 frac(pos.x / m_ChunkDimensions.x, pos.y / m_ChunkDimensions.y);
+				IntVec2 intgr = frac;
+				return { frac.x == (float)intgr.x, frac.y == (float)intgr.y };
+			}
+
+			Creature& AddCreature(const Vec3& position) {
+				if (!m_ChunkMatrix.m_Size) {
+					CriticalError(ErrorOrigin::GameLogic, 
+						"attempting to add a creature to an empty world (in function World::AddCreature)!");
+				}
+				Vec3 pos(Clamp(position.x, m_WorldRect.m_Min.x + 0.01f, m_WorldRect.m_Max.x - 0.01f), 0.0f, 
+					Clamp(position.z, m_WorldRect.m_Min.y + 0.01f, m_WorldRect.m_Max.y - 0.01f));
+				Vec2_T<bool> isOnBorder = IsOnBorder(position);
+				if (isOnBorder.x) {
+					pos.x += 0.01f;
+				}
+				if (isOnBorder.y) {
+					pos.z += 0.01f;
+				}
+				for (const Chunk& chunk : m_ChunkMatrix) {
+					if (chunk.IsPointInside(pos)) {
+						return m_Creatures.EmplaceBack(pos, &chunk, m_NextRenderDataID++);
+					}
+				}
+				assert(false);
+			}
+
+			RenderData& AddRenderData(const Creature& creature, const Mat4& transform, const MeshData& meshData) {
+				return m_RenderDatas.EmplaceBack(creature.m_RenderID, transform, meshData);
+			}
+
+			RenderData& AddRenderData(const Ground& ground, const Mat4& transform, const MeshData& meshData) {
+				return m_RenderDatas.EmplaceBack(ground.m_RenderID, transform, meshData);
+			}
+
+			const DynamicArray<Ground>& GetGrounds() {
+				return m_Grounds;
+			}
+
+			Engine& GetEngine() const {
+				return m_Engine;
+			}
+
+			bool RemoveCreature(Creature& creature) {
+				RemoveRenderDatas(creature.m_RenderID);
+				return m_Creatures.Erase(&creature);
+			}
+
+		private:
+
 			void SwapchainCreateCallback(VkExtent2D swapchainExtent, uint32_t imageCount) {
 				Renderer& renderer = m_Engine.m_Renderer;
 				for (size_t i = 0; i < m_DepthImages.m_Size; i++) {
@@ -2829,6 +2915,41 @@ void main() {
 					}
 				}
 			}
+
+			void Load(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, uint32_t groundCount, GroundInfo groundInfos[]) {
+				m_Grounds.Reserve(groundCount);
+				for (uint32_t i = 0; i < groundCount; i++) {
+					m_Grounds.EmplaceBack(groundInfos[i], m_NextRenderDataID++);
+				}
+				m_ChunkDimensions = { 
+					(float)worldDimensions.x / chunkMatrixSize.x, 
+					(float)worldDimensions.y / chunkMatrixSize.y,
+				};
+				m_ChunkMatrixSize = chunkMatrixSize;
+				m_ChunkMatrix.Reserve(m_ChunkMatrixSize.x * m_ChunkMatrixSize.y);
+				m_WorldRect.m_Max = Vec2(worldDimensions.x / 2.0f, worldDimensions.y / 2.0f);
+				m_WorldRect.m_Min = -m_WorldRect.m_Max;
+				for (size_t x = 0; x < m_ChunkMatrixSize.x; x++) {
+					for (size_t y = 0; y < m_ChunkMatrixSize.y; y++) {
+						Chunk& chunk = m_ChunkMatrix.EmplaceBack(Vec2_T<uint32_t>(x, y), 
+								Vec2(m_WorldRect.m_Min.x + x * m_ChunkDimensions.x, 
+									m_WorldRect.m_Min.y + y * m_ChunkDimensions.y), 
+									m_ChunkDimensions);
+						for (const Ground& ground : m_Grounds) {
+							if (chunk.m_BoundingBox.OverLaps(ground.m_BoundingBox)) {
+								chunk.m_Grounds.PushBack(&ground);
+							}
+						}
+					}
+				}
+			}
+
+			void Unload() {
+				m_Grounds.Clear();
+				m_ChunkMatrix.Clear();
+				m_Creatures.Clear();
+				m_RenderDatas.Clear();
+			};
 
 			void LogicUpdate() {
 				for (Creature& creature : m_Creatures) {
@@ -2879,7 +3000,7 @@ void main() {
 								creature.m_Chunk->m_ChunkMatrixCoords.x, creature.m_Chunk->m_ChunkMatrixCoords.y);
 						}
 					}
-					creature.Move(newPos, creature.m_Chunk->FindGround(creature.m_Position));
+					creature.Move(newPos);
 				}
 			}
 
@@ -2932,53 +3053,6 @@ void main() {
 				}
 			}
 
-		public:
-
-			Vec2_T<bool> IsOnBorder(const Vec3& position) {
-				Vec2 dimensionsHalf = m_WorldRect.Dimensions() / 2;
-				Vec2 pos = Vec2(position.x, position.z) + dimensionsHalf;
-				Vec2 frac(pos.x / m_ChunkDimensions.x, pos.y / m_ChunkDimensions.y);
-				IntVec2 intgr = frac;
-				return { frac.x == (float)intgr.x, frac.y == (float)intgr.y };
-			}
-
-			Creature& AddCreature(const Vec3& position) {
-				if (!m_ChunkMatrix.m_Size) {
-					CriticalError(ErrorOrigin::GameLogic, 
-						"attempting to add a creature to an empty world (in function World::AddCreature)!");
-				}
-				Vec3 pos(Clamp(position.x, m_WorldRect.m_Min.x + 0.01f, m_WorldRect.m_Max.x - 0.01f), 0.0f, 
-					Clamp(position.z, m_WorldRect.m_Min.y + 0.01f, m_WorldRect.m_Max.y - 0.01f));
-				Vec2_T<bool> isOnBorder = IsOnBorder(position);
-				if (isOnBorder.x) {
-					pos.x += 0.01f;
-				}
-				if (isOnBorder.y) {
-					pos.z += 0.01f;
-				}
-				for (const Chunk& chunk : m_ChunkMatrix) {
-					if (chunk.IsPointInside(pos)) {
-						return m_Creatures.EmplaceBack(pos, &chunk, m_NextRenderDataID++);
-					}
-				}
-				assert(false);
-			}
-
-			RenderData& AddRenderData(const Creature& creature, const Mat4& transform, const MeshData& meshData) {
-				return m_RenderDatas.EmplaceBack(creature.m_RenderID, transform, meshData);
-			}
-
-			Engine& GetEngine() const {
-				return m_Engine;
-			}
-
-			bool RemoveCreature(Creature& creature) {
-				RemoveRenderDatas(creature.m_RenderID);
-				return m_Creatures.Erase(&creature);
-			}
-
-		private:
-
 			void RemoveRenderDatas(uint64_t renderID) {
 				auto end = m_RenderDatas.end();
 				for (auto iter = m_RenderDatas.begin(); iter != end;) {
@@ -2989,38 +3063,6 @@ void main() {
 					++iter;
 				}
 			}
-
-			void Load(DynamicArray<Ground>&& grounds, Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize) {
-				new (&m_Grounds) DynamicArray<Ground>(std::move(grounds));
-				m_ChunkDimensions = { 
-					(float)worldDimensions.x / chunkMatrixSize.x, 
-					(float)worldDimensions.y / chunkMatrixSize.y,
-				};
-				m_ChunkMatrixSize = chunkMatrixSize;
-				m_ChunkMatrix.Reserve(m_ChunkMatrixSize.x * m_ChunkMatrixSize.y);
-				m_WorldRect.m_Max = Vec2(worldDimensions.x / 2.0f, worldDimensions.y / 2.0f);
-				m_WorldRect.m_Min = -m_WorldRect.m_Max;
-				for (size_t x = 0; x < m_ChunkMatrixSize.x; x++) {
-					for (size_t y = 0; y < m_ChunkMatrixSize.y; y++) {
-						Chunk& chunk = m_ChunkMatrix.EmplaceBack(Vec2_T<uint32_t>(x, y), 
-								Vec2(m_WorldRect.m_Min.x + x * m_ChunkDimensions.x, 
-									m_WorldRect.m_Min.y + y * m_ChunkDimensions.y), 
-									m_ChunkDimensions);
-						for (const Ground& ground : m_Grounds) {
-							if (chunk.m_BoundingBox.OverLaps(ground.m_BoundingBox)) {
-								chunk.m_Grounds.PushBack(&ground);
-							}
-						}
-					}
-				}
-			}
-
-			void Unload() {
-				m_Grounds.Clear();
-				m_ChunkMatrix.Clear();
-				m_Creatures.Clear();
-				m_RenderDatas.Clear();
-			};
 
 			Chunk* GetChunk(Vec2_T<uint32_t> chunkMatrixCoords) {
 				uint32_t index = chunkMatrixCoords.x * m_ChunkMatrixSize.y + chunkMatrixCoords.y;
@@ -3222,9 +3264,9 @@ void main() {
 			return res;
 		}
 
-		World& LoadWorld(DynamicArray<Ground>&& grounds, Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize) {
+		World& LoadWorld(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, uint32_t groundCount, GroundInfo groundInfos[]) {
 			m_World.Unload();
-			m_World.Load(std::move(grounds), worldDimensions, chunkMatrixSize);
+			m_World.Load(worldDimensions, chunkMatrixSize, groundCount, groundInfos);
 			return m_World;
 		}
 
