@@ -709,11 +709,11 @@ namespace engine {
 			Renderer::Buffer m_VertexBuffer;
 			Renderer::Buffer m_IndexBuffer;
 
-			StaticMesh(Engine& engine) noexcept 
-				: m_Engine(engine), m_VertexBuffer(engine.m_Renderer), m_IndexBuffer(engine.m_Renderer), m_IndexCount(0) {}
+			StaticMesh(Engine& engine) noexcept : m_Engine(engine), m_VertexBuffer(engine.m_Renderer), 
+				m_IndexBuffer(engine.m_Renderer), m_IndexCount(0) {}
 
-			StaticMesh(StaticMesh&& other) noexcept : m_Engine(other.m_Engine), 
-					m_VertexBuffer(std::move(other.m_VertexBuffer)), m_IndexBuffer(std::move(other.m_IndexBuffer)), m_IndexCount(0) {}
+			StaticMesh(StaticMesh&& other) noexcept : m_Engine(other.m_Engine), m_VertexBuffer(std::move(other.m_VertexBuffer)), 
+				m_IndexBuffer(std::move(other.m_IndexBuffer)), m_IndexCount(other.m_IndexCount) {}
 
 			StaticMesh(const StaticMesh&) = delete;
 
@@ -2656,8 +2656,8 @@ void main() {
 					CriticalError(ErrorOrigin::Vulkan, 
 						"failed to map camera matrices buffer (function vkMapMemory in function World::Initialize)!");
 				}
-				m_CameraMatricesMap->m_Projection = Mat4();
-				m_CameraMatricesMap->m_View = Mat4();
+				m_CameraMatricesMap->m_Projection = Mat4::Projection(pi / 2, 1.0f, 0.0f, 10.0f);
+				m_CameraMatricesMap->m_View = Mat4(1);
 				VkDescriptorPoolSize camPoolSize {
 					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 					.descriptorCount = 1,
@@ -2675,7 +2675,7 @@ void main() {
 				VkDescriptorBufferInfo cameraDecriptorBufferInfo {
 					.buffer = m_CameraMatricesBuffer.m_Buffer,
 					.offset = 0,
-					.range = 64,
+					.range = sizeof(CameraMatricesBuffer),
 				};
 				VkWriteDescriptorSet cameraDescriptorSetWrite = Renderer::GetDescriptorWrite(nullptr, 0, m_CameraMatricesDescriptorSet,
 					VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &cameraDecriptorBufferInfo);
@@ -2856,7 +2856,7 @@ void main() {
 						.imageView = drawData.m_SwapchainImageView,
 						.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 						.resolveMode = VK_RESOLVE_MODE_NONE,
-						.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+						.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
 						.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
 						.clearValue { 0, 0, 0, 0 },
 					};
@@ -3159,59 +3159,6 @@ void main() {
 				vkCmdSetViewport(drawData.m_CommandBuffer, 0, 1, &viewport);
 				vkCmdSetScissor(drawData.m_CommandBuffer, 0, 1, &scissor);
 				m_World.Render(drawData);
-				VkRenderingAttachmentInfo colorAttachment{
-					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-					.pNext = nullptr,
-					.imageView = drawData.m_SwapchainImageView,
-					.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-					.resolveMode = VK_RESOLVE_MODE_NONE,
-					.resolveImageView = VK_NULL_HANDLE,
-					.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-					.clearValue = { .color { .float32 { 0.0f, 0.0f, 0.0f, 1.0f } } },
-				};
-				VkRenderingInfo renderingInfo {
-					.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.renderArea = scissor,
-					.layerCount = 1,
-					.viewMask = 0,
-					.colorAttachmentCount = 1,
-					.pColorAttachments = &colorAttachment,
-					.pDepthAttachment = nullptr,
-				};
-				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
-				CameraData1* cameras[2] = { &m_GameCamera, &m_DebugCamera };
-				for (size_t i = 0; i < 1; i++) {
-					for (GraphicsPipeline& pipeline : m_GraphicsPipelines) {
-						vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_Pipeline);
-						for (Entity* entity : pipeline.m_Entites) {
-							VkDescriptorSet* pDescriptorSets = nullptr;
-							uint32_t meshCount = 0;
-							MeshData* meshes = nullptr;
-							entity->RenderUpdate(pipeline, *cameras[i], pipeline.m_DescriptorSetCount, &pDescriptorSets, meshCount, &meshes);
-							if (pDescriptorSets) {
-								vkCmdBindDescriptorSets(drawData.m_CommandBuffer, 
-									VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.m_PipelineLayout, 0, pipeline.m_DescriptorSetCount, pDescriptorSets, 
-									0, nullptr);
-							}
-							if (meshCount && !meshes) {
-								PrintError(ErrorOrigin::Entity, 
-									"Entity::RenderUpdate returned a non zero mesh count but meshes pointer was null (in function Render)!");
-								continue;
-							}
-							for (uint32_t j = 0; j < meshCount; j++) {
-								vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 
-									0, meshes[j].m_VertexBufferCount, meshes[j].m_VertexBuffers, meshes[j].m_VertexBufferOffsets);
-								vkCmdBindIndexBuffer(drawData.m_CommandBuffer, meshes[j].m_IndexBuffer, 
-									0, VK_INDEX_TYPE_UINT32);
-								vkCmdDrawIndexed(drawData.m_CommandBuffer, meshes[j].m_IndexCount, 1, 0, 0, 0);
-							}
-						}
-					}
-				}
-				vkCmdEndRendering(drawData.m_CommandBuffer);
 				m_UI.Render(drawData);
 				m_Renderer.EndFrame();
 			}

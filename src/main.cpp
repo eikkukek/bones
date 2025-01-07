@@ -338,7 +338,11 @@ public:
 
 	Player(engine::World& world, engine::StaticMesh&& mesh) 
 		: m_World(world), m_Creature(world.AddCreature({})), m_Mesh(std::move(mesh)), 
-			m_RenderData(m_World.AddRenderData(m_Creature, {}, m_Mesh.GetMeshData())) {}
+			m_RenderData(m_World.AddRenderData(m_Creature, {}, m_Mesh.GetMeshData())) {
+		m_RenderData.m_Transform = engine::Mat4(1);
+		m_RenderData.m_Transform[3].z = 3;
+		m_RenderData.m_MeshData = m_Mesh.GetMeshData();
+	}
 };
 
 int main() {
