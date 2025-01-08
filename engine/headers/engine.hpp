@@ -8,6 +8,7 @@
 #include "vulkan/vulkan_core.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "third_party/stb_image.h"
+#include "imgui.h"
 #include <assert.h>
 #include <cstdio>
 #include <cstdlib>
@@ -15,6 +16,15 @@
 #include <utility>
 
 namespace engine {
+
+	enum EngineModeBits {
+		EngineMode_Initialized = 1,
+		EngineMode_Play = 2,
+		EngineMode_Game = 4,
+		EngineMode_Editor = 8,
+	};
+
+	typedef uint32_t EngineMode;
 
 	class Engine {
 	public:
@@ -41,10 +51,9 @@ namespace engine {
 			IndexOutOfBounds = 5,
 			Vulkan = 6,
 			Stb = 7,
-			Entity = 8,
-			DynamicArray = 9,
-			FileParsing = 10,
-			GameLogic = 11,
+			DynamicArray = 8,
+			FileParsing = 9,
+			GameLogic = 10,
 			MaxEnum,
 		};
 
@@ -58,7 +67,6 @@ namespace engine {
 				"IndexOutOfBounds",
 				"Vulkan",
 				"stb",
-				"Entity",
 				"DynamicArray",
 				"FileParsing",
 				"GameLogic",
@@ -731,7 +739,7 @@ namespace engine {
 
 			StaticMesh(const StaticMesh&) = delete;
 
-			MeshData GetMeshData() {
+			MeshData GetMeshData() const {
 				constexpr static VkDeviceSize offset = 0;
 				MeshData data {
 					.m_VertexBufferCount = 1,
@@ -1033,124 +1041,6 @@ namespace engine {
 				vkFreeMemory(renderer.m_VulkanDevice, m_VulkanDeviceMemory, renderer.m_VulkanAllocationCallbacks);
 				m_VulkanDeviceMemory = VK_NULL_HANDLE;
 			}
-		};
-
-		struct CameraData1 {
-			VkDescriptorSet m_DescriptorSet{};
-			Mat4* m_ProjectionMatrixMap{};
-			Mat4* m_ViewMatrixMap{};
-			Vec2_T<uint32_t> viewArea{};
-		};
-
-		struct CameraData2 {
-			VkBuffer m_ProjectionMatrixBuffer{};
-			VkBuffer m_ViewMatrixBuffer{};
-			VkDeviceMemory m_ProjectionMatrixDeviceMemory{};
-			VkDeviceMemory m_ViewMatrixDeviceMemory{};
-			VkDescriptorPool m_DescriptorPool{};
-		};
-
-		struct GraphicsPipeline;
-
-		class Entity {
-		public:
-
-			static constexpr size_t name_max_length = 63;
-
-			const size_t c_ClassSize;
-			char m_Name[name_max_length + 1];
-			size_t m_NameLength;
-			const UID m_UID;
-			Engine& m_Engine;
-			DynamicArray<GraphicsPipeline> m_GraphicsPipelines;
-
-			Entity(Engine& engine, const char* name, UID UID, size_t classSize) noexcept 
-				: m_Engine(engine), c_ClassSize(classSize), m_UID(UID) {
-				size_t len = strlen(name);
-				if (len > name_max_length) {
-					PrintError(ErrorOrigin::Entity, 
-						"given entity name is longer than entity name max size (in Entity constructor)!");
-				}
-				size_t i = 0;
-				for (; i < len && i < name_max_length; i++) {
-					m_Name[i] = name[i];
-				}
-				m_Name[i] = '\0';
-				m_NameLength = i;
-			}
-
-			Entity(Engine& engine, FILE* file, UID UID, size_t classSize) noexcept : m_Engine(engine), c_ClassSize(classSize), m_UID(UID) {
-				char c = fgetchar();
-				size_t i = 0;
-				for (; i < name_max_length && c != '\n'; i++) {
-					m_Name[i] = c;
-					c = fgetchar();
-				}
-				m_Name[i] = '\0';
-				m_NameLength = i;
-				if (c != '\n') {
-					PrintError(ErrorOrigin::FileParsing, 
-						"there was an entity name larger than entity name max size in file (in Entity constructor)!");
-				}
-				while (c != '\n') {
-					c = fgetchar();
-				}
-			}
-
-			virtual bool LogicUpdate() = 0;
-			virtual void RenderUpdate(const GraphicsPipeline& pipeline, const CameraData1& camera, const uint32_t desciptorCount, 
-				VkDescriptorSet** outDescriptorSets, uint32_t& meshCount, MeshData** meshes) = 0;
-			virtual void EditorUpdate() {};
-			virtual void WriteToFile(FILE* file) = 0;
-			virtual void OnTerminate() {};
-
-			void Terminate() {
-				for (GraphicsPipeline& graphicsPipeline : m_GraphicsPipelines) {
-					graphicsPipeline.m_Entites.Erase(this);
-				}
-				OnTerminate();
-			}
-
-			virtual ~Entity() {
-			}
-
-			struct Hash {
-				uint64_t operator()(Entity* entity) {
-					return String::Hash()(entity->m_Name) ^ entity->m_UID;
-				}
-			};
-		};
-
-		class EntityAllocator {
-		public:
-
-			template<typename EntityType>
-			EntityType* Allocate(Engine* pEngine, const char* name, UID UID) {
-				return new EntityType(pEngine, name, UID, sizeof(EntityType));
-			}
-
-			void Deallocate(Entity* entity) {
-				delete entity;
-			}
-		};
-
-		struct GraphicsPipeline {
-
-			VkPipeline m_Pipeline;
-			uint32_t m_PushConstantCount;
-			VkPipelineLayout m_PipelineLayout;
-			uint32_t m_DescriptorSetCount;
-			Set<Entity*, Entity::Hash> m_Entites;
-
-			GraphicsPipeline() 
-				: m_Pipeline(VK_NULL_HANDLE), m_PipelineLayout(VK_NULL_HANDLE),
-					m_DescriptorSetCount(0), m_Entites() {}
-
-			GraphicsPipeline(GraphicsPipeline&& other) noexcept 
-				: m_Pipeline(other.m_Pipeline), m_PipelineLayout(other.m_PipelineLayout),
-					m_DescriptorSetCount(other.m_DescriptorSetCount), m_Entites(std::move(other.m_Entites)) {}
-
-			GraphicsPipeline(const GraphicsPipeline&) = delete;
 		};
 
 		class Input {
@@ -2254,11 +2144,6 @@ void main() {
 		public:
 		};
 
-		class EntityConstructor {
-			const char* m_TypeName;
-			Entity* (*m_NewEntityFunction)(EntityAllocator&);
-		};
-
 		struct Obj {
 
 			uint32_t m_LinesParsed = 0;
@@ -2353,16 +2238,24 @@ void main() {
 					}
 					for (char c = fgetc(fileStream); c != '\n' && c != EOF; c = fgetc(fileStream)) {}
 				}
-				if (!(m_VIndices.Size() == m_VtIndices.Size() &&
-					(!m_VnIndices.Size() || m_VnIndices.Size() == m_VtIndices.Size()) &&
-					maxVIndex < m_Vs.Size() && maxVtIndex < m_Vts.Size() && maxVnIndex < m_Vns.Size())) {
+				if (!(m_VIndices.m_Size == m_VtIndices.m_Size &&
+					(!m_VnIndices.m_Size || m_VnIndices.m_Size == m_VtIndices.m_Size) && !(m_VtIndices.m_Size % 3) &&
+					maxVIndex < m_Vs.m_Size && maxVtIndex < m_Vts.m_Size && maxVnIndex < m_Vns.m_Size)) {
 					m_LinesParsed = 0;
 					return false;
+				}
+				for (uint32_t i = 0; i < m_VIndices.m_Size; i += 3) {
+					uint32_t third = i + 2;
+					Swap(m_VIndices[i], m_VIndices[third]);
+					Swap(m_VtIndices[i], m_VtIndices[third]);
+					if (m_VnIndices.m_Size) {
+						Swap(m_VnIndices[i], m_VnIndices[third]);
+					}
 				}
 				return true;
 			}
 
-			const DynamicArray<uint32_t>& GetIndices() {
+			const DynamicArray<uint32_t>& GetIndices() const {
 				return m_VIndices;
 			}
 
@@ -2408,26 +2301,10 @@ void main() {
 		}
 
 		template<typename T>
-		struct Cube {
-
-			Vec3_T<T> m_Min;
-			Vec3_T<T> m_Max;
-
-			bool IsPointInside(const Vec3& point) const {
-				return point.x > m_Min.x && point.y > m_Min.y && point.z > m_Min.z &&
-					point.x < m_Max.x && point.y < m_Max.y && point.z < m_Max.z;
-			}
-
-			Vec3 Dimensions() const {
-				return m_Max - m_Min;
-			}
-		};
-
-		template<typename T>
 		struct Rect {
 
-			Vec2_T<T> m_Min;
-			Vec2_T<T> m_Max;
+			Vec2_T<T> m_Min{};
+			Vec2_T<T> m_Max{};
 
 			template<typename U>
 			bool IsPointInside(Vec2_T<U> point) const {
@@ -2446,17 +2323,153 @@ void main() {
 			}
 		};
 
-		struct GroundInfo {
-			Rect<float> m_BoundingBox{};
+		template<typename T>
+		struct Box {
+
+			Vec3_T<T> m_Min{};
+			Vec3_T<T> m_Max{};
+
+			bool IsPointInside(const Vec3& point) const {
+				return point.x > m_Min.x && point.y > m_Min.y && point.z > m_Min.z &&
+					point.x < m_Max.x && point.y < m_Max.y && point.z < m_Max.z;
+			}
+
+			bool OverLaps(const Box& other) const {
+				return m_Max.x > other.m_Min.x && other.m_Max.x > m_Min.x &&
+					m_Max.y > other.m_Min.y && other.m_Max.y > m_Min.y &&
+					m_Max.z > other.m_Min.z && other.m_Max.z > m_Min.z;
+			}
+
+			Vec3 Dimensions() const {
+				return m_Max - m_Min;
+			}
 		};
 
-		class Ground {
+		class BoxCollider {
 
 			friend class Engine;
 
 		private:
 
-			Rect<float> m_BoundingBox;
+			Vec3 m_Position;
+			Quaternion m_Rotation;
+			Vec3 m_Dimensions;
+			Vec3 m_Corners[8]{};
+			Box<float> m_AABB{};
+
+		public:
+
+			BoxCollider(const Vec3& position, const Quaternion& rotation, const Vec3& dimensions) 
+					: m_Position(position), m_Rotation(rotation), m_Dimensions(dimensions) {
+				CalcCorners();
+				CalcAABB();
+			}
+
+		private:
+
+			void CalcCorners() {
+				Vec3 halfDimensionsPos = m_Dimensions / 2;
+				Vec3 halfDimensionsNeg = -halfDimensionsPos;
+
+				m_Corners[0].x = halfDimensionsPos.x;
+				m_Corners[0].y = halfDimensionsPos.y;
+				m_Corners[0].z = halfDimensionsPos.z;
+
+				m_Corners[1].x = halfDimensionsNeg.x;
+				m_Corners[1].y = halfDimensionsNeg.y;
+				m_Corners[1].z = halfDimensionsNeg.z;
+
+				m_Corners[2].x = halfDimensionsNeg.x;
+				m_Corners[2].y = halfDimensionsPos.y;
+				m_Corners[2].z = halfDimensionsPos.z;
+
+				m_Corners[3].x = halfDimensionsPos.x;
+				m_Corners[3].y = halfDimensionsNeg.y;
+				m_Corners[3].z = halfDimensionsPos.z;
+
+				m_Corners[4].x = halfDimensionsPos.x;
+				m_Corners[4].y = halfDimensionsPos.y;
+				m_Corners[4].z = halfDimensionsNeg.z;
+
+				m_Corners[5].x = halfDimensionsPos.x;
+				m_Corners[5].y = halfDimensionsNeg.y;
+				m_Corners[5].z = halfDimensionsNeg.z;
+
+				m_Corners[6].x = halfDimensionsNeg.x;
+				m_Corners[6].y = halfDimensionsPos.y;
+				m_Corners[6].z = halfDimensionsNeg.z;
+
+				m_Corners[7].x = halfDimensionsNeg.x;
+				m_Corners[7].y = halfDimensionsNeg.y;
+				m_Corners[7].z = halfDimensionsPos.z;
+
+				Mat3 transform(m_Rotation.AsMat4());
+
+				for (size_t i = 0; i < 8; i++) {
+					m_Corners[i] = m_Corners[i] * transform + m_Position;
+				}
+			}
+
+			void CalcAABB() {
+				static constexpr float min_float = std::numeric_limits<float>::min();
+				static constexpr float max_float = std::numeric_limits<float>::max();
+				m_AABB.m_Min = { max_float, max_float, max_float };
+				m_AABB.m_Max = { min_float, min_float, min_float };
+				for (size_t i = 0; i < 4; i++) {
+					Vec3& corner = m_Corners[i];
+					m_AABB.m_Min.x = Min(corner.x, m_AABB.m_Min.x);
+					m_AABB.m_Min.y = Min(corner.y, m_AABB.m_Min.y);
+					m_AABB.m_Min.z = Min(corner.z, m_AABB.m_Min.z);
+					m_AABB.m_Max.x = Max(corner.x, m_AABB.m_Max.x);
+					m_AABB.m_Max.y = Max(corner.y, m_AABB.m_Max.y);
+					m_AABB.m_Max.z = Max(corner.z, m_AABB.m_Max.z);
+				}
+			}
+
+		public:	
+
+			void SetPosition(const Vec3& position) {
+				m_Position = position;
+				CalcCorners();
+				CalcAABB();
+			}
+
+			void SetRotation(const Quaternion& rotation) {
+				m_Rotation = rotation;
+				CalcCorners();
+				CalcAABB();
+			}
+
+			void SetPositionAndRotation(const Vec3& position, const Quaternion& rotation) {
+				m_Position = position;
+				m_Rotation = rotation;
+				CalcCorners();
+				CalcAABB();
+			}
+		};
+
+		struct CapsuleCollider {
+			float m_BaseRadius{};
+			float m_Height{};
+			Vec3 m_Position{};
+			Quaternion m_Rotation{};
+		};
+
+		bool CheckCollision(const BoxCollider& a, const BoxCollider& b) {
+			return a.m_AABB.OverLaps(b.m_AABB);
+		}
+
+		struct GroundInfo {
+			Rect<float> m_BoundingBox{};
+		};
+
+		struct Ground {
+
+			friend class Engine;
+
+		private:
+
+			Rect<float> m_TopViewBoundingBox;
 			Vec3 m_Scale;
 			Vec3 m_CenterPosition;
 			Vec2_T<uint32_t> m_HeightMapExtent;
@@ -2467,7 +2480,7 @@ void main() {
 			const uint64_t m_ObjectID;
 
 			Ground(const GroundInfo& groundInfo, uint64_t objectID) 
-					: m_BoundingBox(groundInfo.m_BoundingBox), m_ObjectID(objectID) {}
+					: m_TopViewBoundingBox(groundInfo.m_BoundingBox), m_ObjectID(objectID) {}
 
 		public:
 
@@ -2483,12 +2496,12 @@ void main() {
 
 			float GetHeightAtPosition(const Vec3& position) const {
 				Vec2 pos2D(position.x, position.z);
-				if (!m_BoundingBox.IsPointInside(pos2D)) {
+				if (!m_TopViewBoundingBox.IsPointInside(pos2D)) {
 					return std::numeric_limits<float>::max();
 				}
 				return 0.0f;
-				Vec3 relative = pos2D - m_BoundingBox.m_Min;
-				Vec2 dimensions = m_BoundingBox.Dimensions();
+				Vec3 relative = pos2D - m_TopViewBoundingBox.m_Min;
+				Vec2 dimensions = m_TopViewBoundingBox.Dimensions();
 				Vec2_T<uint32_t> heightMapCoords(relative.x / dimensions.x * m_HeightMapExtent.x,
 					relative.y / dimensions.y * m_HeightMapExtent.y);
 				size_t index = heightMapCoords.x * m_HeightMapExtent.y + heightMapCoords.y;
@@ -2496,6 +2509,9 @@ void main() {
 				assert(index < heightMapSize);
 				return (float)m_HeightMap[index] / UINT32_MAX * m_Scale.y + m_CenterPosition.y;
 			}
+		};
+
+		struct StaticObject {
 		};
 
 		struct Chunk {
@@ -2516,7 +2532,7 @@ void main() {
 				Vec2 newPosTopView(oldPosition.x + deltaPosition.x, oldPosition.z + deltaPosition.z);
 				Vec2 oldPositionTopView(oldPosition.x, oldPosition.z);
 				for (const Ground* ground : m_Grounds) {
-					Rect<float> boundingBox = ground->m_BoundingBox;
+					Rect<float> boundingBox = ground->m_TopViewBoundingBox;
 					if (boundingBox.IsPointInside(newPosTopView)) {
 						return ground;
 					}
@@ -2538,17 +2554,19 @@ void main() {
 
 		private:
 
+			const Chunk* m_Chunk;
+			Vec3 m_Position;
+			const uint64_t m_ObjectID;
+			BoxCollider m_Collider;
+
 			Creature(const Vec3& position, const Chunk* chunk, uint64_t objectID) 
-					: m_Position(position), m_Chunk(chunk), m_ObjectID(objectID) {
+					: m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
+						m_Collider(m_Position, Quaternion::Identity(), Vec3(1, 1, 1)) {
 				assert(chunk);
 				Vec2_T<bool> _;
 				const Ground* ground = chunk->FindGround(position, {}, _);
 				m_Position.y = ground ? ground->GetHeightAtPosition(position) : 0.0f;
 			}
-
-			const Chunk* m_Chunk;
-			Vec3 m_Position;
-			const uint64_t m_ObjectID;
 
 		public:
 
@@ -2580,6 +2598,7 @@ void main() {
 					float height = ground->GetHeightAtPosition(m_Position);
 					assert(height != std::numeric_limits<float>::max());
 					m_Position.y = height;
+					m_Collider.SetPosition(m_Position);
 				}
 				if (m_MoveCallback) {
 					m_MoveCallback(*this, m_Position, deltaPos);
@@ -2717,7 +2736,7 @@ void main() {
 					CriticalError(ErrorOrigin::Vulkan, 
 						"failed to map camera matrices buffer (function vkMapMemory in function World::Initialize)!");
 				}
-				m_CameraMatricesMap->m_Projection = Mat4::Projection(pi / 2, 1.0f, 0.01f, 10.0f);
+				m_CameraMatricesMap->m_Projection = Mat4::Projection(pi / 4, 1.0f, 0.1f, 100.0f);
 				m_CameraMatricesMap->m_View = Mat4::LookAt({ 0.0f, 0.0f, 0.0f }, Vec3(0.0f, 1.0f, 0.0f), Vec3(0.0f, 0.0f, 3.0f));
 				VkDescriptorPoolSize camPoolSize {
 					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -2949,7 +2968,7 @@ void main() {
 									m_WorldRect.m_Min.y + y * m_ChunkDimensions.y), 
 									m_ChunkDimensions);
 						for (const Ground& ground : m_Grounds) {
-							if (chunk.m_BoundingBox.OverLaps(ground.m_BoundingBox)) {
+							if (chunk.m_BoundingBox.OverLaps(ground.m_TopViewBoundingBox)) {
 								chunk.m_Grounds.PushBack(&ground);
 							}
 						}
@@ -3095,30 +3114,18 @@ void main() {
 			}
 		};
 
+		class Editor {
+
+			World& m_World;
+			ImGuiContext* m_ImGuiContext;
+			VkDescriptorPool m_ImGuiDescrptorPool;
+
+			Editor(World& world) : m_World(world) {}
+		};
+
+	private:
+
 		inline static Engine* s_engine_instance = nullptr;
-
-		const uint32_t m_Initialized;
-
-		UI m_UI;
-		World m_World;
-		Renderer m_Renderer;
-		TextRenderer m_TextRenderer;
-
-		EntityAllocator m_EntityAllocator;
-		const size_t m_EntityConstructorCount;
-		EntityConstructor* const m_pEntityConstructors;	
-
-		Set<Entity*, Entity::Hash> m_Entities{};
-		DynamicArray<GraphicsPipeline> m_GraphicsPipelines{};
-
-		DynamicArray<Ground> m_Grounds{};
-
-		CameraData1 m_GameCamera{};
-		CameraData1 m_DebugCamera{};
-		CameraData2 m_GameCameraData2{};
-		CameraData2 m_DebugCameraData2{};
-
-		StaticMesh m_StaticQuadMesh;
 
 		static void CriticalError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS) {
 			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
@@ -3186,29 +3193,38 @@ void main() {
 			s_engine_instance->m_World.SwapchainCreateCallback(extent, imageCount);
 		}
 
-		static inline bool UpdateEngineInstance(Engine* engine) {
+		static inline EngineMode UpdateEngineInstance(Engine* engine, EngineMode mode) {
 			if (s_engine_instance) {
 				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
 					"attempting to initialize engine twice (only one engine allowed)!");
 				exit(EXIT_FAILURE);
 			}
 			s_engine_instance = engine;
-			return true;
-		}	
+			return mode;
+		}
 
-		Engine(const char* appName, GLFWwindow* window, size_t maxUIWindows, size_t entityConstructorCount, 
-				EntityConstructor* pEntityConstructors, size_t entityReservation)
-				: m_Initialized(UpdateEngineInstance(this)), 
-					m_UI(*this, maxUIWindows),
-					m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, 
-						false, RendererCriticalErrorCallback, SwapchainCreateCallback),
-					m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
-					m_EntityAllocator(), m_EntityConstructorCount(entityConstructorCount), m_pEntityConstructors(pEntityConstructors),
-					m_StaticQuadMesh(*this),
-					m_World(*this)
+		EngineMode m_Mode;
+
+		UI m_UI;
+		World m_World;
+		Renderer m_Renderer;
+		TextRenderer m_TextRenderer;
+
+		DynamicArray<Ground> m_Grounds{};
+
+		StaticMesh m_StaticQuadMesh;
+
+	public:
+
+		Engine(EngineMode mode, const char* appName, GLFWwindow* window, size_t maxUIWindows) :
+				m_Mode(UpdateEngineInstance(this, mode)),
+				m_UI(*this, maxUIWindows),
+				m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, RendererCriticalErrorCallback, SwapchainCreateCallback),
+				m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
+				m_StaticQuadMesh(*this),
+				m_World(*this)
 		{
 			m_UI.Initialize();
-			m_Entities.Reserve(entityReservation);
 
 			Input input(window);
 
@@ -3254,10 +3270,6 @@ void main() {
 			m_UI.Terminate();
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
-			for (Entity* entity : m_Entities) {
-				entity->Terminate();
-				m_EntityAllocator.Deallocate(entity);
-			}
 		}
 
 		Vec2_T<uint32_t> GetRenderResolution() {
@@ -3268,18 +3280,16 @@ void main() {
 			return m_UI;
 		}
 
-		GraphicsPipeline& AddGraphicsPipeline(VkPipeline pipeline, VkPipelineLayout pipelineLayout, 
-			uint32_t pushConstantCount, uint32_t descriptorSetCount, size_t entityReserve) {
-			if (pipeline == VK_NULL_HANDLE || pipelineLayout == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Uncategorized, "attempting to add graphics pipeline that's null (function AddGraphicsPipeline)!");
-			}
-			GraphicsPipeline& res = m_GraphicsPipelines.EmplaceBack();
-			res.m_Pipeline = pipeline;
-			res.m_PushConstantCount = pushConstantCount;
-			res.m_PipelineLayout = pipelineLayout;
-			res.m_DescriptorSetCount = descriptorSetCount;
-			res.m_Entites.Reserve(entityReserve);
-			return res;
+		Renderer& GetRenderer() {
+			return m_Renderer;
+		}
+
+		TextRenderer& GetTextRenderer() {
+			return m_TextRenderer;
+		}
+
+		const StaticMesh& GetQuadMesh() const {
+			return m_StaticQuadMesh;
 		}
 
 		World& LoadWorld(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, uint32_t groundCount, GroundInfo groundInfos[]) {
@@ -3288,12 +3298,17 @@ void main() {
 			return m_World;
 		}
 
-		void LogicUpdate() {
-			m_World.LogicUpdate();
-			Input::ResetInput();
-		};
+		bool Loop() {
 
-		void Render() {
+			glfwPollEvents();
+
+			if (m_Mode & EngineMode_Play) {
+				m_World.LogicUpdate();
+			}
+
+			if (m_Mode & EngineMode_Editor) {
+			}
+
 			Renderer::DrawData drawData;
 			if (m_Renderer.BeginFrame(drawData)) {
 				VkViewport viewport {
@@ -3314,6 +3329,10 @@ void main() {
 				m_UI.Render(drawData);
 				m_Renderer.EndFrame();
 			}
+
+			Input::ResetInput();
+
+			return !glfwWindowShouldClose(m_Renderer.m_Window);
 		}
 	};
 
@@ -3321,9 +3340,6 @@ void main() {
 	typedef Engine::Input Input;
 	typedef Engine::StaticMesh StaticMesh;
 	typedef Engine::StaticTexture StaticTexture;
-	typedef Engine::Entity Entity;
-	typedef Engine::GraphicsPipeline GraphicsPipeline;
-	typedef Engine::CameraData1 CameraData;
 	typedef Engine::MeshData MeshData;
 	typedef Engine::Creature Creature;
 	typedef Engine::World World;
