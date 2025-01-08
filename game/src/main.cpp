@@ -4,13 +4,13 @@
 class Player {
 public:
 
-	static inline Player* s_instance = nullptr;
+	static inline Player* s_Instance = nullptr;
 	
 	engine::World& m_World;
-	engine::Creature& m_Creature;
 	engine::StaticMesh& m_Mesh;
-	engine::World::RenderData& m_RenderData;
 	engine::Quaternion m_Rotation;
+	engine::Engine::Reference<engine::Creature> m_Creature;
+	engine::Engine::Reference<engine::World::RenderData> m_RenderData;
 
 	static engine::Vec3 MovementVectorUpdate(const engine::Creature& creature) {
 		using namespace engine;
@@ -23,7 +23,7 @@ public:
 
 	static void MoveCallback(const engine::Creature& creature, const engine::Vec3& position, const engine::Vec3& deltaPosition) {
 		using namespace engine;
-		s_instance->m_RenderData.m_Transform[3] = Vec4(Vec3(0.0f, 0.0f, 3.0f) + position, 1.0f);
+		s_Instance->m_RenderData.m_Val->m_Transform[3] = Vec4(position, 1.0f);
 	}
 
 	static void CameraFollowCallback(const engine::Creature& creature, engine::Mat4& outViewMatrix) {
@@ -35,26 +35,34 @@ public:
 	}
 
 	Player(engine::World& world, engine::StaticMesh& mesh) 
-		: m_World(world), m_Creature(world.AddCreature({})), m_Mesh(mesh), 
-			m_RenderData(m_World.AddRenderData(m_Creature, {}, m_Mesh.GetMeshData())) {
-		s_instance = this;
-		m_RenderData.m_Transform = engine::Mat4(1);
-		m_RenderData.m_Transform[3].z = 3;
-		m_RenderData.m_MeshData = m_Mesh.GetMeshData();
-		m_Creature.m_MovementVectorUpdate = MovementVectorUpdate;
-		m_Creature.m_MoveCallback = MoveCallback;
-		m_Creature.m_CameraFollowCallback = CameraFollowCallback;
-		world.SetCameraFollowCreature(m_Creature);
-	}
-
-	void Update() {
+			: m_World(world), m_Creature(world.AddCreature({})), m_Mesh(mesh), m_RenderData(world.AddRenderData(*m_Creature, {}, {})) {
 		using namespace engine;
-		static float currentRot;
-		float speed = 0.001f;
-		m_Rotation = Quaternion::AxisRotation(Vec3(0.0f, 1.0f, 0.0f), currentRot);
-		currentRot = currentRot + speed;
-		m_RenderData.m_Transform = m_Rotation.AsMat4();
-		m_RenderData.m_MeshData = m_Mesh.GetMeshData();
+		s_Instance = this;
+		World::RenderData& renderData = *m_RenderData;
+		renderData.m_Transform = engine::Mat4(1);
+		renderData.m_Transform[3].z = 3;
+		renderData.m_MeshData = m_Mesh.GetMeshData();
+		Creature& creature = *m_Creature;
+		creature.m_MovementVectorUpdate = MovementVectorUpdate;
+		creature.m_MoveCallback = MoveCallback;
+		creature.m_CameraFollowCallback = CameraFollowCallback;
+		world.SetCameraFollowCreature(*m_Creature);
+	}	
+};
+
+class NPC {
+public:
+
+	static inline NPC* s_Instance = nullptr;
+
+	engine::World& m_World;
+	engine::StaticMesh& m_Mesh;
+	engine::Engine::Reference<engine::Creature> m_Creature;
+
+	NPC(engine::World& world, engine::StaticMesh& mesh)
+			: m_World(world), m_Creature(world.AddCreature(engine::Vec3(0.0f, 0.0f, 0.0f))), m_Mesh(mesh) {
+		s_Instance = this;
+		engine::World::RenderData& renderData = m_World.AddRenderData(*m_Creature, engine::Mat4(1), m_Mesh.GetMeshData());
 	}
 };
 
@@ -112,24 +120,26 @@ int main() {
 
 	world.AddRenderData(grounds[0], groundTransform, groundMesh);
 
-	Engine::Obj sphereObj{};
+	Engine::Obj cubeObj{};
 	FILE* fileStream = fopen("resources\\meshes\\cube.obj", "r");
-	assert(sphereObj.Load(fileStream));
+	assert(cubeObj.Load(fileStream));
 	fclose(fileStream);
 
-	const Engine::DynamicArray<uint32_t>& sphereIndices = sphereObj.GetIndices();
-	Engine::DynamicArray<Engine::Vertex> sphereVertices{};
-	assert(sphereObj.GetVertices(Engine::Vertex::SetPosition, Engine::Vertex::SetUV, 
-		Engine::Vertex::SetNormal, sphereVertices));
+	const Engine::DynamicArray<uint32_t>& cubeIndices = cubeObj.GetIndices();
+	Engine::DynamicArray<Engine::Vertex> cubeVertices{};
+	assert(cubeObj.GetVertices(Engine::Vertex::SetPosition, Engine::Vertex::SetUV, 
+		Engine::Vertex::SetNormal, cubeVertices));
 
 	StaticMesh playerMesh(engine);
-	playerMesh.CreateBuffers(sphereVertices.m_Size, sphereVertices.m_Data, sphereIndices.m_Size, sphereIndices.m_Data);
+	playerMesh.CreateBuffers(cubeVertices.m_Size, cubeVertices.m_Data, cubeIndices.m_Size, cubeIndices.m_Data);
 
 	Player player(world, playerMesh);
+	NPC npc(world, playerMesh);
 
 	while (engine.Loop()) {
 		uiWindow->SetPosition(UI.m_CursorPosition);
 	}
+
 	Renderer& renderer = engine.GetRenderer();
 	vkDeviceWaitIdle(renderer.m_VulkanDevice);	
 	player.m_Mesh.Terminate();

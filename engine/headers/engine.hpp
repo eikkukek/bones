@@ -48,12 +48,13 @@ namespace engine {
 			TextRenderer = 2,
 			UI = 3,
 			OutOfMemory = 4,
-			IndexOutOfBounds = 5,
-			Vulkan = 6,
-			Stb = 7,
-			DynamicArray = 8,
-			FileParsing = 9,
-			GameLogic = 10,
+			NullDereference = 5,
+			IndexOutOfBounds = 6,
+			Vulkan = 7,
+			Stb = 8,
+			DynamicArray = 9,
+			FileParsing = 10,
+			GameLogic = 11,
 			MaxEnum,
 		};
 
@@ -64,6 +65,7 @@ namespace engine {
 				"TextRenderer",
 				"UI",
 				"OutOfMemory",
+				"NullDereference",
 				"IndexOutOfBounds",
 				"Vulkan",
 				"stb",
@@ -2463,6 +2465,50 @@ void main() {
 			Rect<float> m_BoundingBox{};
 		};
 
+		template<typename T>
+		class Reference {
+		public:
+
+				T* m_Val;
+
+				Reference() noexcept : m_Val(nullptr) {}
+
+				Reference(T& val) noexcept : m_Val(&val) {
+					m_Val->AddReference(this);
+				}
+
+				Reference(const Reference& other) noexcept : m_Val(other.m_Val) {
+					if (m_Val) {
+						m_Val->AddReference(this);
+					}
+				}
+
+				~Reference() {
+					RemoveReference();
+				}
+
+				void SetReference(T& val) {
+					RemoveReference();
+					m_Val = &val;
+					m_Val->AddReference(this);
+				}
+
+				void RemoveReference() {
+					if (m_Val) {
+						m_Val->RemoveReference(this);
+						m_Val = nullptr;
+					}
+				}
+				
+				T& operator*() {
+					if (!m_Val) {
+						CriticalError(ErrorOrigin::NullDereference,
+							"attempting to deference null reference (in Reference::operator*)");
+					}
+					return *m_Val;
+				}
+		};
+
 		struct Ground {
 
 			friend class Engine;
@@ -2558,14 +2604,40 @@ void main() {
 			Vec3 m_Position;
 			const uint64_t m_ObjectID;
 			BoxCollider m_Collider;
+			DynamicArray<Reference<Creature>*> m_References;
 
 			Creature(const Vec3& position, const Chunk* chunk, uint64_t objectID) 
 					: m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
-						m_Collider(m_Position, Quaternion::Identity(), Vec3(1, 1, 1)) {
+						m_Collider(m_Position, Quaternion::Identity(), Vec3(1, 1, 1)), 
+						m_References() {
 				assert(chunk);
 				Vec2_T<bool> _;
 				const Ground* ground = chunk->FindGround(position, {}, _);
 				m_Position.y = ground ? ground->GetHeightAtPosition(position) : 0.0f;
+			}
+
+			Creature(const Creature&) = delete;
+
+			Creature(Creature&& other) noexcept 
+					: m_Chunk(other.m_Chunk), m_Position(other.m_Position), m_ObjectID(other.m_ObjectID),
+						m_Collider(other.m_Collider), m_References(std::move(other.m_References)) {
+				for (Reference<Creature>* reference : m_References) {
+					if (!reference) {
+						PrintError(ErrorOrigin::GameLogic, "there was a null reference in creature (in Creature move constructor)");
+						continue;
+					}
+					reference->m_Val = this;
+				}
+			}
+
+			~Creature() {
+				for (Reference<Creature>* reference : m_References) {
+					if (!reference) {
+						PrintError(ErrorOrigin::GameLogic, "there was a null reference in creature (in Creature move constructor)");
+						continue;
+					}
+					reference->m_Val = nullptr;
+				}
 			}
 
 		public:
@@ -2573,6 +2645,27 @@ void main() {
 			Vec3 (*m_MovementVectorUpdate)(const Creature& creature){};
 			void (*m_MoveCallback)(const Creature& creature, const Vec3& position, const Vec3& deltaPosition){};
 			void (*m_CameraFollowCallback)(const Creature& creature, Mat4& outViewMatrix);
+
+			bool AddReference(Reference<Creature>* reference) {
+				if (reference) {
+					m_References.PushBack(reference);
+					return true;
+				}
+				return false;
+			}
+
+			bool RemoveReference(Reference<Creature>* reference) {
+				if (reference) {
+					auto end = m_References.end();
+					for (auto iter = m_References.begin(); iter != end; iter++) {
+						if (*iter == reference) {
+							m_References.Erase(iter);
+							return true;
+						}
+					}
+				}
+				return false;
+			}
 
 			const Vec3& GetPosition() const {
 				return m_Position;
@@ -2584,7 +2677,7 @@ void main() {
 				if (m_MovementVectorUpdate) {
 					return m_MovementVectorUpdate(*this);
 				}
-				return m_Position;
+				return {};
 			}
 
 			void Move(const Vec3& position) {
@@ -2618,15 +2711,61 @@ void main() {
 				VkDescriptorSetLayout m_DescriptorSetLayout = VK_NULL_HANDLE;
 			};
 
-			struct RenderData {
+			class RenderData {
+
 				friend class World;
 
+			public:
+	
 				RenderData(uint64_t renderID, const Mat4& transform, const MeshData& meshData) noexcept 
-					: m_RenderID(renderID), m_Transform(transform), m_MeshData(meshData) {}
+					: m_RenderID(renderID), m_Transform(transform), m_MeshData(meshData), m_References() {}
+
+				RenderData(RenderData&& other) noexcept 
+						: m_RenderID(other.m_RenderID), m_Transform(other.m_Transform), m_MeshData(other.m_MeshData),
+							m_References(std::move(other.m_References)) {
+					for (Reference<RenderData>* reference : m_References) {
+						reference->m_Val = this;
+					}
+				}
+
+				RenderData(const RenderData&) = delete;
+
+				~RenderData() {
+					for (Reference<RenderData>* reference : m_References) {
+						reference->m_Val = nullptr;
+					}
+				}
+
+				bool AddReference(Reference<RenderData>* reference) {
+					if (reference) {
+						m_References.PushBack(reference);
+						return true;
+					}
+					return false;
+				}
+
+				bool RemoveReference(Reference<RenderData>* reference) {
+					if (reference) {
+						auto end = m_References.end();
+						for (auto iter = m_References.begin(); iter != end; iter++) {
+							if (*iter == reference) {
+								m_References.Erase(iter);
+								return true;
+							}
+						}
+					}
+					return false;
+				}
+
+			private:
 
 				const uint64_t m_RenderID;
+
+			public:
+
 				Mat4 m_Transform;
 				MeshData m_MeshData;
+				DynamicArray<Reference<RenderData>*> m_References;
 			};
 
 			struct CameraMatricesBuffer {
