@@ -2557,6 +2557,17 @@ void main() {
 			}
 		};
 
+		struct Obstacle {
+
+			friend class Engine;
+
+		private:
+
+			uint64_t m_RenderID;
+
+		public:
+		};
+
 		struct StaticObject {
 		};
 
