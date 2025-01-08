@@ -19,10 +19,9 @@ add_subdirectory(libraries/freetype)
 add_subdirectory(libraries/fmt)
 
 add_library(engine STATIC
-
-	src/engine.cpp
 	src/renderer.cpp
 	src/text_renderer.cpp
+	src/engine.cpp
 
 	src/imgui/imgui.cpp
 	src/imgui/imgui_draw.cpp
