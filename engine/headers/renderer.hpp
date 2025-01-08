@@ -5,10 +5,6 @@
 #define GLFW_INCLUDE_VULKAN
 #include "GLFW/glfw3.h"
 #include "glslang_c_interface.h"
-#include "imgui.h"
-#include "imgui_internal.h"
-#include "imgui_impl_vulkan.h"
-#include "imgui_impl_glfw.h"
 #include "fmt/printf.h"
 #include "fmt/color.h"
 #include <assert.h>
@@ -1062,9 +1058,6 @@ namespace engine {
 		uint32_t m_TransferQueueFamilyIndex = 0;
 		uint32_t m_PresentQueueFamilyIndex = 0;
 
-		ImGuiContext* m_ImGuiContext = nullptr;
-		VkDescriptorPool m_ImGuiGpuDecriptorPool = VK_NULL_HANDLE;
-
 		GLFWwindow* m_Window = nullptr;
 		VkSwapchainKHR m_Swapchain = VK_NULL_HANDLE;
 		VkSurfaceKHR m_Surface = VK_NULL_HANDLE;
@@ -1116,7 +1109,7 @@ namespace engine {
 			return VK_FORMAT_UNDEFINED;
 		}
 
-		Renderer(const char* appName, uint32_t appVersion, GLFWwindow* window, bool includeImGui, 
+		Renderer(const char* appName, uint32_t appVersion, GLFWwindow* window, 
 			CriticalErrorCallback criticalErrorCallback, SwapchainCreateCallback swapchainCreateCallback)
 			: m_SingleThreadStack(single_thread_stack_size, (uint8_t*)malloc(single_thread_stack_size)), 
 				m_InFlightRenderStack(in_flight_render_stack_size, (uint8_t*)malloc(in_flight_render_stack_size)), m_Window(window),
@@ -1408,56 +1401,6 @@ namespace engine {
 				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 				.descriptorCount = 2,
 			};
-
-			if (includeImGui) {
-				IMGUI_CHECKVERSION();
-				m_ImGuiContext = ImGui::CreateContext();
-
-				ImGuiIO imguiIO = ImGui::GetIO();
-				imguiIO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
-
-				VkDescriptorPoolSize imguiPoolSize {
-					.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-					.descriptorCount = 1,
-				};
-
-				VkDescriptorPoolCreateInfo imguiPoolInfo {
-					.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-					.pNext = nullptr,
-					.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
-					.maxSets = 1,
-					.poolSizeCount = 1,
-					.pPoolSizes = &imguiPoolSize,
-				};
-
-				VkAssert(vkCreateDescriptorPool(m_VulkanDevice, &imguiPoolInfo, m_VulkanAllocationCallbacks, &m_ImGuiGpuDecriptorPool), 
-					"failed to create descriptor pool for ImGui (function vkCreateDescriptorPool in Renderer constructor)!");
-
-				ImGui_ImplVulkan_InitInfo imguiVulkanInfo {
-					.Instance = m_VulkanInstance,
-					.PhysicalDevice = m_Gpu,
-					.Device = m_VulkanDevice,
-					.QueueFamily = m_GraphicsQueueFamilyIndex,
-					.Queue = m_GraphicsQueue,
-					.DescriptorPool = m_ImGuiGpuDecriptorPool,
-					.RenderPass = VK_NULL_HANDLE,
-					.MinImageCount = m_FramesInFlight,
-					.ImageCount = m_FramesInFlight,
-					.MSAASamples = VK_SAMPLE_COUNT_1_BIT,
-					.PipelineCache = VK_NULL_HANDLE,
-					.Subpass = 0,
-					.UseDynamicRendering = true,
-					.PipelineRenderingCreateInfo {
-						.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-						.pNext = nullptr,
-						.viewMask = 0,
-						.colorAttachmentCount = 1,
-						.pColorAttachmentFormats = &m_SwapchainSurfaceFormat.format,
-						.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
-						.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
-					},
-				};
-			}
 		}	
 
 		~Renderer() {
