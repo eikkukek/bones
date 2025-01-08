@@ -11,9 +11,6 @@ namespace engine {
 
 	constexpr auto pi = 3.14159265358979323846;
 
-	template<typename T>
-	struct Vec4_T;
-
 	/*! @brief Two element vector
 	*/
 	template<typename T>
@@ -24,6 +21,7 @@ namespace engine {
 		T x, y;
 
 		constexpr inline Vec2_T(T x = Cast(0), T y = Cast(0)) noexcept : x(x), y(y) {}
+
 		template<typename Vec>
 		constexpr inline Vec2_T(const Vec& other) noexcept : x(Cast(other.x)), y(Cast(other.y)) {}
 
@@ -52,6 +50,9 @@ namespace engine {
 	typedef Vec2_T<int> IntVec2;
 
 	template<typename T>
+	struct Mat3_T;
+
+	template<typename T>
 	struct Vec3_T {
 
 		static constexpr inline size_t size = 3;
@@ -59,7 +60,11 @@ namespace engine {
 		T x, y, z;
 
 		constexpr inline Vec3_T(T x = Cast(0), T y = Cast(0), float z = Cast(0)) noexcept : x(x), y(y), z(z) {}
-		constexpr inline Vec3_T(const Vec2_T<T>& other) noexcept : x(other.x), y(other.y), z(Cast(0)) {}
+
+		constexpr inline Vec3_T(const Vec2_T<T>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(0)) {}
+
+		template<typename Vec>
+		constexpr inline Vec3_T(const Vec& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(other.z)) {}
 
 		static constexpr inline float Dot(const Vec3_T& a, const Vec3_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z; }
 		static constexpr inline Vec3_T Cross(const Vec3_T& a, const Vec3_T& b) noexcept { return Vec3_T(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x); }
@@ -91,10 +96,15 @@ namespace engine {
 		constexpr inline Vec3_T& operator+=(const Vec3_T& other) noexcept { x += other.x; y += other.y; z += other.z; return *this; }
 		constexpr inline Vec3_T& operator*=(float scalar) noexcept { x *= scalar; y *= scalar; z *= scalar; return *this; }
 
-		constexpr inline bool operator==(const Vec3_T& other) const noexcept = default;
+		constexpr inline Vec3_T operator*(const Mat3_T<T>& other) {
+			return Vec3_T<T>(
+				x * other[0].x + y * other[0].y + z * other[0].z,
+				x * other[1].x + y * other[1].y + z * other[1].z,
+				x * other[2].x + y * other[2].y + z * other[2].z
+			);
+		}
 
-		constexpr explicit operator Vec4_T<T>() const noexcept;
-		constexpr inline explicit operator Vec2_T<T>() const noexcept { return Vec2_T<T>(x, y); }
+		constexpr inline bool operator==(const Vec3_T& other) const noexcept = default;
 	};
 
 	typedef Vec3_T<float> Vec3;
@@ -151,6 +161,9 @@ namespace engine {
 	typedef Mat2_T<float> Mat2;
 
 	template<typename T>
+	struct Mat4_T;
+
+	template<typename T>
 	struct Mat3_T {
 
 		static constexpr inline size_t size = 3;
@@ -159,7 +172,17 @@ namespace engine {
 
 		constexpr inline Mat3_T() noexcept : columns{ {  } } {}
 		constexpr inline Mat3_T(T n0, T n1, T n2, T n3, T n4, T n5, T n6, T n7, T n8) noexcept
-			: columns{ { n0, n1, n2 }, { n3, n4, n5 }, { n6, n7, n8 } } {}
+			: columns { { n0, n1, n2 }, { n3, n4, n5 }, { n6, n7, n8 } } {}
+
+		constexpr inline Mat3_T(const Mat4_T<T>& other) : columns { other[0], other[1], other[2] } {}
+
+		static constexpr inline Vec3_T<T> Multiply(const Vec3_T<T>& a, const Mat3_T& b) noexcept {
+			return Vec3_T<T>(
+				a.x * b[0].x + a.y * b[0].y + a.z * b[0].z,
+				a.x * b[1].x + a.y * b[1].y + a.z * b[1].z,
+				a.x * b[2].x + a.y * b[2].y + a.z * b[2].z
+			);
+		}
 
 		static constexpr inline Mat3_T& Transpose(Mat3_T& a) noexcept {
 			Swap(a[0][2], a[2][0]);
@@ -186,6 +209,9 @@ namespace engine {
 			a = { minors0, minors1, minors2 };
 			return Transpose(a);
 		}
+
+		constexpr inline const Vec3_T<T>& operator[](size_t index) const { return columns[index]; }
+		constexpr inline Vec3_T<T>& operator[](size_t index) { return columns[index]; }
 	};
 
 	typedef Mat3_T<float> Mat3;
@@ -325,7 +351,8 @@ namespace engine {
 			return result;
 		}
 
-		constexpr inline Vec4_T<T>& operator[](size_t index) { assert(index <= size); return columns[index]; }
+		constexpr inline const Vec4_T<T>& operator[](size_t index) const { return columns[index]; }
+		constexpr inline Vec4_T<T>& operator[](size_t index) { return columns[index]; }
 
 		constexpr inline explicit operator Mat4_T() const noexcept {
 			return Mat4_T((Vec3_T<T>)columns[0], (Vec3_T<T>)columns[1], (Vec3_T<T>)columns[2]);
