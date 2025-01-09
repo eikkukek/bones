@@ -782,7 +782,7 @@ namespace engine {
 				m_IndexCount = indexCount;
 				return true;
 			}
-		};
+		};	
 
 		class StaticTexture {
 		public:
@@ -2263,10 +2263,15 @@ void main() {
 
 			template<typename VertexType>
 			bool GetVertices(void (*setPos)(Vertex&, const Vec3&), void (*setUV)(Vertex&, const Vec3&), 
-					void (*setNormal)(Vertex&, const Vec3&), DynamicArray<VertexType>& outVertices) {
+					void (*setNormal)(Vertex&, const Vec3&), DynamicArray<VertexType>& outVertices) const {
 				if (m_LinesParsed == 0) {
 					PrintError(ErrorOrigin::FileParsing, 
 						"attempting to get vertices from Engine::Obj which failed to parse (in function Obj::GetVertices)!");
+					return false;
+				}
+				if (!setPos || !setUV || !setNormal && m_VnIndices.m_Size) {
+					PrintError(ErrorOrigin::FileParsing, 
+						"attempting to get vertices from an obj when a set function is null!");
 					return false;
 				}
 				outVertices.Resize(m_Vs.m_Size);
@@ -2347,127 +2352,14 @@ void main() {
 			}
 		};
 
-		struct BoxCollider {
-
-			friend class Engine;
-
-		private:
-
-			Vec3 m_Position;
-			Quaternion m_Rotation;
-			Vec3 m_Dimensions;
-			Vec3 m_Corners[8]{};
-			Box<float> m_AABB{};
-
-		public:
-
-			BoxCollider(const Vec3& position = {}, const Quaternion& rotation = {}, const Vec3& dimensions = {})
-					: m_Position(position), m_Rotation(rotation), m_Dimensions(dimensions) {
-				CalcCorners();
-				CalcAABB();
-			}
-
-		private:
-
-			void CalcCorners() {
-				Vec3 halfDimensionsPos = m_Dimensions / 2;
-				Vec3 halfDimensionsNeg = -halfDimensionsPos;
-
-				m_Corners[0].x = halfDimensionsPos.x;
-				m_Corners[0].y = halfDimensionsPos.y;
-				m_Corners[0].z = halfDimensionsPos.z;
-
-				m_Corners[1].x = halfDimensionsNeg.x;
-				m_Corners[1].y = halfDimensionsNeg.y;
-				m_Corners[1].z = halfDimensionsNeg.z;
-
-				m_Corners[2].x = halfDimensionsNeg.x;
-				m_Corners[2].y = halfDimensionsPos.y;
-				m_Corners[2].z = halfDimensionsPos.z;
-
-				m_Corners[3].x = halfDimensionsPos.x;
-				m_Corners[3].y = halfDimensionsNeg.y;
-				m_Corners[3].z = halfDimensionsPos.z;
-
-				m_Corners[4].x = halfDimensionsPos.x;
-				m_Corners[4].y = halfDimensionsPos.y;
-				m_Corners[4].z = halfDimensionsNeg.z;
-
-				m_Corners[5].x = halfDimensionsPos.x;
-				m_Corners[5].y = halfDimensionsNeg.y;
-				m_Corners[5].z = halfDimensionsNeg.z;
-
-				m_Corners[6].x = halfDimensionsNeg.x;
-				m_Corners[6].y = halfDimensionsPos.y;
-				m_Corners[6].z = halfDimensionsNeg.z;
-
-				m_Corners[7].x = halfDimensionsNeg.x;
-				m_Corners[7].y = halfDimensionsNeg.y;
-				m_Corners[7].z = halfDimensionsPos.z;
-
-				Mat3 transform(m_Rotation.AsMat4());
-
-				for (size_t i = 0; i < 8; i++) {
-					m_Corners[i] = m_Corners[i] * transform + m_Position;
-				}
-			}
-
-			void CalcAABB() {
-				static constexpr float max_float = std::numeric_limits<float>::max();
-				static constexpr float min_float = -max_float;
-				m_AABB.m_Min = { max_float, max_float, max_float };
-				m_AABB.m_Max = { min_float, min_float, min_float };
-				for (size_t i = 0; i < 4; i++) {
-					Vec3& corner = m_Corners[i];
-					m_AABB.m_Min.x = Min(corner.x, m_AABB.m_Min.x);
-					m_AABB.m_Min.y = Min(corner.y, m_AABB.m_Min.y);
-					m_AABB.m_Min.z = Min(corner.z, m_AABB.m_Min.z);
-					m_AABB.m_Max.x = Max(corner.x, m_AABB.m_Max.x);
-					m_AABB.m_Max.y = Max(corner.y, m_AABB.m_Max.y);
-					m_AABB.m_Max.z = Max(corner.z, m_AABB.m_Max.z);
-				}
-			}
-
-		public:	
-
-			void SetPosition(const Vec3& position) {
-				m_Position = position;
-				CalcCorners();
-				CalcAABB();
-			}
-
-			void SetRotation(const Quaternion& rotation) {
-				m_Rotation = rotation;
-				CalcCorners();
-				CalcAABB();
-			}
-
-			void SetPositionAndRotation(const Vec3& position, const Quaternion& rotation) {
-				m_Position = position;
-				m_Rotation = rotation;
-				CalcCorners();
-				CalcAABB();
-			}
-
-			bool CheckCollision(const BoxCollider& collider, Vec3& outPushBack) const {
-				if (!m_AABB.OverLaps(collider.m_AABB)) {
-					return false;
-				}
-				fmt::print("colliding!");
-				return true;
-			}
-		};
-
-		struct CapsuleCollider {
-			float m_BaseRadius{};
-			float m_Height{};
-			Vec3 m_Position{};
-			Quaternion m_Rotation{};
-		};
+		template<typename T>
+		struct Field;
 
 		template<typename T>
 		class Reference {
-		public:
+		public:	
+
+				static_assert(std::is_base_of<Field<T>, T>());
 
 				T* m_Val;
 
@@ -2558,6 +2450,128 @@ void main() {
 			}
 		};
 
+		struct BoxCollider : Field<BoxCollider> {
+
+			friend class Engine;
+
+		private:
+
+			Vec3 m_Position;
+			Quaternion m_Rotation;
+			Vec3 m_Dimensions;
+			Vec3 m_Corners[8]{};
+			Box<float> m_AABB{};
+
+		public:
+
+			BoxCollider(const Vec3& position = {}, const Quaternion& rotation = {}, const Vec3& dimensions = {})
+				: Field<BoxCollider>(), m_Position(position), m_Rotation(rotation), m_Dimensions(dimensions) {
+				CalcCorners();
+				CalcAABB();
+			}
+
+			BoxCollider(const BoxCollider&) = delete;
+			
+			BoxCollider(BoxCollider&&) = default;
+
+		private:
+
+			void CalcCorners() {
+				Vec3 halfDimensionsPos = m_Dimensions / 2;
+				Vec3 halfDimensionsNeg = -halfDimensionsPos;
+
+				m_Corners[0].x = halfDimensionsPos.x;
+				m_Corners[0].y = halfDimensionsPos.y;
+				m_Corners[0].z = halfDimensionsPos.z;
+
+				m_Corners[1].x = halfDimensionsNeg.x;
+				m_Corners[1].y = halfDimensionsNeg.y;
+				m_Corners[1].z = halfDimensionsNeg.z;
+
+				m_Corners[2].x = halfDimensionsNeg.x;
+				m_Corners[2].y = halfDimensionsPos.y;
+				m_Corners[2].z = halfDimensionsPos.z;
+
+				m_Corners[3].x = halfDimensionsPos.x;
+				m_Corners[3].y = halfDimensionsNeg.y;
+				m_Corners[3].z = halfDimensionsPos.z;
+
+				m_Corners[4].x = halfDimensionsPos.x;
+				m_Corners[4].y = halfDimensionsPos.y;
+				m_Corners[4].z = halfDimensionsNeg.z;
+
+				m_Corners[5].x = halfDimensionsPos.x;
+				m_Corners[5].y = halfDimensionsNeg.y;
+				m_Corners[5].z = halfDimensionsNeg.z;
+
+				m_Corners[6].x = halfDimensionsNeg.x;
+				m_Corners[6].y = halfDimensionsPos.y;
+				m_Corners[6].z = halfDimensionsNeg.z;
+
+				m_Corners[7].x = halfDimensionsNeg.x;
+				m_Corners[7].y = halfDimensionsNeg.y;
+				m_Corners[7].z = halfDimensionsPos.z;
+
+				Mat3 transform(m_Rotation.AsMat4());
+
+				for (size_t i = 0; i < 8; i++) {
+					m_Corners[i] = m_Corners[i] * transform + m_Position;
+				}
+			}
+
+			void CalcAABB() {
+				static constexpr float max_float = std::numeric_limits<float>::max();
+				static constexpr float min_float = -max_float;
+				m_AABB.m_Min = { max_float, max_float, max_float };
+				m_AABB.m_Max = { min_float, min_float, min_float };
+				for (size_t i = 0; i < 8; i++) {
+					Vec3& corner = m_Corners[i];
+					m_AABB.m_Min.x = Min(corner.x, m_AABB.m_Min.x);
+					m_AABB.m_Min.y = Min(corner.y, m_AABB.m_Min.y);
+					m_AABB.m_Min.z = Min(corner.z, m_AABB.m_Min.z);
+					m_AABB.m_Max.x = Max(corner.x, m_AABB.m_Max.x);
+					m_AABB.m_Max.y = Max(corner.y, m_AABB.m_Max.y);
+					m_AABB.m_Max.z = Max(corner.z, m_AABB.m_Max.z);
+				}
+			}
+
+		public:	
+
+			void SetPosition(const Vec3& position) {
+				m_Position = position;
+				CalcCorners();
+				CalcAABB();
+			}
+
+			void SetRotation(const Quaternion& rotation) {
+				m_Rotation = rotation;
+				CalcCorners();
+				CalcAABB();
+			}
+
+			void SetPositionAndRotation(const Vec3& position, const Quaternion& rotation) {
+				m_Position = position;
+				m_Rotation = rotation;
+				CalcCorners();
+				CalcAABB();
+			}
+
+			bool CheckCollision(const BoxCollider& collider, Vec3& outPushBack) const {
+				if (!m_AABB.OverLaps(collider.m_AABB)) {
+					return false;
+				}
+				fmt::print("colliding!");
+				return true;
+			}
+		};
+
+		struct CapsuleCollider {
+			float m_BaseRadius{};
+			float m_Height{};
+			Vec3 m_Position{};
+			Quaternion m_Rotation{};
+		};
+
 		struct GroundInfo {
 			Rect<float> m_TopViewBoundingRect{};
 		};
@@ -2625,14 +2639,14 @@ void main() {
 
 		private:
 
-			uint64_t m_RenderID;
+			uint64_t m_ObjectID;
 
 		public:
 
 			BoxCollider m_Collider;
 
-			Obstacle(const ObstacleInfo& obstacleInfo, uint64_t renderID) noexcept 
-				: Field<Obstacle>(), m_RenderID(renderID), m_Collider(obstacleInfo.m_Position, 
+			Obstacle(const ObstacleInfo& obstacleInfo, uint64_t objectID) noexcept 
+				: Field<Obstacle>(), m_ObjectID(objectID), m_Collider(obstacleInfo.m_Position, 
 					obstacleInfo.m_Rotation, obstacleInfo.m_Dimensions) {}
 
 			Obstacle(const Obstacle&) = delete;
@@ -2709,7 +2723,7 @@ void main() {
 
 			Creature(const Vec3& position, const Chunk* chunk, uint64_t objectID) 
 				: Field<Creature>(), m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
-					m_Collider(m_Position, Quaternion::Identity(), Vec3(1, 1, 1)) {
+					m_Collider(m_Position, Quaternion::Identity(), Vec3(2.0, 2.0f, 2.0f)) {
 				assert(chunk);
 				Vec2_T<bool> _;
 				const Ground* ground = chunk->FindGround(position, {}, _);
@@ -2777,32 +2791,55 @@ void main() {
 
 		public:
 
-			struct Pipeline {
+			struct Pipelines {
 				VkPipeline m_Pipeline = VK_NULL_HANDLE;
 				VkPipelineLayout m_PipelineLayout = VK_NULL_HANDLE;
+				VkPipeline m_DebugPipeline = VK_NULL_HANDLE;
+				VkPipelineLayout m_DebugPipelineLayout = VK_NULL_HANDLE;
 				VkDescriptorSetLayout m_DescriptorSetLayout = VK_NULL_HANDLE;
 			};
 
 			struct RenderData : Field<RenderData> {
 
-				friend class World;
+				friend class Engine;
 
-			public:
+			private:
+
 	
-				RenderData(uint64_t renderID, const Mat4& transform, const MeshData& meshData) noexcept 
-					: Field<RenderData>(), m_RenderID(renderID), m_Transform(transform), m_MeshData(meshData) {}
+				RenderData(uint64_t objectID, const Mat4& transform, const MeshData& meshData) noexcept 
+					: Field<RenderData>(), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
 
 				RenderData(const RenderData&) = delete;
 
 				RenderData(RenderData&& other) noexcept = default;
 			
-			private:
-
-				const uint64_t m_RenderID;
+				const uint64_t m_ObjectID;
 
 			public:
 
 				Mat4 m_Transform;
+				MeshData m_MeshData;
+			};
+
+			struct DebugRenderData : Field<DebugRenderData> {
+
+				friend class Engine;
+
+			private:
+
+				DebugRenderData(uint64_t objectID, const Mat4& transform, const Vec4& wireColor, const MeshData& meshData) noexcept 
+					: Field<DebugRenderData>(), m_ObjectID(objectID), m_Transform(transform), m_WireColor(wireColor), m_MeshData(meshData) {}
+
+				DebugRenderData(const DebugRenderData&) = delete;
+
+				DebugRenderData(DebugRenderData&& other) noexcept = default;
+
+				const uint64_t m_ObjectID;
+
+			public:
+
+				Mat4 m_Transform;
+				Vec4 m_WireColor;
 				MeshData m_MeshData;
 			};
 
@@ -2849,6 +2886,43 @@ void main() {
 }
 			)";
 
+			static constexpr const char* debug_pipeline_vertex_shader = R"(
+#version 450
+
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUV;
+layout(location = 3) in vec3 inTangent;
+layout(location = 4) in vec3 inBitangent;
+
+layout(set = 0, binding = 0) uniform CameraMatrices {
+	mat4 c_Projection;
+	mat4 c_View;
+} camera_matrices;
+
+layout(push_constant) uniform PushConstant {
+	layout(offset = 0) mat4 c_Transform;
+} pc;
+
+void main() {
+	gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(inPosition, 1.0f);
+}
+			)";
+
+			static constexpr const char* debug_pipeline_fragment_shader = R"(
+#version 450
+
+layout(location = 0) out vec4 outColor;
+
+layout(push_constant) uniform PushConstant {
+	layout(offset = 64) vec4 c_Color;
+} pc;
+
+void main() {
+	outColor = pc.c_Color;
+}
+			)";
+
 		private:
 
 			Engine& m_Engine;
@@ -2866,9 +2940,10 @@ void main() {
 			Vec2_T<float> m_ChunkDimensions{};
 
 			DynamicArray<VkImageView> m_DepthImageViews{};
-			Pipeline m_Pipeline{};
+			Pipelines m_Pipelines{};
 			DynamicArray<RenderData> m_RenderDatas{};
 			VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
+			DynamicArray<DebugRenderData> m_DebugRenderDatas{};
 
 			DynamicArray<VkImage> m_DepthImages{};
 			DynamicArray<VkDeviceMemory> m_DepthImagesMemory{};
@@ -2884,87 +2959,71 @@ void main() {
 
 				Renderer& renderer = m_Engine.m_Renderer;
 
-				VkDescriptorSetLayoutBinding set0Binding0 {
+				// world pipeline
+				VkDescriptorSetLayoutBinding worldPipelineCameraDescriptorSetBinding {
 					.binding = 0,
 					.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 					.descriptorCount = 1,
 					.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
 					.pImmutableSamplers = nullptr,
 				};
-				m_Pipeline.m_DescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 1, & set0Binding0);
-				if (m_Pipeline.m_DescriptorSetLayout == VK_NULL_HANDLE) {
+
+				m_Pipelines.m_DescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 1, & worldPipelineCameraDescriptorSetBinding);
+
+				if (m_Pipelines.m_DescriptorSetLayout == VK_NULL_HANDLE) {
 					CriticalError(ErrorOrigin::Renderer, 
 						"failed to create pipeline layout for world pipeline (function Renderer::CreateDescriptorSetLayout in function World::Initialize)!");
 				}
-				VkPushConstantRange pushConstantRange {
+
+				VkPushConstantRange pipelinePushConstantRange {
 					.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
 					.offset = 0,
 					.size = 64,
 				};
-				m_Pipeline.m_PipelineLayout = renderer.CreatePipelineLayout(1, &m_Pipeline.m_DescriptorSetLayout, 1, &pushConstantRange);
 
-				if (!m_CameraMatricesBuffer.Create(sizeof(CameraMatricesBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
-						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create camera matrices buffer (function Renderer::Buffer::Create in function World::Initialize)!");
-				}
-				VkResult vkRes = vkMapMemory(renderer.m_VulkanDevice, m_CameraMatricesBuffer.m_VulkanDeviceMemory, 0, 
-					sizeof(CameraMatricesBuffer), 0, (void**)&m_CameraMatricesMap);
-				if (vkRes != VK_SUCCESS) {
-					CriticalError(ErrorOrigin::Vulkan, 
-						"failed to map camera matrices buffer (function vkMapMemory in function World::Initialize)!");
-				}
-				m_CameraMatricesMap->m_Projection = Mat4::Projection(pi / 4, 1.0f, 0.1f, 100.0f);
-				m_CameraMatricesMap->m_View = Mat4::LookAt({ 0.0f, 0.0f, 0.0f }, Vec3(0.0f, 1.0f, 0.0f), Vec3(0.0f, 0.0f, 3.0f));
-				VkDescriptorPoolSize camPoolSize {
-					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-					.descriptorCount = 1,
+				m_Pipelines.m_PipelineLayout = renderer.CreatePipelineLayout(1, &m_Pipelines.m_DescriptorSetLayout, 1, &pipelinePushConstantRange);
+
+				VkPushConstantRange debugPushConstantRanges[2] {
+					{
+						.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+						.offset = 0,
+						.size = 64,
+					},
+					{
+						.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+						.offset = 64,
+						.size = 16,
+					},
 				};
-				m_CameraMatricesDescriptorPool = renderer.CreateDescriptorPool(0, 1, 1, &camPoolSize);
-				if (m_CameraMatricesDescriptorPool == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create camera matrices descriptor pool (function Renderer::CreateDescriptorPool in function World::Initialize)");
-				}
-				if (!renderer.AllocateDescriptorSets(nullptr, m_CameraMatricesDescriptorPool, 1, 
-						&m_Pipeline.m_DescriptorSetLayout, &m_CameraMatricesDescriptorSet)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to allocate camera matrices descriptor set (function Renderer::AllocateDescriptorSets in function World::Initialize)!");
-				}
-				VkDescriptorBufferInfo cameraDecriptorBufferInfo {
-					.buffer = m_CameraMatricesBuffer.m_Buffer,
-					.offset = 0,
-					.range = sizeof(CameraMatricesBuffer),
-				};
-				VkWriteDescriptorSet cameraDescriptorSetWrite = Renderer::GetDescriptorWrite(nullptr, 0, m_CameraMatricesDescriptorSet,
-					VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &cameraDecriptorBufferInfo);
-				renderer.UpdateDescriptorSets(1, &cameraDescriptorSetWrite);
 
-				Renderer::Shader vertexShader(renderer);
-				Renderer::Shader fragmentShader(renderer);
+				m_Pipelines.m_DebugPipelineLayout = renderer.CreatePipelineLayout(1, &m_Pipelines.m_DescriptorSetLayout, 2, debugPushConstantRanges);
 
-				if (!vertexShader.Compile(world_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+				Renderer::Shader pipelineVertexShader(renderer);
+				Renderer::Shader pipelineFragmentShader(renderer);
+
+				if (!pipelineVertexShader.Compile(world_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
 					CriticalError(ErrorOrigin::Renderer, 
 						"failed to compile vertex shader code (function Renderer::Shader::Compile in function World::Initialize)!");
 				}
 
-				if (!fragmentShader.Compile(world_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+				if (!pipelineFragmentShader.Compile(world_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
 					CriticalError(ErrorOrigin::Renderer, 
 						"failed to compile fragment shader code (function Renderer::Shader::Compile in function World::Initialize)!");
 				}
 
-				VkShaderModule shaderModules[2] {
-					vertexShader.CreateShaderModule(),
-					fragmentShader.CreateShaderModule(),
+				VkShaderModule pipelineShaderModules[2] {
+					pipelineVertexShader.CreateShaderModule(),
+					pipelineFragmentShader.CreateShaderModule(),
 				};
 
-				if (shaderModules[0] == VK_NULL_HANDLE || shaderModules[1] == VK_NULL_HANDLE) {
+				if (pipelineShaderModules[0] == VK_NULL_HANDLE || pipelineShaderModules[1] == VK_NULL_HANDLE) {
 					CriticalError(ErrorOrigin::Renderer,
 						"failed to create shader modules for world pipeline (function Renderer::Shader::CreateShaderModule in function World::Initialize)!");
 				}
 
-				VkPipelineShaderStageCreateInfo shaderStageCreateInfos[2] {
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(shaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(shaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
+				VkPipelineShaderStageCreateInfo pipelineShaderStageCreateInfos[2] {
+					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pipelineShaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
+					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pipelineShaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
 				};
 
 				VkPipelineRenderingCreateInfo renderingInfo 
@@ -2981,42 +3040,149 @@ void main() {
 				colorBlendState.attachmentCount = 1;
 				colorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
 
-				VkGraphicsPipelineCreateInfo pipelineInfo {
-					.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-					.pNext = &renderingInfo,
-					.stageCount = 2,
-					.pStages = shaderStageCreateInfos,
-					.pVertexInputState = &vertexInputState,
-					.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
-					.pTessellationState = nullptr,
-					.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
-					.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
-					.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
-					.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
-					.pColorBlendState = &colorBlendState,
-					.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
-					.layout = m_Pipeline.m_PipelineLayout,
-					.renderPass = VK_NULL_HANDLE,
-					.subpass = 0,
-					.basePipelineHandle = VK_NULL_HANDLE,
-					.basePipelineIndex = 0,
+				Renderer::Shader debugPipelineVertexShader(renderer);
+				Renderer::Shader debugPipelineFragmentShader(renderer);
+
+				if (!debugPipelineVertexShader.Compile(debug_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to compile vertex shader code (function Renderer::Shader::Compile in function World::Initialize)!");
+				}
+
+				if (!debugPipelineFragmentShader.Compile(debug_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to compile fragment shader code (function Renderer::Shader::Compile in function World::Initialize)!");
+				}
+
+				VkShaderModule debugPipelineShaderModules[2] {
+					debugPipelineVertexShader.CreateShaderModule(),
+					debugPipelineFragmentShader.CreateShaderModule(),
 				};
 
-				if (!renderer.CreateGraphicsPipelines(1, &pipelineInfo, &m_Pipeline.m_Pipeline)) {
+				VkPipelineShaderStageCreateInfo debugPipelineShaderStageInfos[2] {
+					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugPipelineShaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
+					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugPipelineShaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
+				};
+
+				if (debugPipelineShaderModules[0] == VK_NULL_HANDLE || debugPipelineShaderModules[1] == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to create shader modules for world pipeline (function Renderer::Shader::CreateShaderModule in function World::Initialize)!");
+				}
+
+				VkPipelineRasterizationStateCreateInfo debugPipelineRasterizationState = Renderer::GraphicsPipelineDefaults::rasterization_state;
+				debugPipelineRasterizationState.polygonMode = VK_POLYGON_MODE_LINE;
+
+				VkGraphicsPipelineCreateInfo graphicsPipelineInfos[2] = { 
+					{
+						.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+						.pNext = &renderingInfo,
+						.stageCount = 2,
+						.pStages = pipelineShaderStageCreateInfos,
+						.pVertexInputState = &vertexInputState,
+						.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
+						.pTessellationState = nullptr,
+						.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
+						.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
+						.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
+						.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
+						.pColorBlendState = &colorBlendState,
+						.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
+						.layout = m_Pipelines.m_PipelineLayout,
+						.renderPass = VK_NULL_HANDLE,
+						.subpass = 0,
+						.basePipelineHandle = VK_NULL_HANDLE,
+						.basePipelineIndex = 0,
+					},
+					{
+						.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+						.pNext = &renderingInfo,
+						.stageCount = 2,
+						.pStages = debugPipelineShaderStageInfos,
+						.pVertexInputState = &vertexInputState,
+						.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
+						.pTessellationState = nullptr,
+						.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
+						.pRasterizationState = &debugPipelineRasterizationState,
+						.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
+						.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
+						.pColorBlendState = &colorBlendState,
+						.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
+						.layout = m_Pipelines.m_DebugPipelineLayout,
+						.renderPass = VK_NULL_HANDLE,
+						.subpass = 0,
+						.basePipelineHandle = VK_NULL_HANDLE,
+						.basePipelineIndex = 0,
+					},
+				};
+
+				VkPipeline pipelines[2];
+
+				if (!renderer.CreateGraphicsPipelines(2, graphicsPipelineInfos, pipelines)) {
 					CriticalError(ErrorOrigin::Renderer, "failed to create world graphics pipeline (function Renderer::CreateGraphicsPipelines in function World::Initialize)!");
 				}
 
-				renderer.DestroyShaderModule(shaderModules[0]);
-				renderer.DestroyShaderModule(shaderModules[1]);
+				m_Pipelines.m_Pipeline = pipelines[0];
+				m_Pipelines.m_DebugPipeline = pipelines[1];
+
+				renderer.DestroyShaderModule(pipelineShaderModules[0]);
+				renderer.DestroyShaderModule(pipelineShaderModules[1]);
+				renderer.DestroyShaderModule(debugPipelineShaderModules[0]);
+				renderer.DestroyShaderModule(debugPipelineShaderModules[1]);
+
+				if (!m_CameraMatricesBuffer.Create(sizeof(CameraMatricesBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create camera matrices buffer (function Renderer::Buffer::Create in function World::Initialize)!");
+				}
+
+				VkResult vkRes = vkMapMemory(renderer.m_VulkanDevice, m_CameraMatricesBuffer.m_VulkanDeviceMemory, 0, 
+					sizeof(CameraMatricesBuffer), 0, (void**)&m_CameraMatricesMap);
+				if (vkRes != VK_SUCCESS) {
+					CriticalError(ErrorOrigin::Vulkan, 
+						"failed to map camera matrices buffer (function vkMapMemory in function World::Initialize)!");
+				}
+
+				m_CameraMatricesMap->m_Projection = Mat4::Projection(pi / 4, 1.0f, 0.1f, 100.0f);
+				m_CameraMatricesMap->m_View = Mat4::LookAt({ 0.0f, 0.0f, 0.0f }, Vec3(0.0f, 1.0f, 0.0f), Vec3(0.0f, 0.0f, 3.0f));
+
+				VkDescriptorPoolSize camPoolSize {
+					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+					.descriptorCount = 1,
+				};
+
+				m_CameraMatricesDescriptorPool = renderer.CreateDescriptorPool(0, 1, 1, &camPoolSize);
+
+				if (m_CameraMatricesDescriptorPool == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create camera matrices descriptor pool (function Renderer::CreateDescriptorPool in function World::Initialize)");
+				}
+
+				if (!renderer.AllocateDescriptorSets(nullptr, m_CameraMatricesDescriptorPool, 1, 
+						&m_Pipelines.m_DescriptorSetLayout, &m_CameraMatricesDescriptorSet)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to allocate camera matrices descriptor set (function Renderer::AllocateDescriptorSets in function World::Initialize)!");
+				}
+
+				VkDescriptorBufferInfo cameraDecriptorBufferInfo {
+					.buffer = m_CameraMatricesBuffer.m_Buffer,
+					.offset = 0,
+					.range = sizeof(CameraMatricesBuffer),
+				};
+
+				VkWriteDescriptorSet cameraDescriptorSetWrite = Renderer::GetDescriptorWrite(nullptr, 0, m_CameraMatricesDescriptorSet,
+					VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &cameraDecriptorBufferInfo);
+
+				renderer.UpdateDescriptorSets(1, &cameraDescriptorSetWrite);
 			}
 
 			void Terminate() {
 				m_CameraMatricesBuffer.Terminate();
 				Renderer& renderer = m_Engine.m_Renderer;
-				renderer.DestroyPipeline(m_Pipeline.m_Pipeline);
-				renderer.DestroyPipelineLayout(m_Pipeline.m_PipelineLayout);
+				renderer.DestroyPipeline(m_Pipelines.m_Pipeline);
+				renderer.DestroyPipeline(m_Pipelines.m_DebugPipeline);
+				renderer.DestroyPipelineLayout(m_Pipelines.m_PipelineLayout);
+				renderer.DestroyPipelineLayout(m_Pipelines.m_DebugPipelineLayout);
 				renderer.DestroyDescriptorPool(m_CameraMatricesDescriptorPool);
-				renderer.DestroyDescriptorSetLayout(m_Pipeline.m_DescriptorSetLayout);
+				renderer.DestroyDescriptorSetLayout(m_Pipelines.m_DescriptorSetLayout);
 				for (size_t i = 0; i < m_DepthImages.m_Size; i++) {
 					renderer.DestroyImageView(m_DepthImageViews[i]);
 					renderer.DestroyImage(m_DepthImages[i]);
@@ -3067,9 +3233,21 @@ void main() {
 			Reference<RenderData> AddRenderData(const Ground& ground, const Mat4& transform, const MeshData& meshData) {
 				return m_RenderDatas.EmplaceBack(ground.m_ObjectID, transform, meshData);
 			}
+			
+			Reference<RenderData> AddRenderData(const Obstacle& obstacle, const Mat4& transform, const MeshData& meshData) {
+				return m_RenderDatas.EmplaceBack(obstacle.m_ObjectID, transform, meshData);
+			}
+
+			Reference<DebugRenderData> AddDebugRenderData(const Obstacle& obstacle, const Mat4& transform, const Vec4& wireColor, const MeshData& meshData) {
+				return m_DebugRenderDatas.EmplaceBack(obstacle.m_ObjectID, transform, wireColor, meshData);
+			}
 
 			const DynamicArray<Ground>& GetGrounds() {
 				return m_Grounds;
+			}
+			
+			const DynamicArray<Obstacle>& GetObstacles() {
+				return m_Obstacles;
 			}
 
 			Engine& GetEngine() const {
@@ -3267,25 +3445,41 @@ void main() {
 						.pDepthAttachment = &depthAttachment,
 					};
 					vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
-					vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline.m_Pipeline);
-					vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline.m_PipelineLayout, 
+					vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_Pipeline);
+					vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_PipelineLayout, 
 						0, 1, &m_CameraMatricesDescriptorSet, 0, nullptr);
 					for (const RenderData& data : m_RenderDatas) {
-						vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipeline.m_PipelineLayout, 
+						vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_PipelineLayout, 
 							VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &data.m_Transform);
 						vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 0, 1, data.m_MeshData.m_VertexBuffers, 
 							data.m_MeshData.m_VertexBufferOffsets);
 						vkCmdBindIndexBuffer(drawData.m_CommandBuffer, data.m_MeshData.m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 						vkCmdDrawIndexed(drawData.m_CommandBuffer, data.m_MeshData.m_IndexCount, 1, 0, 0, 0);
 					}
+					if (m_DebugRenderDatas.m_Size) {
+						vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugPipeline);
+						vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugPipelineLayout,
+							0, 1, &m_CameraMatricesDescriptorSet, 0, nullptr);
+						for (const DebugRenderData& data : m_DebugRenderDatas) {
+							vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
+								VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &data.m_Transform);
+							vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
+								VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16, &data.m_WireColor);
+							vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 0, 1, data.m_MeshData.m_VertexBuffers, 
+								data.m_MeshData.m_VertexBufferOffsets);
+							vkCmdBindIndexBuffer(drawData.m_CommandBuffer, data.m_MeshData.m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+							vkCmdDrawIndexed(drawData.m_CommandBuffer, data.m_MeshData.m_IndexCount, 1, 0, 0, 0);
+						}
+
+					}
 					vkCmdEndRendering(drawData.m_CommandBuffer);
 				}
 			}
 
-			void RemoveRenderDatas(uint64_t renderID) {
+			void RemoveRenderDatas(uint64_t objectID) {
 				auto end = m_RenderDatas.end();
 				for (auto iter = m_RenderDatas.begin(); iter != end;) {
-					if (iter->m_RenderID == renderID) {
+					if (iter->m_ObjectID == objectID) {
 						iter = m_RenderDatas.Erase(iter);
 						continue;
 					}
