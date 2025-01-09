@@ -35,7 +35,7 @@ public:
 	}
 
 	Player(engine::World& world, engine::StaticMesh& mesh) 
-			: m_World(world), m_Creature(world.AddCreature({})), m_Mesh(mesh), m_RenderData(world.AddRenderData(*m_Creature, {}, {})) {
+		: m_World(world), m_Creature(world.AddCreature({ 3.0f, 0.0f, 0.0f })), m_Mesh(mesh), m_RenderData(world.AddRenderData(*m_Creature, {}, {})) {
 		using namespace engine;
 		s_Instance = this;
 		World::RenderData& renderData = *m_RenderData;
@@ -60,9 +60,12 @@ public:
 	engine::Engine::Reference<engine::Creature> m_Creature;
 
 	NPC(engine::World& world, engine::StaticMesh& mesh)
-			: m_World(world), m_Creature(world.AddCreature(engine::Vec3(0.0f, 0.0f, 0.0f))), m_Mesh(mesh) {
+		: m_World(world), m_Creature(world.AddCreature(engine::Vec3(0.0f, 0.0f, 0.0f))), m_Mesh(mesh) {
+		using namespace engine;
 		s_Instance = this;
-		engine::World::RenderData& renderData = m_World.AddRenderData(*m_Creature, engine::Mat4(1), m_Mesh.GetMeshData());
+		World::RenderData& renderData = *m_World.AddRenderData(*m_Creature, engine::Mat4(1), m_Mesh.GetMeshData());
+		renderData.m_MeshData = m_Mesh.GetMeshData();
+		renderData.m_Transform = Mat4(1);
 	}
 };
 
@@ -100,13 +103,19 @@ int main() {
 	};
 
 	Engine::GroundInfo groundInfo {
-		.m_BoundingBox {
+		.m_TopViewBoundingRect {
 			.m_Min { -8.0f, -8.0f },
 			.m_Max { 8.0f, 8.0f },
 		}
 	};
 
-	World& world = engine.LoadWorld({ 128, 128 }, { 8, 8 }, 1, &groundInfo);
+	Engine::ObstacleInfo obstacleInfo {
+		.m_Position = {},
+		.m_Rotation = Quaternion::Identity(),
+		.m_Dimensions = { 1.0f, 1.0f, 1.0f },
+	};
+
+	World& world = engine.LoadWorld({ 128, 128 }, { 8, 8 }, 1, &groundInfo, 1, &obstacleInfo);
 
 	const Engine::DynamicArray<Engine::Ground>& grounds = world.GetGrounds();
 
