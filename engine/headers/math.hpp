@@ -94,6 +94,7 @@ namespace engine {
 		constexpr inline Vec3_T operator+(const Vec3_T& other) const noexcept { return Vec3_T(x + other.x, y + other.y, z + other.z); }
 		constexpr inline Vec3_T operator-(const Vec3_T& other) const noexcept { return Vec3_T(x - other.x, y - other.y, z - other.z); }
 		constexpr inline Vec3_T& operator+=(const Vec3_T& other) noexcept { x += other.x; y += other.y; z += other.z; return *this; }
+		constexpr inline Vec3_T& operator-=(const Vec3_T& other) noexcept { x -= other.x; y -= other.y; z -= other.z; return *this; }
 		constexpr inline Vec3_T& operator*=(float scalar) noexcept { x *= scalar; y *= scalar; z *= scalar; return *this; }
 
 		constexpr inline Vec3_T operator*(const Mat3_T<T>& other) {
