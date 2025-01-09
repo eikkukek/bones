@@ -2347,7 +2347,7 @@ void main() {
 			}
 		};
 
-		class BoxCollider {
+		struct BoxCollider {
 
 			friend class Engine;
 
@@ -2361,7 +2361,7 @@ void main() {
 
 		public:
 
-			BoxCollider(const Vec3& position, const Quaternion& rotation, const Vec3& dimensions) 
+			BoxCollider(const Vec3& position = {}, const Quaternion& rotation = {}, const Vec3& dimensions = {})
 					: m_Position(position), m_Rotation(rotation), m_Dimensions(dimensions) {
 				CalcCorners();
 				CalcAABB();
@@ -2413,8 +2413,8 @@ void main() {
 			}
 
 			void CalcAABB() {
-				static constexpr float min_float = std::numeric_limits<float>::min();
 				static constexpr float max_float = std::numeric_limits<float>::max();
+				static constexpr float min_float = -max_float;
 				m_AABB.m_Min = { max_float, max_float, max_float };
 				m_AABB.m_Max = { min_float, min_float, min_float };
 				for (size_t i = 0; i < 4; i++) {
@@ -2448,6 +2448,14 @@ void main() {
 				CalcCorners();
 				CalcAABB();
 			}
+
+			bool CheckCollision(const BoxCollider& collider, Vec3& outPushBack) const {
+				if (!m_AABB.OverLaps(collider.m_AABB)) {
+					return false;
+				}
+				fmt::print("colliding!");
+				return true;
+			}
 		};
 
 		struct CapsuleCollider {
@@ -2455,14 +2463,6 @@ void main() {
 			float m_Height{};
 			Vec3 m_Position{};
 			Quaternion m_Rotation{};
-		};
-
-		bool CheckCollision(const BoxCollider& a, const BoxCollider& b) {
-			return a.m_AABB.OverLaps(b.m_AABB);
-		}
-
-		struct GroundInfo {
-			Rect<float> m_BoundingBox{};
 		};
 
 		template<typename T>
@@ -2509,13 +2509,67 @@ void main() {
 				}
 		};
 
-		struct Ground {
+		template<typename T>
+		class Field {
+			
+			friend class Reference<T>;
+				
+		public:
+
+			DynamicArray<Reference<T>*> m_References;
+
+			Field() : m_References() {}
+
+			Field(Field&& other) : m_References(std::move(other.m_References)) {
+				for (Reference<T>* reference : m_References) {
+					assert(reference);
+					reference->m_Val = (T*)this;
+				}
+			}
+
+			virtual ~Field() {
+				for (Reference<T>* reference : m_References) {
+					assert(reference);
+					reference->m_Val = nullptr;
+				}
+			}
+
+		private:
+
+			bool AddReference(Reference<T>* reference) {
+				if (reference) {
+					m_References.PushBack(reference);
+					return true;
+				}
+				return false;
+			}
+
+			bool RemoveReference(Reference<T>* reference) {
+				if (reference) {
+					auto end = m_References.end();
+					for (auto iter = m_References.begin(); iter != end; iter++) {
+						if (*iter == reference) {
+							m_References.Erase(iter);
+							return true;
+						}
+					}
+				}
+				return false;
+			}
+		};
+
+		struct GroundInfo {
+			Rect<float> m_TopViewBoundingRect{};
+		};
+
+		struct Ground : Field<Ground> {
 
 			friend class Engine;
 
 		private:
 
-			Rect<float> m_TopViewBoundingBox;
+			const uint64_t m_ObjectID;
+			Rect<float> m_TopViewBoundingRect;
 			Vec3 m_Scale;
 			Vec3 m_CenterPosition;
 			Vec2_T<uint32_t> m_HeightMapExtent;
@@ -2523,10 +2577,12 @@ void main() {
 			uint32_t m_HeightMapMax;
 			uint32_t* m_HeightMap;
 
-			const uint64_t m_ObjectID;
-
 			Ground(const GroundInfo& groundInfo, uint64_t objectID) 
-					: m_TopViewBoundingBox(groundInfo.m_BoundingBox), m_ObjectID(objectID) {}
+				: Field<Ground>(), m_ObjectID(objectID), m_TopViewBoundingRect(groundInfo.m_TopViewBoundingRect) {}
+
+			Ground(const Ground&) = delete;
+
+			Ground(Ground&& other) noexcept = default;
 
 		public:
 
@@ -2542,12 +2598,12 @@ void main() {
 
 			float GetHeightAtPosition(const Vec3& position) const {
 				Vec2 pos2D(position.x, position.z);
-				if (!m_TopViewBoundingBox.IsPointInside(pos2D)) {
+				if (!m_TopViewBoundingRect.IsPointInside(pos2D)) {
 					return std::numeric_limits<float>::max();
 				}
 				return 0.0f;
-				Vec3 relative = pos2D - m_TopViewBoundingBox.m_Min;
-				Vec2 dimensions = m_TopViewBoundingBox.Dimensions();
+				Vec3 relative = pos2D - m_TopViewBoundingRect.m_Min;
+				Vec2 dimensions = m_TopViewBoundingRect.Dimensions();
 				Vec2_T<uint32_t> heightMapCoords(relative.x / dimensions.x * m_HeightMapExtent.x,
 					relative.y / dimensions.y * m_HeightMapExtent.y);
 				size_t index = heightMapCoords.x * m_HeightMapExtent.y + heightMapCoords.y;
@@ -2557,7 +2613,13 @@ void main() {
 			}
 		};
 
-		struct Obstacle {
+		struct ObstacleInfo {
+			Vec3 m_Position{};
+			Quaternion m_Rotation{};
+			Vec3 m_Dimensions{};
+		};
+
+		struct Obstacle : Field<Obstacle> {
 
 			friend class Engine;
 
@@ -2566,46 +2628,75 @@ void main() {
 			uint64_t m_RenderID;
 
 		public:
+
+			BoxCollider m_Collider;
+
+			Obstacle(const ObstacleInfo& obstacleInfo, uint64_t renderID) noexcept 
+				: Field<Obstacle>(), m_RenderID(renderID), m_Collider(obstacleInfo.m_Position, 
+					obstacleInfo.m_Rotation, obstacleInfo.m_Dimensions) {}
+
+			Obstacle(const Obstacle&) = delete;
+
+			Obstacle(Obstacle&& other) noexcept = default;
 		};
 
-		struct StaticObject {
-		};
+		class Chunk {
 
-		struct Chunk {
+			friend class Engine;
 
-			const Rect<float> m_BoundingBox;
+			const Rect<float> m_BoundingRect;
 			const Vec2_T<uint32_t> m_ChunkMatrixCoords;
-			DynamicArray<const Ground*> m_Grounds{};
+			DynamicArray<Reference<Ground>> m_Grounds{};
+			DynamicArray<Reference<Obstacle>> m_Obstacles{};
 			
-			Chunk(Vec2_T<uint32_t> chunkCoords, Vec2 min, Vec2 dimensions) noexcept : 
-				m_BoundingBox { .m_Min { min }, .m_Max { min + dimensions } }, m_ChunkMatrixCoords(chunkCoords), m_Grounds() {}
+			Chunk(Vec2_T<uint32_t> chunkCoords, Vec2 min, Vec2 dimensions) noexcept 
+				: m_BoundingRect { .m_Min { min }, .m_Max { min + dimensions } }, m_ChunkMatrixCoords(chunkCoords), m_Grounds() {}
 
 			bool IsPointInside(const Vec3& point) const {
-				return m_BoundingBox.IsPointInside(Vec2(point.x, point.z));
+				return m_BoundingRect.IsPointInside(Vec2(point.x, point.z));
 			}
 
 			const Ground* FindGround(const Vec3& oldPosition, const Vec3& deltaPosition, Vec2_T<bool>& outAxisBlocked) const {
 				outAxisBlocked = { false, false };
 				Vec2 newPosTopView(oldPosition.x + deltaPosition.x, oldPosition.z + deltaPosition.z);
 				Vec2 oldPositionTopView(oldPosition.x, oldPosition.z);
-				for (const Ground* ground : m_Grounds) {
-					Rect<float> boundingBox = ground->m_TopViewBoundingBox;
+				for (const Reference<Ground>& ground : m_Grounds) {
+					if (!ground.m_Val) {
+						continue;
+					}
+					Rect<float> boundingBox = ground.m_Val->m_TopViewBoundingRect;
 					if (boundingBox.IsPointInside(newPosTopView)) {
-						return ground;
+						return ground.m_Val;
 					}
 					else if (boundingBox.IsPointInside(oldPositionTopView)) {
 						outAxisBlocked = {
 							boundingBox.m_Min.x >= newPosTopView.x || boundingBox.m_Max.x <= newPosTopView.x,
 							boundingBox.m_Min.y >= newPosTopView.y || boundingBox.m_Max.y <= newPosTopView.y,
 						};
-						return ground;
+						return ground.m_Val;
 					}
 				}
 				return nullptr;
 			}
+
+			bool CheckCollisions(const BoxCollider& collider, Vec3& outPushBack) {
+				outPushBack = {};
+				bool res = false;
+				for (const Reference<Obstacle>& obstacle : m_Obstacles) {
+					if (!obstacle.m_Val) {
+						continue;
+					}
+					Vec3 pushBack{};
+					if (obstacle.m_Val->m_Collider.CheckCollision(collider, pushBack)) {
+						outPushBack += pushBack;
+						res = true;
+					}
+				}
+				return true;
+			}
 		};
 
-		class Creature {
+		class Creature : Field<Creature> {
 
 			friend class Engine;
 
@@ -2615,12 +2706,10 @@ void main() {
 			Vec3 m_Position;
 			const uint64_t m_ObjectID;
 			BoxCollider m_Collider;
-			DynamicArray<Reference<Creature>*> m_References;
 
 			Creature(const Vec3& position, const Chunk* chunk, uint64_t objectID) 
-					: m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
-						m_Collider(m_Position, Quaternion::Identity(), Vec3(1, 1, 1)), 
-						m_References() {
+				: Field<Creature>(), m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
+					m_Collider(m_Position, Quaternion::Identity(), Vec3(1, 1, 1)) {
 				assert(chunk);
 				Vec2_T<bool> _;
 				const Ground* ground = chunk->FindGround(position, {}, _);
@@ -2629,54 +2718,13 @@ void main() {
 
 			Creature(const Creature&) = delete;
 
-			Creature(Creature&& other) noexcept 
-					: m_Chunk(other.m_Chunk), m_Position(other.m_Position), m_ObjectID(other.m_ObjectID),
-						m_Collider(other.m_Collider), m_References(std::move(other.m_References)) {
-				for (Reference<Creature>* reference : m_References) {
-					if (!reference) {
-						PrintError(ErrorOrigin::GameLogic, "there was a null reference in creature (in Creature move constructor)");
-						continue;
-					}
-					reference->m_Val = this;
-				}
-			}
-
-			~Creature() {
-				for (Reference<Creature>* reference : m_References) {
-					if (!reference) {
-						PrintError(ErrorOrigin::GameLogic, "there was a null reference in creature (in Creature move constructor)");
-						continue;
-					}
-					reference->m_Val = nullptr;
-				}
-			}
+			Creature(Creature&& other) noexcept = default;
 
 		public:
 
 			Vec3 (*m_MovementVectorUpdate)(const Creature& creature){};
 			void (*m_MoveCallback)(const Creature& creature, const Vec3& position, const Vec3& deltaPosition){};
 			void (*m_CameraFollowCallback)(const Creature& creature, Mat4& outViewMatrix);
-
-			bool AddReference(Reference<Creature>* reference) {
-				if (reference) {
-					m_References.PushBack(reference);
-					return true;
-				}
-				return false;
-			}
-
-			bool RemoveReference(Reference<Creature>* reference) {
-				if (reference) {
-					auto end = m_References.end();
-					for (auto iter = m_References.begin(); iter != end; iter++) {
-						if (*iter == reference) {
-							m_References.Erase(iter);
-							return true;
-						}
-					}
-				}
-				return false;
-			}
 
 			const Vec3& GetPosition() const {
 				return m_Position;
@@ -2704,6 +2752,19 @@ void main() {
 					m_Position.y = height;
 					m_Collider.SetPosition(m_Position);
 				}
+				for (const Reference<Obstacle>& obstacle : m_Chunk->m_Obstacles) {
+					Vec3 pushBack;
+					if (obstacle.m_Val->m_Collider.CheckCollision(m_Collider, pushBack)) {
+						Vec2_T<bool> deltaDirSameAsPushBack = { 
+							deltaPos.x > 0 && pushBack.x > 0 || deltaPos.x < 0 && pushBack.x < 0,
+							deltaPos.z > 0 && pushBack.z > 0 || deltaPos.z < 0 && pushBack.z < 0,
+						};
+						m_Position -= Vec3(
+							deltaDirSameAsPushBack.x && axisBlocked.x ? 0.0f : pushBack.x, 0.0f, 
+							deltaDirSameAsPushBack.y && axisBlocked.y ? 0.0f : pushBack.z
+						);
+					}
+				}
 				if (m_MoveCallback) {
 					m_MoveCallback(*this, m_Position, deltaPos);
 				}
@@ -2722,52 +2783,19 @@ void main() {
 				VkDescriptorSetLayout m_DescriptorSetLayout = VK_NULL_HANDLE;
 			};
 
-			class RenderData {
+			struct RenderData : Field<RenderData> {
 
 				friend class World;
 
 			public:
 	
 				RenderData(uint64_t renderID, const Mat4& transform, const MeshData& meshData) noexcept 
-					: m_RenderID(renderID), m_Transform(transform), m_MeshData(meshData), m_References() {}
-
-				RenderData(RenderData&& other) noexcept 
-						: m_RenderID(other.m_RenderID), m_Transform(other.m_Transform), m_MeshData(other.m_MeshData),
-							m_References(std::move(other.m_References)) {
-					for (Reference<RenderData>* reference : m_References) {
-						reference->m_Val = this;
-					}
-				}
+					: Field<RenderData>(), m_RenderID(renderID), m_Transform(transform), m_MeshData(meshData) {}
 
 				RenderData(const RenderData&) = delete;
 
-				~RenderData() {
-					for (Reference<RenderData>* reference : m_References) {
-						reference->m_Val = nullptr;
-					}
-				}
-
-				bool AddReference(Reference<RenderData>* reference) {
-					if (reference) {
-						m_References.PushBack(reference);
-						return true;
-					}
-					return false;
-				}
-
-				bool RemoveReference(Reference<RenderData>* reference) {
-					if (reference) {
-						auto end = m_References.end();
-						for (auto iter = m_References.begin(); iter != end; iter++) {
-							if (*iter == reference) {
-								m_References.Erase(iter);
-								return true;
-							}
-						}
-					}
-					return false;
-				}
-
+				RenderData(RenderData&& other) noexcept = default;
+			
 			private:
 
 				const uint64_t m_RenderID;
@@ -2776,7 +2804,6 @@ void main() {
 
 				Mat4 m_Transform;
 				MeshData m_MeshData;
-				DynamicArray<Reference<RenderData>*> m_References;
 			};
 
 			struct CameraMatricesBuffer {
@@ -2827,6 +2854,7 @@ void main() {
 			Engine& m_Engine;
 
 			uint64_t m_NextObjectID{};
+			DynamicArray<Obstacle> m_Obstacles{};
 			DynamicArray<Ground> m_Grounds{};
 			Vec2_T<uint32_t> m_ChunkMatrixSize{};
 			DynamicArray<Chunk> m_ChunkMatrix{};
@@ -3032,11 +3060,11 @@ void main() {
 				m_CameraFollowObjectID = creature.m_ObjectID;
 			}
 
-			RenderData& AddRenderData(const Creature& creature, const Mat4& transform, const MeshData& meshData) {
+			Reference<RenderData> AddRenderData(const Creature& creature, const Mat4& transform, const MeshData& meshData) {
 				return m_RenderDatas.EmplaceBack(creature.m_ObjectID, transform, meshData);
 			}
 
-			RenderData& AddRenderData(const Ground& ground, const Mat4& transform, const MeshData& meshData) {
+			Reference<RenderData> AddRenderData(const Ground& ground, const Mat4& transform, const MeshData& meshData) {
 				return m_RenderDatas.EmplaceBack(ground.m_ObjectID, transform, meshData);
 			}
 
@@ -3098,10 +3126,15 @@ void main() {
 				}
 			}
 
-			void Load(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, uint32_t groundCount, GroundInfo groundInfos[]) {
+			void Load(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, 
+					uint32_t groundCount, GroundInfo groundInfos[], uint32_t obstacleCount, ObstacleInfo obstacleInfos[]) {
 				m_Grounds.Reserve(groundCount);
 				for (uint32_t i = 0; i < groundCount; i++) {
 					m_Grounds.EmplaceBack(groundInfos[i], m_NextObjectID++);
+				}
+				m_Obstacles.Reserve(groundCount);
+				for (uint32_t i = 0; i < obstacleCount; i++) {
+					m_Obstacles.EmplaceBack(obstacleInfos[i], m_NextObjectID++);
 				}
 				m_ChunkDimensions = { 
 					(float)worldDimensions.x / chunkMatrixSize.x, 
@@ -3117,9 +3150,18 @@ void main() {
 								Vec2(m_WorldRect.m_Min.x + x * m_ChunkDimensions.x, 
 									m_WorldRect.m_Min.y + y * m_ChunkDimensions.y), 
 									m_ChunkDimensions);
-						for (const Ground& ground : m_Grounds) {
-							if (chunk.m_BoundingBox.OverLaps(ground.m_TopViewBoundingBox)) {
-								chunk.m_Grounds.PushBack(&ground);
+						for (Ground& ground : m_Grounds) {
+							if (chunk.m_BoundingRect.OverLaps(ground.m_TopViewBoundingRect)) {
+								chunk.m_Grounds.EmplaceBack(ground);
+							}
+						}
+						for (Obstacle& obstacle : m_Obstacles) {
+							Rect<float> boundingRect {
+								.m_Min { obstacle.m_Collider.m_AABB.m_Min.x, obstacle.m_Collider.m_AABB.m_Min.z },
+								.m_Max { obstacle.m_Collider.m_AABB.m_Max.x, obstacle.m_Collider.m_AABB.m_Max.z },
+							};
+							if (chunk.m_BoundingRect.OverLaps(boundingRect)) {
+								chunk.m_Obstacles.EmplaceBack(obstacle);
 							}
 						}
 					}
@@ -3144,11 +3186,11 @@ void main() {
 					assert(curChunk);
 					if (!curChunk->IsPointInside(newPos)) {
 						Vec2_T<uint32_t> newChunkMatrixCoords {
-							curChunk->m_ChunkMatrixCoords.x + (newPos.x >= curChunk->m_BoundingBox.m_Max.x ? 1
-								: newPos.x <= curChunk->m_BoundingBox.m_Min.x ? -1 : 0),
+							curChunk->m_ChunkMatrixCoords.x + (newPos.x >= curChunk->m_BoundingRect.m_Max.x ? 1
+								: newPos.x <= curChunk->m_BoundingRect.m_Min.x ? -1 : 0),
 
-							curChunk->m_ChunkMatrixCoords.y + (newPos.z >= curChunk->m_BoundingBox.m_Max.y ? 1
-								: newPos.z <= curChunk->m_BoundingBox.m_Min.y ? -1 : 0),
+							curChunk->m_ChunkMatrixCoords.y + (newPos.z >= curChunk->m_BoundingRect.m_Max.y ? 1
+								: newPos.z <= curChunk->m_BoundingRect.m_Min.y ? -1 : 0),
 						};
 						Vec2_T<bool> outsideBounds = BoundsCheck(newChunkMatrixCoords);
 						if (outsideBounds.x && outsideBounds.y) {
@@ -3166,16 +3208,16 @@ void main() {
 						if (newChunk != creature.m_Chunk) {
 							creature.m_Chunk = newChunk;
 							assert(creature.m_Chunk);
-							if (creature.m_Chunk->m_BoundingBox.m_Min.x == newPos.x) {
+							if (creature.m_Chunk->m_BoundingRect.m_Min.x == newPos.x) {
 								newPos.x += 0.01f;
 							}
-							else if (creature.m_Chunk->m_BoundingBox.m_Max.x == newPos.x) {
+							else if (creature.m_Chunk->m_BoundingRect.m_Max.x == newPos.x) {
 								newPos.x -= 0.01f;
 							}
-							if (creature.m_Chunk->m_BoundingBox.m_Min.y == newPos.z) {
+							if (creature.m_Chunk->m_BoundingRect.m_Min.y == newPos.z) {
 								newPos.z += 0.01f;
 							}
-							else if (creature.m_Chunk->m_BoundingBox.m_Max.y == newPos.z) {
+							else if (creature.m_Chunk->m_BoundingRect.m_Max.y == newPos.z) {
 								newPos.z -= 0.01f;
 							}
 							fmt::print("chunk change to coords ({}, {})\n",
@@ -3442,9 +3484,10 @@ void main() {
 			return m_StaticQuadMesh;
 		}
 
-		World& LoadWorld(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, uint32_t groundCount, GroundInfo groundInfos[]) {
+		World& LoadWorld(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, 
+				uint32_t groundCount, GroundInfo groundInfos[], uint32_t obstacleCount, ObstacleInfo obstacleInfos[]) {
 			m_World.Unload();
-			m_World.Load(worldDimensions, chunkMatrixSize, groundCount, groundInfos);
+			m_World.Load(worldDimensions, chunkMatrixSize, groundCount, groundInfos, obstacleCount, obstacleInfos);
 			return m_World;
 		}
 
