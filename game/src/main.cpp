@@ -18,7 +18,7 @@ public:
 		return Vec3(
 				Input::ReadKeyValue(Key::D) - Input::ReadKeyValue(Key::A),
 				0.0f,
-				Input::ReadKeyValue(Key::W) - Input::ReadKeyValue(Key::S)) * 0.01f;
+				Input::ReadKeyValue(Key::W) - Input::ReadKeyValue(Key::S)) * 0.001f;
 	}
 
 	static void MoveCallback(const engine::Creature& creature, const engine::Vec3& position, const engine::Vec3& deltaPosition) {
@@ -75,8 +75,11 @@ int main() {
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
+
 	engine::Engine engine(engine::EngineMode_Play, "Test", pWindow, 1000);
+
 	TextRenderer& textRenderer = engine.GetTextRenderer();
+
 	GlyphAtlas atlas{};
 	textRenderer.CreateGlyphAtlas("resources\\fonts\\arial_mt.ttf", 30.0f, atlas);
 	const char* text = "Hello, how\nis it going? AVAVAVA";
@@ -89,6 +92,7 @@ int main() {
 	TextImage textImage 
 			= textRenderer.RenderText<TextAlignment::Middle>(text, renderInfo, { 540, 540 });
 	StaticTexture texture(engine);
+
 	texture.Create(VK_FORMAT_R8G8B8A8_SRGB, 4, textImage.m_Extent, textImage.m_Image);
 	VkImageView textureImageView = texture.CreateImageView();
 	UI& UI = engine.GetUI();
@@ -111,8 +115,8 @@ int main() {
 
 	Engine::ObstacleInfo obstacleInfo {
 		.m_Position = {},
-		.m_Rotation = Quaternion::Identity(),
-		.m_Dimensions = { 1.0f, 1.0f, 1.0f },
+		.m_Rotation = Quaternion::AxisRotation(Vec3(1.0f, 1.0f, 0.0), pi / 4),
+		.m_Dimensions = { 2.0f, 2.0f, 2.0f },
 	};
 
 	World& world = engine.LoadWorld({ 128, 128 }, { 8, 8 }, 1, &groundInfo, 1, &obstacleInfo);
@@ -139,11 +143,18 @@ int main() {
 	assert(cubeObj.GetVertices(Engine::Vertex::SetPosition, Engine::Vertex::SetUV, 
 		Engine::Vertex::SetNormal, cubeVertices));
 
-	StaticMesh playerMesh(engine);
-	playerMesh.CreateBuffers(cubeVertices.m_Size, cubeVertices.m_Data, cubeIndices.m_Size, cubeIndices.m_Data);
+	StaticMesh cubeMesh(engine);
+	cubeMesh.CreateBuffers(cubeVertices.m_Size, cubeVertices.m_Data, cubeIndices.m_Size, cubeIndices.m_Data);
 
-	Player player(world, playerMesh);
-	NPC npc(world, playerMesh);
+	const Engine::DynamicArray<Engine::Obstacle>& obstacles = world.GetObstacles();
+
+	Mat4 obstacleTransform = obstacleInfo.m_Rotation.AsMat4();
+
+	world.AddRenderData(obstacles[0], obstacleTransform, cubeMesh.GetMeshData());
+	world.AddDebugRenderData(obstacles[0], obstacleTransform, Vec4(0.0f, 0.8f, 0.3f, 1.0f), cubeMesh.GetMeshData());
+
+	Player player(world, cubeMesh);
+	//NPC npc(world, playerMesh);
 
 	while (engine.Loop()) {
 		uiWindow->SetPosition(UI.m_CursorPosition);
