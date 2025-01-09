@@ -1961,7 +1961,7 @@ namespace engine {
 			};
 			VkDescriptorSetLayout res;
 			if (!VkCheck(vkCreateDescriptorSetLayout(m_VulkanDevice, &createInfo, m_VulkanAllocationCallbacks, &res), 
-				"failed to create descriptor set layout (function vkCreateDescriptorSetLayout in function CreateDescriptorSetLayout)!")) {
+					"failed to create descriptor set layout (function vkCreateDescriptorSetLayout in function CreateDescriptorSetLayout)!")) {
 				return VK_NULL_HANDLE;
 			}
 			return res;
