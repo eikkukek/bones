@@ -35,7 +35,15 @@ public:
 	}
 
 	Player(engine::World& world, engine::StaticMesh& mesh) 
-		: m_World(world), m_Creature(world.AddCreature({ 3.0f, 0.0f, 0.0f })), m_Mesh(mesh), m_RenderData(world.AddRenderData(*m_Creature, {}, {})) {
+		: m_World(world), 
+			m_Creature(world.AddCreature({ 3.0f, 0.0f, 0.0f }, 
+				{ 
+					.m_LocalPosition {}, 
+					.m_Type { engine::Collider::Type::Cylinder },
+					.u_Collider { .m_Cylinder { .m_Radius = 1, .m_Height = 2, }}
+				}
+			)), 
+			m_Mesh(mesh), m_RenderData(world.AddRenderData(*m_Creature, {}, {})) {
 		using namespace engine;
 		s_Instance = this;
 		World::RenderData& renderData = *m_RenderData;
@@ -49,6 +57,8 @@ public:
 		world.SetCameraFollowCreature(*m_Creature);
 	}	
 };
+
+/*
 
 class NPC {
 public:
@@ -68,6 +78,8 @@ public:
 		renderData.m_Transform = Mat4(1);
 	}
 };
+
+*/
 
 int main() {
 	using namespace engine;
@@ -117,6 +129,13 @@ int main() {
 		.m_Position = {},
 		.m_Rotation = Quaternion::AxisRotation(Vec3(1.0f, 1.0f, 0.0), pi / 4),
 		.m_Dimensions = { 2.0f, 2.0f, 2.0f },
+		.m_ColliderInfo {
+			.m_LocalPosition = {},
+			.m_Type = Collider::Type::Cylinder,
+			.u_Collider {
+				.m_Cylinder { .m_Radius = 1, .m_Height = 2, },
+			}
+		},
 	};
 
 	World& world = engine.LoadWorld({ 128, 128 }, { 8, 8 }, 1, &groundInfo, 1, &obstacleInfo);
