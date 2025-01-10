@@ -25,8 +25,12 @@ namespace engine {
 		template<typename Vec>
 		constexpr inline Vec2_T(const Vec& other) noexcept : x(Cast(other.x)), y(Cast(other.y)) {}
 
+		static constexpr inline T Dot(const Vec2_T& a, const Vec2_T& b) noexcept { return a.x * b.x + a.y * b.y; }
+
 		constexpr inline T SqrMagnitude() const noexcept { return x * x + y * y; }
-		constexpr inline float Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
+
+		constexpr inline T Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
+
 		constexpr inline Vec2_T Normalized() const noexcept {
 			T mag = SqrMagnitude();
 			if (mag <= Cast(0.00001)) {
@@ -36,12 +40,13 @@ namespace engine {
 			return Vec2_T(x / mag, y / mag);
 		}
 
-		constexpr inline Vec2_T operator*(float scalar) const noexcept { return Vec2_T(x * scalar, y * scalar); }
-		constexpr inline Vec2_T operator/(float scalar) const noexcept { return Vec2_T(x / scalar, y / scalar); }
+		constexpr inline Vec2_T operator*(T scalar) const noexcept { return Vec2_T(x * scalar, y * scalar); }
+		constexpr inline Vec2_T operator/(T scalar) const noexcept { return Vec2_T(x / scalar, y / scalar); }
 		constexpr inline Vec2_T operator-() const noexcept { return Vec2_T(-x, -y); }
 		constexpr inline Vec2_T operator+(Vec2_T other) const noexcept { return Vec2_T(x + other.x, y + other.y); }
 		constexpr inline Vec2_T operator-(Vec2_T other) const noexcept { return Vec2_T(x - other.x, y - other.y); }
 		constexpr inline Vec2_T& operator+=(Vec2_T other) noexcept { x += other.x; y += other.y; return *this; }
+		constexpr inline Vec2_T& operator-=(Vec2_T other) noexcept { x -= other.x; y -= other.y; return *this; }
 
 		constexpr inline bool operator==(const Vec2_T& other) const noexcept = default;
 	};
@@ -57,19 +62,36 @@ namespace engine {
 
 		static constexpr inline size_t size = 3;
 
+		static constexpr const Vec3_T& Up() {
+			static constexpr Vec3_T up = Vec3_T(Cast(0), Cast(1), Cast(0));
+			return up;
+		}
+
+		static constexpr const Vec3_T& Right() {
+			static constexpr Vec3_T right = Vec3_T(Cast(1), Cast(0), Cast(0));
+			return right;
+		}
+
+		static constexpr const Vec3_T& Forward() {
+			static constexpr Vec3_T forward = Vec3_T(Cast(0), Cast(0), Cast(1));
+			return forward;
+		}
+
 		T x, y, z;
 
-		constexpr inline Vec3_T(T x = Cast(0), T y = Cast(0), float z = Cast(0)) noexcept : x(x), y(y), z(z) {}
+		constexpr inline Vec3_T(T x = Cast(0), T y = Cast(0), T z = Cast(0)) noexcept : x(x), y(y), z(z) {}
 
 		constexpr inline Vec3_T(const Vec2_T<T>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(0)) {}
 
 		template<typename Vec>
 		constexpr inline Vec3_T(const Vec& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(other.z)) {}
 
-		static constexpr inline float Dot(const Vec3_T& a, const Vec3_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z; }
+		static constexpr inline T Dot(const Vec3_T& a, const Vec3_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z; }
+
 		static constexpr inline Vec3_T Cross(const Vec3_T& a, const Vec3_T& b) noexcept { return Vec3_T(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x); }
+
 		static constexpr inline void Normalize(Vec3_T& vec) noexcept {
-			float mag = vec.SqrMagnitude();
+			T mag = vec.SqrMagnitude();
 			if (mag <= Cast(0.00001)) {
 				vec.x = Cast(0); vec.y = Cast(0); vec.z = Cast(0);
 				return;
@@ -77,10 +99,12 @@ namespace engine {
 			vec.x /= mag; vec.y /= mag; vec.z /= mag;
 		}
 
-		constexpr inline float SqrMagnitude() const noexcept { return x * x + y * y + z * z; }
-		constexpr inline float Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
+		constexpr inline T SqrMagnitude() const noexcept { return x * x + y * y + z * z; }
+
+		constexpr inline T Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
+
 		constexpr inline Vec3_T Normalized() const noexcept {
-			float mag = SqrMagnitude();
+			T mag = SqrMagnitude();
 			if (mag < Cast(0.00001f)) {
 				return Vec3_T(Cast(0), Cast(0), Cast(0));
 			}
@@ -88,18 +112,18 @@ namespace engine {
 			return Vec3_T(x / mag, y / mag, z / mag);
 		}
 
-		constexpr inline Vec3_T operator*(float scalar) const noexcept { return Vec3_T(x * scalar, y * scalar, z * scalar); }
-		constexpr inline Vec3_T operator/(float scalar) const noexcept { return Vec3_T(x / scalar, y / scalar, z / scalar); }
+		constexpr inline Vec3_T operator*(T scalar) const noexcept { return Vec3_T(x * scalar, y * scalar, z * scalar); }
+		constexpr inline Vec3_T operator/(T scalar) const noexcept { return Vec3_T(x / scalar, y / scalar, z / scalar); }
 		constexpr inline Vec3_T operator-() const noexcept { return Vec3_T(-x, -y, -z); }
 		constexpr inline Vec3_T operator+(const Vec3_T& other) const noexcept { return Vec3_T(x + other.x, y + other.y, z + other.z); }
 		constexpr inline Vec3_T operator-(const Vec3_T& other) const noexcept { return Vec3_T(x - other.x, y - other.y, z - other.z); }
 		constexpr inline Vec3_T& operator+=(const Vec3_T& other) noexcept { x += other.x; y += other.y; z += other.z; return *this; }
 		constexpr inline Vec3_T& operator-=(const Vec3_T& other) noexcept { x -= other.x; y -= other.y; z -= other.z; return *this; }
-		constexpr inline Vec3_T& operator*=(float scalar) noexcept { x *= scalar; y *= scalar; z *= scalar; return *this; }
+		constexpr inline Vec3_T& operator*=(T scalar) noexcept { x *= scalar; y *= scalar; z *= scalar; return *this; }
 
 		constexpr inline T& operator[](size_t index) const { assert(index < size); return ((T*)this)[index]; }
 
-		constexpr inline Vec3_T operator*(const Mat3_T<T>& other) {
+		constexpr inline Vec3_T operator*(const Mat3_T<T>& other) const {
 			return Vec3_T<T>(
 				x * other[0].x + y * other[0].y + z * other[0].z,
 				x * other[1].x + y * other[1].y + z * other[1].z,
@@ -120,15 +144,15 @@ namespace engine {
 
 		T x, y, z, w;
 
-		constexpr inline Vec4_T(float x = Cast(0), float y = Cast(0), float z = Cast(0), float w = Cast(0)) noexcept : x(x), y(y), z(z), w(w) {}
-		constexpr inline Vec4_T(const Vec3_T<T>& other, float w = Cast(0)) noexcept : x(other.x), y(other.y), z(other.z), w(w) {}
+		constexpr inline Vec4_T(T x = Cast(0), T y = Cast(0), T z = Cast(0), T w = Cast(0)) noexcept : x(x), y(y), z(z), w(w) {}
+		constexpr inline Vec4_T(const Vec3_T<T>& other, T w = Cast(0)) noexcept : x(other.x), y(other.y), z(other.z), w(w) {}
 
 		static constexpr inline T Dot(const Vec4_T& a, const Vec4_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 
-		constexpr inline float SqrMagnitude() const noexcept { return x * x + y * y + z * z + w * w; }
-		constexpr inline float Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
+		constexpr inline T SqrMagnitude() const noexcept { return x * x + y * y + z * z + w * w; }
+		constexpr inline T Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
 		constexpr inline Vec4_T Normalized() const noexcept {
-			float mag = SqrMagnitude();
+			T mag = SqrMagnitude();
 			if (mag <= Cast(0.00001)) {
 				return { Cast(0), Cast(0), Cast(0), Cast(0)};
 			}
@@ -234,11 +258,11 @@ namespace engine {
 
 		static constexpr inline Mat4_T Multiply(const Mat4_T& a, const Mat4_T& b) noexcept {
 			Mat4_T result{};
-			float (*aF)[4] = (float(*)[4])&a;
-			float (*bF)[4] = (float(*)[4])&b;
-			float (*resF)[4] = (float(*)[4])&result;
+			T (*aF)[4] = (T(*)[4])&a;
+			T (*bF)[4] = (T(*)[4])&b;
+			T (*resF)[4] = (T(*)[4])&result;
 			for (int i = 0; i < 4; i++) {
-				float num = 0.0f;
+				T num = Cast(0);
 				for (int j = 0; j < 4; j++) {
 					for (int k = 0; k < 4; k++) {
 						num += aF[k][j] * bF[i][k];
@@ -315,7 +339,7 @@ namespace engine {
 				Vec3_T<T>::Dot(right, pos),
 				Vec3_T<T>::Dot(up, pos),
 				Vec3_T<T>::Dot(front, pos),
-				1.0f
+				Cast(1),
 			};
 			return result;
 		}
@@ -367,30 +391,35 @@ namespace engine {
 	template<typename T>
 	struct Quaternion_T {
 
+		static constexpr inline const Quaternion_T& Identity() noexcept { 
+			static constexpr Quaternion_T identity = Quaternion_T(Cast(0), Cast(0), Cast(0), Cast(1));
+			return identity;
+		}
+
 		T x, y, z, w;
 
-		constexpr inline Quaternion_T() noexcept : x(0.0f), y(0.0f), z(0.0f), w(1.0f) {}
-		constexpr inline Quaternion_T(float x, float y, float z, float w) noexcept : x(x), y(y), z(z), w(w) {}
+		constexpr inline Quaternion_T() noexcept : x(Cast(0)), y(Cast(0)), z(Cast(0)), w(Cast(0)) {}
+		constexpr inline Quaternion_T(T x, T y, T z, T w) noexcept : x(x), y(y), z(z), w(w) {}
 		constexpr inline Quaternion_T(Vec4_T<T> other) noexcept : x(other.x), y(other.y), z(other.z), w(other.w) {}
 
 		static constexpr inline T Dot(const Quaternion_T& a, const Quaternion_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 		static constexpr inline T AngleBetween(const Quaternion_T& a, const Quaternion_T& b) noexcept {
 			return acos(fmin(fabs(Quaternion_T::Dot(a, b)), Cast(1))) * Cast(2);
 		}
-		static constexpr inline Quaternion_T Slerp(const Quaternion_T& from, const Quaternion_T& to, float t) noexcept {
+		static constexpr inline Quaternion_T Slerp(const Quaternion_T& from, const Quaternion_T& to, T t) noexcept {
 			return Quaternion_T(from * (Cast(1) - t) + to * t).Normalized();
 		}
-		static constexpr inline Quaternion_T RotateTowards(const Quaternion_T& from, const Quaternion_T& to, float maxRadians) noexcept {
+		static constexpr inline Quaternion_T RotateTowards(const Quaternion_T& from, const Quaternion_T& to, T maxRadians) noexcept {
 			T angle = AngleBetween(from, to);
 			if (abs(angle) < Cast(0.00001)) {
 				return to;
 			}
-			return Slerp(from, to, Clamp(maxRadians / angle, 0.0f, 1.0f));
+			return Slerp(from, to, Clamp(maxRadians / angle, Cast(0), Cast(1)));
 		}
-		static constexpr inline Quaternion_T AxisRotation(const Vec3_T<T>& axis, float radians) noexcept {
+		static constexpr inline Quaternion_T AxisRotation(const Vec3_T<T>& axis, T radians) noexcept {
 			radians /= 2;
 			Vec3_T<T> norm = axis.Normalized();
-			float sine = sin(radians);
+			T sine = sin(radians);
 			return Quaternion_T(norm.x * sine, norm.y * sine, norm.z * sine, cos(radians)).Normalized();
 		}
 		static constexpr inline Quaternion_T Multiply(const Quaternion_T& a, const Quaternion_T& b) noexcept {
@@ -402,28 +431,31 @@ namespace engine {
 			).Normalized();
 		}
 		static constexpr inline Quaternion_T RotationBetween(const Vec3_T<T>& a, const Vec3_T<T>& b) noexcept {
-			float aLen = a.SqrMagnitude(), bLen = b.SqrMagnitude();
-			if (aLen < 0.00001f || bLen < 0.00001f) {
-				return { 0, 0, 0, 0 };
+			T aLen = a.SqrMagnitude(), bLen = b.SqrMagnitude();
+			if (aLen < Cast(0.00001) || bLen < Cast(0.00001)) {
+				return { Cast(0), Cast(0), Cast(0), Cast(0) };
 			}
 			Vec3_T<T> abCross = Vec3_T<T>::Cross(a, b);
 			return Quaternion_T(abCross.x, abCross.y, abCross.z, sqrt(aLen * bLen + Vec3_T<T>::Dot(a, b))).Normalized();
 		}
 
-		constexpr inline float SqrMagnitude() const noexcept { return x * x + y * y + z * z + w * w; }
-		constexpr inline float Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
+		constexpr inline T SqrMagnitude() const noexcept { return x * x + y * y + z * z + w * w; }
+
+		constexpr inline T Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
+
 		constexpr inline Quaternion_T Normalized() const noexcept {
-			float mag = SqrMagnitude();
-			if (fabs(mag) < 0.00001f) {
-				return { 0.0f, 0.0f, 0.0f, 0.0f };
+			T mag = SqrMagnitude();
+			if (fabs(mag) < Cast(0.00001)) {
+				return { Cast(0), Cast(0), Cast(0), Cast(0) };
 			}
 			mag = sqrt(mag);
 			return { x / mag, y / mag, z / mag, w / mag };
 		}
+
 		constexpr inline Mat4_T<T> AsMat4() const noexcept {
-			float num1 = x * x;
-			float num2 = y * y;
-			float num3 = z * z;
+			T num1 = x * x;
+			T num2 = y * y;
+			T num3 = z * z;
 			return Mat4_T<T>(
 				Cast(1) - Cast(2) * (num2 + num3), Cast(2) * (x * y + z * w), Cast(2) * (x * z - y * w), Cast(0),
 				Cast(2) * (x * y - z * w), Cast(1) - Cast(2) * (num1 + num3), Cast(2) * (y * z + x * w), Cast(0),
@@ -432,10 +464,8 @@ namespace engine {
 			);
 		}
 
-		static constexpr inline Quaternion_T Identity() noexcept { return Quaternion_T(); }
-
 		Quaternion_T operator+(const Quaternion_T& other) const noexcept { return Quaternion_T(x + other.x, y + other.y, z + other.z, w + other.w); }
-		Quaternion_T operator*(float scalar) const noexcept { return Quaternion_T(x * scalar, y * scalar, z * scalar, w * scalar); }
+		Quaternion_T operator*(T scalar) const noexcept { return Quaternion_T(x * scalar, y * scalar, z * scalar, w * scalar); }
 		constexpr inline bool operator==(const Quaternion_T& other) const noexcept { return x == other.x && y == other.y && z == other.z && w == other.w; }
 		
 		constexpr inline explicit operator Vec4_T<T>() const noexcept {
