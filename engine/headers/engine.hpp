@@ -2450,7 +2450,8 @@ void main() {
 			}
 		};
 
-		struct BoxCollider : Field<BoxCollider> {
+		/*
+		struct RectCollider {
 
 			friend class Engine;
 
@@ -2464,19 +2465,20 @@ void main() {
 
 		public:
 
-			BoxCollider(const Vec3& position = {}, const Quaternion& rotation = {}, const Vec3& dimensions = {})
-				: Field<BoxCollider>(), m_Position(position), m_Rotation(rotation), m_Dimensions(dimensions) {
+			RectCollider(const Vec3& position = {}, const Quaternion& rotation = {}, const Vec3& dimensions = {})
+				: m_Position(position), m_Rotation(rotation), m_Dimensions(dimensions) {
 				CalcCorners();
 				CalcAABB();
 			}
 
-			BoxCollider(const BoxCollider&) = delete;
+			RectCollider(const RectCollider&) = delete;
 			
-			BoxCollider(BoxCollider&&) = default;
+			RectCollider(RectCollider&&) = default;
 
 		private:
 
 			void CalcCorners() {
+
 				Vec3 halfDimensionsPos = m_Dimensions / 2;
 				Vec3 halfDimensionsNeg = -halfDimensionsPos;
 
@@ -2564,12 +2566,78 @@ void main() {
 				return true;
 			}
 		};
+		*/
 
-		struct CapsuleCollider {
-			float m_BaseRadius{};
-			float m_Height{};
-			Vec3 m_Position{};
-			Quaternion m_Rotation{};
+		class Collider {
+
+			friend class Engine;
+		
+		public:
+
+			enum class Type {
+				Cylinder = 1,
+			};
+
+			Vec3 m_LocalPosition{};
+
+			struct Cylinder {
+				float m_Radius{};
+				float m_Height{};
+			};
+
+			union Collider_U {
+				Cylinder m_Cylinder;
+			};
+
+			struct CreateInfo {
+				Vec3 m_LocalPosition;
+				Type m_Type;
+				Collider_U u_Collider;
+			};
+
+		private:
+
+			const Type m_Type;
+			Collider_U u_Collider;
+
+			Collider(const CreateInfo& info) 
+				: m_LocalPosition(info.m_LocalPosition), m_Type(info.m_Type), u_Collider(info.u_Collider) {}
+	
+		public:	
+
+			static bool CylinderToStaticCylinderCollides(const Collider& a, const Vec3& aBodyPos, const Collider& b, const Vec3& bBodyPos, Vec3& outAPushBack) {
+				const Cylinder& aCyl = a.u_Collider.m_Cylinder;
+				const Cylinder& bCyl = b.u_Collider.m_Cylinder;
+				const Vec3 aPos = a.m_LocalPosition + aBodyPos;
+				const Vec3 bPos = b.m_LocalPosition + bBodyPos;
+				float aHeightHalf = aCyl.m_Height / 2;
+				float bHeightHalf = bCyl.m_Height / 2;
+				float yMins[2] { 
+					aPos.y - aHeightHalf,
+					bPos.y - bHeightHalf,
+				};
+				float yMaxs[2] {
+					aPos.y + aHeightHalf,
+					bPos.y + bHeightHalf,
+				};
+				if (yMaxs[0] > yMins[1] && yMaxs[1] > yMins[0]) {
+					Vec2 centerDiff = Vec2(bPos.x - aPos.x, bPos.z - aPos.z);
+					float centerDistanceSqr 
+						= centerDiff.SqrMagnitude();
+					float radDiff = (aCyl.m_Radius - bCyl.m_Radius);
+					float radSum = (aCyl.m_Radius + bCyl.m_Radius);
+					if (radDiff * radDiff < centerDistanceSqr && centerDistanceSqr < radSum * radSum) {
+						outAPushBack = Vec3(centerDiff.x, 0.0f, centerDiff.y).Normalized() * (radSum - sqrt(centerDistanceSqr));
+						return true;
+					}
+				}
+				return false;
+			}
+
+			static bool ColliderToStaticColliderCollides(const Collider& a, const Vec3& aBodyPos, 
+					const Collider& b, const Vec3& bBodyPos, Vec3& outAPushBack) {
+				return CylinderToStaticCylinderCollides(a, aBodyPos, b, bBodyPos, outAPushBack);
+			}
 		};
 
 		struct GroundInfo {
@@ -2631,6 +2699,7 @@ void main() {
 			Vec3 m_Position{};
 			Quaternion m_Rotation{};
 			Vec3 m_Dimensions{};
+			Collider::CreateInfo m_ColliderInfo{};
 		};
 
 		struct Obstacle : Field<Obstacle> {
@@ -2640,18 +2709,22 @@ void main() {
 		private:
 
 			uint64_t m_ObjectID;
+			Vec3 m_Position;
+			Collider m_Collider;
 
 		public:
 
-			BoxCollider m_Collider;
-
-			Obstacle(const ObstacleInfo& obstacleInfo, uint64_t objectID) noexcept 
-				: Field<Obstacle>(), m_ObjectID(objectID), m_Collider(obstacleInfo.m_Position, 
-					obstacleInfo.m_Rotation, obstacleInfo.m_Dimensions) {}
+			Obstacle(const ObstacleInfo& info, uint64_t objectID) noexcept 
+				: Field<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position), m_Collider(info.m_ColliderInfo) {}
 
 			Obstacle(const Obstacle&) = delete;
 
 			Obstacle(Obstacle&& other) noexcept = default;
+
+			bool Collides(const Collider& collider, const Vec3& colliderBodyPos, Vec3& outColliderPushBack) {
+				return 
+					Collider::ColliderToStaticColliderCollides(collider, colliderBodyPos, m_Collider, m_Position, outColliderPushBack);
+			}
 		};
 
 		class Chunk {
@@ -2692,22 +2765,6 @@ void main() {
 				}
 				return nullptr;
 			}
-
-			bool CheckCollisions(const BoxCollider& collider, Vec3& outPushBack) {
-				outPushBack = {};
-				bool res = false;
-				for (const Reference<Obstacle>& obstacle : m_Obstacles) {
-					if (!obstacle.m_Val) {
-						continue;
-					}
-					Vec3 pushBack{};
-					if (obstacle.m_Val->m_Collider.CheckCollision(collider, pushBack)) {
-						outPushBack += pushBack;
-						res = true;
-					}
-				}
-				return true;
-			}
 		};
 
 		class Creature : Field<Creature> {
@@ -2719,11 +2776,11 @@ void main() {
 			const Chunk* m_Chunk;
 			Vec3 m_Position;
 			const uint64_t m_ObjectID;
-			BoxCollider m_Collider;
+			Collider m_Collider;
 
-			Creature(const Vec3& position, const Chunk* chunk, uint64_t objectID) 
+			Creature(uint64_t objectID, const Vec3& position, const Chunk* chunk, const Collider::CreateInfo& colliderInfo)
 				: Field<Creature>(), m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
-					m_Collider(m_Position, Quaternion::Identity(), Vec3(2.0, 2.0f, 2.0f)) {
+					m_Collider(colliderInfo) {
 				assert(chunk);
 				Vec2_T<bool> _;
 				const Ground* ground = chunk->FindGround(position, {}, _);
@@ -2764,11 +2821,11 @@ void main() {
 					float height = ground->GetHeightAtPosition(m_Position);
 					assert(height != std::numeric_limits<float>::max());
 					m_Position.y = height;
-					m_Collider.SetPosition(m_Position);
 				}
 				for (const Reference<Obstacle>& obstacle : m_Chunk->m_Obstacles) {
+					assert(obstacle.m_Val);
 					Vec3 pushBack;
-					if (obstacle.m_Val->m_Collider.CheckCollision(m_Collider, pushBack)) {
+					if (obstacle.m_Val->Collides(m_Collider, m_Position, pushBack)) {
 						Vec2_T<bool> deltaDirSameAsPushBack = { 
 							deltaPos.x > 0 && pushBack.x > 0 || deltaPos.x < 0 && pushBack.x < 0,
 							deltaPos.z > 0 && pushBack.z > 0 || deltaPos.z < 0 && pushBack.z < 0,
@@ -3200,7 +3257,7 @@ void main() {
 				return { frac.x == (float)intgr.x, frac.y == (float)intgr.y };
 			}
 
-			Creature& AddCreature(const Vec3& position) {
+			Creature& AddCreature(const Vec3& position, const Collider::CreateInfo& colliderInfo) {
 				if (!m_ChunkMatrix.m_Size) {
 					CriticalError(ErrorOrigin::GameLogic, 
 						"attempting to add a creature to an empty world (in function World::AddCreature)!");
@@ -3216,7 +3273,7 @@ void main() {
 				}
 				for (const Chunk& chunk : m_ChunkMatrix) {
 					if (chunk.IsPointInside(pos)) {
-						return m_Creatures.EmplaceBack(pos, &chunk, m_NextObjectID++);
+						return m_Creatures.EmplaceBack(m_NextObjectID++, pos, &chunk, colliderInfo);
 					}
 				}
 				assert(false);
@@ -3334,13 +3391,7 @@ void main() {
 							}
 						}
 						for (Obstacle& obstacle : m_Obstacles) {
-							Rect<float> boundingRect {
-								.m_Min { obstacle.m_Collider.m_AABB.m_Min.x, obstacle.m_Collider.m_AABB.m_Min.z },
-								.m_Max { obstacle.m_Collider.m_AABB.m_Max.x, obstacle.m_Collider.m_AABB.m_Max.z },
-							};
-							if (chunk.m_BoundingRect.OverLaps(boundingRect)) {
-								chunk.m_Obstacles.EmplaceBack(obstacle);
-							}
+							chunk.m_Obstacles.EmplaceBack(obstacle);
 						}
 					}
 				}
@@ -3728,6 +3779,7 @@ void main() {
 	typedef Engine::StaticMesh StaticMesh;
 	typedef Engine::StaticTexture StaticTexture;
 	typedef Engine::MeshData MeshData;
+	typedef Engine::Collider Collider;
 	typedef Engine::Creature Creature;
 	typedef Engine::World World;
 }
