@@ -2575,57 +2575,104 @@ void main() {
 		public:
 
 			enum class Type {
-				Cylinder = 1,
+				Fence = 1,
+				Pole = 2,
 			};
 
-			Vec3 m_LocalPosition{};
+			struct Fence {
 
-			struct Cylinder {
+				struct CreateInfo {
+					Vec3 m_Dimensions{};
+					float m_YRotation{};
+				};
+
+				void Create(const CreateInfo& info) {
+					m_HalfDimensions = info.m_Dimensions / 2;
+					m_YRotation = info.m_YRotation;
+					m_RotationMatrix = Quaternion::AxisRotation(Vec3::Forward(), m_YRotation).AsMat4();
+				}
+
+				Vec3 m_HalfDimensions{};
+				float m_YRotation{};
+				Mat3 m_RotationMatrix{};
+			};
+
+			struct Pole {
+
+				struct CreateInfo {
+					float m_Radius{};
+					float m_Height{};
+				};
+
+				void Create(const CreateInfo& info) {
+					m_Radius = info.m_Radius;
+					m_HalfHeight = info.m_Height / 2;
+				}
+
 				float m_Radius{};
-				float m_Height{};
+				float m_HalfHeight{};
+			};
+
+			union TypeCreateInfo_U {
+				Fence::CreateInfo m_FenceInfo;
+				Pole::CreateInfo m_PoleInfo;
 			};
 
 			union Collider_U {
-				Cylinder m_Cylinder;
+
+				Collider_U(Type type, const TypeCreateInfo_U& typeInfo) {
+					switch (type) {
+						case Type::Fence:
+							m_Fence.Create(typeInfo.m_FenceInfo);
+							break;
+						case Type::Pole:
+							m_Pole.Create(typeInfo.m_PoleInfo);
+							break;
+					}
+				}
+
+				Fence m_Fence;
+				Pole m_Pole;
 			};
 
 			struct CreateInfo {
 				Vec3 m_LocalPosition;
 				Type m_Type;
-				Collider_U u_Collider;
+				TypeCreateInfo_U u_TypeInfo;
 			};
 
 		private:
 
 			const Type m_Type;
 			Collider_U u_Collider;
+			Vec3 m_LocalPosition{};
+			const Vec3& m_BodyPosition;
 
-			Collider(const CreateInfo& info) 
-				: m_LocalPosition(info.m_LocalPosition), m_Type(info.m_Type), u_Collider(info.u_Collider) {}
+			Collider(Vec3& bodyPosition, const CreateInfo& info) 
+				: m_BodyPosition(bodyPosition), m_LocalPosition(info.m_LocalPosition), m_Type(info.m_Type), u_Collider(info.m_Type, info.u_TypeInfo) {
+			}
 	
-		public:	
+		public:
 
-			static bool CylinderToStaticCylinderCollides(const Collider& a, const Vec3& aBodyPos, const Collider& b, const Vec3& bBodyPos, Vec3& outAPushBack) {
-				const Cylinder& aCyl = a.u_Collider.m_Cylinder;
-				const Cylinder& bCyl = b.u_Collider.m_Cylinder;
-				const Vec3 aPos = a.m_LocalPosition + aBodyPos;
-				const Vec3 bPos = b.m_LocalPosition + bBodyPos;
-				float aHeightHalf = aCyl.m_Height / 2;
-				float bHeightHalf = bCyl.m_Height / 2;
-				float yMins[2] { 
-					aPos.y - aHeightHalf,
-					bPos.y - bHeightHalf,
-				};
+			static bool PoleToStaticPoleCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
+				const Pole& aPole = a.u_Collider.m_Pole;
+				const Pole& bPole = b.u_Collider.m_Pole;
+				const Vec3 aPos = a.m_BodyPosition + a.m_LocalPosition;
+				const Vec3 bPos = b.m_BodyPosition + b.m_LocalPosition;
 				float yMaxs[2] {
-					aPos.y + aHeightHalf,
-					bPos.y + bHeightHalf,
+					aPos.y + aPole.m_HalfHeight,
+					bPos.y + bPole.m_HalfHeight,
+				};
+				float yMins[2] { 
+					aPos.y - aPole.m_HalfHeight,
+					bPos.y - bPole.m_HalfHeight,
 				};
 				if (yMaxs[0] > yMins[1] && yMaxs[1] > yMins[0]) {
 					Vec2 centerDiff = Vec2(bPos.x - aPos.x, bPos.z - aPos.z);
 					float centerDistanceSqr 
 						= centerDiff.SqrMagnitude();
-					float radDiff = (aCyl.m_Radius - bCyl.m_Radius);
-					float radSum = (aCyl.m_Radius + bCyl.m_Radius);
+					float radDiff = (aPole.m_Radius - bPole.m_Radius);
+					float radSum = (aPole.m_Radius + bPole.m_Radius);
 					if (radDiff * radDiff < centerDistanceSqr && centerDistanceSqr < radSum * radSum) {
 						outAPushBack = Vec3(centerDiff.x, 0.0f, centerDiff.y).Normalized() * (radSum - sqrt(centerDistanceSqr));
 						return true;
@@ -2634,9 +2681,145 @@ void main() {
 				return false;
 			}
 
-			static bool ColliderToStaticColliderCollides(const Collider& a, const Vec3& aBodyPos, 
-					const Collider& b, const Vec3& bBodyPos, Vec3& outAPushBack) {
-				return CylinderToStaticCylinderCollides(a, aBodyPos, b, bBodyPos, outAPushBack);
+			static bool BoxToStaticBoxCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
+
+				const Fence& aFence = a.u_Collider.m_Fence;
+				const Fence& bFence = b.u_Collider.m_Fence;
+				const Vec3 aPos = a.m_BodyPosition + a.m_LocalPosition;
+				const Vec3 bPos = b.m_BodyPosition + b.m_LocalPosition;
+
+				const float yMaxs[2] {
+					aPos.y + aFence.m_HalfDimensions.y,
+					bPos.y + bFence.m_HalfDimensions.y,
+				};
+
+				const float yMins[2] {
+					aPos.y - aFence.m_HalfDimensions.y,
+					bPos.y - bFence.m_HalfDimensions.y,
+				};
+
+				if (yMaxs[0] > yMins[1] && yMaxs[1] > yMins[0]) {
+
+					const Vec2 aPos2D(aPos.x, aPos.z);
+					const Vec2 bPos2D(bPos.x, bPos.z);
+
+					struct Line {
+						Vec2 m_Origin;
+						Vec2 m_Direction;
+					};
+
+					const Line aLines[2] { 
+						{ aPos2D , (Vec3::Right() * aFence.m_RotationMatrix).Normalized() }, 
+						{ aPos2D, (Vec3::Up() * aFence.m_RotationMatrix).Normalized() },
+					};
+
+					const Vec2 aSides[4] {
+						aLines[0].m_Direction * aFence.m_HalfDimensions.x, // RX
+						aLines[1].m_Direction * aFence.m_HalfDimensions.z, // RY
+						aSides[0] * -1, // RX * -1
+						aSides[1] * -1, // RY * - 1
+					};
+
+					const Vec2 aCorners[4] {
+						aPos2D + aSides[0] + aSides[1],
+						aPos2D + aSides[0] + aSides[3],
+						aPos2D + aSides[2] + aSides[3],
+						aPos2D + aSides[2] + aSides[1],
+					};
+
+					const Line bLines[2] { 
+						{ bPos2D, (Vec3::Right() * bFence.m_RotationMatrix).Normalized() },
+						{ bPos2D, (Vec3::Up() * bFence.m_RotationMatrix).Normalized() },
+					};
+
+					const Vec2 bSides[4] {
+						bLines[0].m_Direction * bFence.m_HalfDimensions.x, // RX
+						bLines[1].m_Direction * bFence.m_HalfDimensions.z, // RY
+						bSides[0] * -1, // RX * -1
+						bSides[1] * -1, // RY * - 1
+					};
+
+					Vec2 bCorners[4] {
+						bPos2D + bSides[0] + bSides[1],
+						bPos2D + bSides[0] + bSides[3],
+						bPos2D + bSides[2] + bSides[3],
+						bPos2D + bSides[2] + bSides[1],
+					};
+
+					static constexpr auto project = [](Vec2 vec, const Line& line) -> Vec2 {
+						vec -= line.m_Origin;
+						float dot = Vec2::Dot(line.m_Direction, vec);
+						return line.m_Origin + (line.m_Direction * dot);
+					};
+
+					static constexpr auto get_signed_distance = [](Vec2 rectCenter, const Line& line, Vec2 corner) -> float {
+						const Vec2 projected = project(corner, line);
+						const Vec2 rel = projected - rectCenter;
+						const int sign = (rel.x * line.m_Direction.x) + (rel.y * line.m_Direction.y) > 0;
+						return rel.Magnitude() * (sign ? 1 : -1);
+					};
+
+					static constexpr auto are_projections_hit = [](const Vec3& rectHalfDimensions, Vec2 minSignedDistances, Vec2 maxSignedDistances) -> bool {
+						return (minSignedDistances.x < 0 & maxSignedDistances.x > 0 ||
+								abs(minSignedDistances.x) < rectHalfDimensions.x ||
+								abs(maxSignedDistances.x) < rectHalfDimensions.x) &&
+								(minSignedDistances.y < 0 & maxSignedDistances.y > 0 ||
+								abs(minSignedDistances.y) < rectHalfDimensions.z ||
+								abs(maxSignedDistances.y) < rectHalfDimensions.z);
+					};
+
+					static constexpr float float_max = std::numeric_limits<float>::max();
+					static constexpr float float_min = -float_max;
+
+					Vec2 minSignedDistances(float_max, float_max);
+					Vec2 maxSignedDistances(float_min, float_min);
+
+					for (size_t i = 0; i < 4; i++) {
+						const Vec2 signedDistances(get_signed_distance(aPos2D, aLines[0], bCorners[i]), get_signed_distance(aPos2D, aLines[1], bCorners[i]));
+						minSignedDistances.x = Min(signedDistances.x, minSignedDistances.x);
+						minSignedDistances.y = Min(signedDistances.y, minSignedDistances.y);
+						maxSignedDistances.x = Max(signedDistances.x, maxSignedDistances.x);
+						maxSignedDistances.y = Max(signedDistances.y, maxSignedDistances.y);
+					}
+
+					if (!are_projections_hit(aFence.m_HalfDimensions, minSignedDistances, maxSignedDistances)) {
+						return false;
+					}
+
+					minSignedDistances = { float_max, float_max };
+					maxSignedDistances = { float_min, float_min };
+
+					for (size_t i = 0; i < 4; i++) {
+						const Vec2 signedDistances(get_signed_distance(bPos2D, bLines[0], aCorners[i]), get_signed_distance(bPos2D, bLines[1], aCorners[i]));
+						minSignedDistances.x = Min(signedDistances.x, minSignedDistances.x);
+						minSignedDistances.y = Min(signedDistances.y, minSignedDistances.y);
+						maxSignedDistances.x = Max(signedDistances.x, maxSignedDistances.x);
+						maxSignedDistances.y = Max(signedDistances.y, maxSignedDistances.y);
+					}
+
+					if (!are_projections_hit(bFence.m_HalfDimensions, minSignedDistances, maxSignedDistances)) {
+						return false;
+					}
+
+					fmt::print("colliding!");
+
+					return true;
+				}
+				return false;
+			}
+
+			static bool ColliderToStaticColliderCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
+				if (a.m_Type == Type::Fence) {
+					if (b.m_Type == Type::Fence) {
+						BoxToStaticBoxCollides(a, b, outAPushBack);
+					}
+				}
+				if (a.m_Type == Type::Pole) {
+					if (b.m_Type == Type::Pole) {
+						PoleToStaticPoleCollides(a, b, outAPushBack);
+					}
+				}
+				return false;
 			}
 		};
 
@@ -2715,15 +2898,14 @@ void main() {
 		public:
 
 			Obstacle(const ObstacleInfo& info, uint64_t objectID) noexcept 
-				: Field<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position), m_Collider(info.m_ColliderInfo) {}
+				: Field<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position), m_Collider(m_Position, info.m_ColliderInfo) {}
 
 			Obstacle(const Obstacle&) = delete;
 
 			Obstacle(Obstacle&& other) noexcept = default;
 
 			bool Collides(const Collider& collider, const Vec3& colliderBodyPos, Vec3& outColliderPushBack) {
-				return 
-					Collider::ColliderToStaticColliderCollides(collider, colliderBodyPos, m_Collider, m_Position, outColliderPushBack);
+				return Collider::ColliderToStaticColliderCollides(collider, m_Collider, outColliderPushBack);
 			}
 		};
 
@@ -2780,7 +2962,7 @@ void main() {
 
 			Creature(uint64_t objectID, const Vec3& position, const Chunk* chunk, const Collider::CreateInfo& colliderInfo)
 				: Field<Creature>(), m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
-					m_Collider(colliderInfo) {
+					m_Collider(m_Position, colliderInfo) {
 				assert(chunk);
 				Vec2_T<bool> _;
 				const Ground* ground = chunk->FindGround(position, {}, _);

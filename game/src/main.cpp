@@ -39,8 +39,8 @@ public:
 			m_Creature(world.AddCreature({ 3.0f, 0.0f, 0.0f }, 
 				{ 
 					.m_LocalPosition {}, 
-					.m_Type { engine::Collider::Type::Cylinder },
-					.u_Collider { .m_Cylinder { .m_Radius = 1, .m_Height = 2, }}
+					.m_Type { engine::Collider::Type::Fence },
+					.u_TypeInfo { .m_FenceInfo { .m_Dimensions { 2, 2, 2 }, .m_YRotation = 0, } },
 				}
 			)), 
 			m_Mesh(mesh), m_RenderData(world.AddRenderData(*m_Creature, {}, {})) {
@@ -131,9 +131,9 @@ int main() {
 		.m_Dimensions = { 2.0f, 2.0f, 2.0f },
 		.m_ColliderInfo {
 			.m_LocalPosition = {},
-			.m_Type = Collider::Type::Cylinder,
-			.u_Collider {
-				.m_Cylinder { .m_Radius = 1, .m_Height = 2, },
+			.m_Type = Collider::Type::Fence,
+			.u_TypeInfo {
+				.m_FenceInfo { .m_Dimensions = { 2, 2, 2 }, .m_YRotation = 0, },
 			}
 		},
 	};
