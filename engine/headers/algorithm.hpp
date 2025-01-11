@@ -31,15 +31,15 @@ namespace engine {
 	}
 
 	template<typename T>
-	inline const T& Max(T a, T b) {
+	inline T Max(T a, T b) {
 		return a > b ? a : b;
 	}
 
 	template<typename T>
-	inline const T& Min(T a, T b) {
+	inline T Min(T a, T b) {
 		return a < b ? a : b;
 	}
-
+	
 	template<typename T, typename Iter, typename ConstIter>
 	inline Iter Find(const T& val, Iter first, ConstIter end) {
 		for (; first != end;) {
