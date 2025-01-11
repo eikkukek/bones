@@ -18,7 +18,7 @@ public:
 		return Vec3(
 				Input::ReadKeyValue(Key::D) - Input::ReadKeyValue(Key::A),
 				0.0f,
-				Input::ReadKeyValue(Key::W) - Input::ReadKeyValue(Key::S)) * 0.001f;
+				Input::ReadKeyValue(Key::W) - Input::ReadKeyValue(Key::S)) * (5 * Time::DeltaTime());
 	}
 
 	static void MoveCallback(const engine::Creature& creature, const engine::Vec3& position, const engine::Vec3& deltaPosition) {
@@ -179,6 +179,7 @@ int main() {
 	//NPC npc(world, playerMesh);
 
 	while (engine.Loop()) {
+		float deltaTime = Time::DeltaTime();
 		uiWindow->SetPosition(UI.m_CursorPosition);
 	}
 
