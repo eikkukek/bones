@@ -2681,7 +2681,82 @@ void main() {
 				return false;
 			}
 
-			static bool BoxToStaticBoxCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
+			static bool PoleToStaticFenceCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
+				const Pole& aPole = a.u_Collider.m_Pole;
+				const Fence& bFence = b.u_Collider.m_Fence;
+				const Vec3 aPos = a.m_BodyPosition + a.m_LocalPosition;
+				const Vec3 bPos = b.m_BodyPosition + b.m_LocalPosition;
+				float yMaxs[2] {
+					aPos.y + aPole.m_HalfHeight,
+					bPos.y + bFence.m_HalfDimensions.y
+				};
+				float yMins[2] {
+					aPos.y - aPole.m_HalfHeight,
+					bPos.y - bFence.m_HalfDimensions.y,
+				};
+				if (yMaxs[0] > yMins[1] && yMaxs[1] > yMins[0]) {
+					Vec2 aPos2D(aPos.x, aPos.z);
+					Vec2 bPos2D(bPos.x, bPos.z);
+					Vec2 aPosRel = aPos2D - bPos2D;
+					Rect<float> boundingRect = {
+						.m_Min {
+							-bFence.m_HalfDimensions.x,
+							-bFence.m_HalfDimensions.z
+						},
+						.m_Max {
+							bFence.m_HalfDimensions.x,
+							bFence.m_HalfDimensions.y,
+						},
+					};
+					Vec3 aPosRelRotated = (Vec3)aPosRel * bFence.m_RotationMatrix;
+					if (boundingRect.IsPointInside(aPosRel)) {
+						float val = aPosRelRotated.y - boundingRect.m_Min.y;
+						float min = val;
+						bool xClosest = false;
+						val = aPosRelRotated.y - boundingRect.m_Max.y;
+						if (abs(val) < abs(min)) {
+							min = val;
+						}
+						val = aPosRelRotated.x - boundingRect.m_Min.x;
+						if (abs(val) < abs(min)) {
+							min = val;
+							xClosest = true;
+						}
+						val = aPosRelRotated.x - boundingRect.m_Max.x;
+						if (abs(val) < abs(min)) {
+							min = val;
+							xClosest = true;
+						}
+						Mat3 invRot = Quaternion::AxisRotation(Vec3(0.0f, 0.0f, 1.0f), -bFence.m_YRotation).AsMat4();
+						if (xClosest) {
+							int sign = min < 0.0f ? -1 : 1;
+							Vec2 pushBack2D = Vec3(sign * (abs(min) + aPole.m_Radius), 0.0f, 0.0f) * invRot;
+							outAPushBack = Vec3(-pushBack2D.x, 0.0f, -pushBack2D.y);
+						}
+						else {
+							int sign = min < 0.0f ? -1 : 1;
+							Vec2 pushBack2D = Vec3(0.0f, sign * (abs(min) + aPole.m_Radius), 0.0f) * invRot;
+							outAPushBack = Vec3(-pushBack2D.x, 0.0f, -pushBack2D.y);
+						}
+						return true;
+					}
+					else {
+						Vec2 aClampedPos(
+							Clamp(aPosRelRotated.x, boundingRect.m_Min.x, boundingRect.m_Max.x), 
+							Clamp(aPosRelRotated.y, boundingRect.m_Min.y, boundingRect.m_Max.y));
+						Vec2 diff = aClampedPos - aPosRelRotated;
+						float diffSqrMag = diff.SqrMagnitude();
+						if (diffSqrMag < aPole.m_Radius * aPole.m_Radius) {
+							float diffMag = sqrt(diffSqrMag);
+							outAPushBack = Vec3(diff.x / diffMag, 0.0f, diff.y / diffMag) * (aPole.m_Radius - diffMag);
+							return true;
+						}
+					}
+				}
+				return false;
+			}
+
+			static bool FenceToStaticFenceCollides(const Collider& a, const Vec3& aVelocity, const Collider& b, Vec3& outAPushBack) {
 
 				const Fence& aFence = a.u_Collider.m_Fence;
 				const Fence& bFence = b.u_Collider.m_Fence;
@@ -2739,7 +2814,7 @@ void main() {
 						bSides[1] * -1, // RY * - 1
 					};
 
-					Vec2 bCorners[4] {
+					const Vec2 bCorners[4] {
 						bPos2D + bSides[0] + bSides[1],
 						bPos2D + bSides[0] + bSides[3],
 						bPos2D + bSides[2] + bSides[3],
@@ -2752,20 +2827,20 @@ void main() {
 						return line.m_Origin + (line.m_Direction * dot);
 					};
 
-					static constexpr auto get_signed_distance = [](Vec2 rectCenter, const Line& line, Vec2 corner) -> float {
+					static constexpr auto get_signed_distance = [](Vec2 rectCenter, const Line& line, Vec2 corner, Vec2& outRel) -> float {
 						const Vec2 projected = project(corner, line);
-						const Vec2 rel = projected - rectCenter;
-						const int sign = (rel.x * line.m_Direction.x) + (rel.y * line.m_Direction.y) > 0;
-						return rel.Magnitude() * (sign ? 1 : -1);
+						outRel = projected - rectCenter;
+						const int sign = (outRel.x * line.m_Direction.x) + (outRel.y * line.m_Direction.y) > 0;
+						return outRel.Magnitude() * (sign ? 1 : -1);
 					};
 
 					static constexpr auto are_projections_hit = [](const Vec3& rectHalfDimensions, Vec2 minSignedDistances, Vec2 maxSignedDistances) -> bool {
-						return (minSignedDistances.x < 0 & maxSignedDistances.x > 0 ||
-								abs(minSignedDistances.x) < rectHalfDimensions.x ||
-								abs(maxSignedDistances.x) < rectHalfDimensions.x) &&
-								(minSignedDistances.y < 0 & maxSignedDistances.y > 0 ||
-								abs(minSignedDistances.y) < rectHalfDimensions.z ||
-								abs(maxSignedDistances.y) < rectHalfDimensions.z);
+						return (minSignedDistances.x < 0 && maxSignedDistances.x > 0 ||
+							abs(minSignedDistances.x) < rectHalfDimensions.x ||
+							abs(maxSignedDistances.x) < rectHalfDimensions.x) &&
+							(minSignedDistances.y < 0 && maxSignedDistances.y > 0 ||
+							abs(minSignedDistances.y) < rectHalfDimensions.z ||
+							abs(maxSignedDistances.y) < rectHalfDimensions.z);
 					};
 
 					static constexpr float float_max = std::numeric_limits<float>::max();
@@ -2774,12 +2849,27 @@ void main() {
 					Vec2 minSignedDistances(float_max, float_max);
 					Vec2 maxSignedDistances(float_min, float_min);
 
+					Vec2 relMaxX, relMinX, relMaxY, relMinY;
+
 					for (size_t i = 0; i < 4; i++) {
-						const Vec2 signedDistances(get_signed_distance(aPos2D, aLines[0], bCorners[i]), get_signed_distance(aPos2D, aLines[1], bCorners[i]));
+						Vec2 thisRelX, thisRelY;
+						const Vec2 signedDistances(get_signed_distance(aPos2D, aLines[0], bCorners[i], thisRelX), get_signed_distance(aPos2D, aLines[1], bCorners[i], thisRelY));
 						minSignedDistances.x = Min(signedDistances.x, minSignedDistances.x);
 						minSignedDistances.y = Min(signedDistances.y, minSignedDistances.y);
 						maxSignedDistances.x = Max(signedDistances.x, maxSignedDistances.x);
 						maxSignedDistances.y = Max(signedDistances.y, maxSignedDistances.y);
+						if (signedDistances.x == maxSignedDistances.x) {
+							relMaxX = thisRelX;
+						}
+						if (signedDistances.x == minSignedDistances.x) {
+							relMinX = thisRelX;
+						}
+						if (signedDistances.y == maxSignedDistances.y) {
+							relMaxY = thisRelY;
+						}
+						if (signedDistances.y == minSignedDistances.y) {
+							relMinY = thisRelY;
+						}
 					}
 
 					if (!are_projections_hit(aFence.m_HalfDimensions, minSignedDistances, maxSignedDistances)) {
@@ -2790,7 +2880,8 @@ void main() {
 					maxSignedDistances = { float_min, float_min };
 
 					for (size_t i = 0; i < 4; i++) {
-						const Vec2 signedDistances(get_signed_distance(bPos2D, bLines[0], aCorners[i]), get_signed_distance(bPos2D, bLines[1], aCorners[i]));
+						Vec2 thisRelX, thisRelY;
+						const Vec2 signedDistances(get_signed_distance(bPos2D, bLines[0], aCorners[i], thisRelX), get_signed_distance(bPos2D, bLines[1], aCorners[i], thisRelY));
 						minSignedDistances.x = Min(signedDistances.x, minSignedDistances.x);
 						minSignedDistances.y = Min(signedDistances.y, minSignedDistances.y);
 						maxSignedDistances.x = Max(signedDistances.x, maxSignedDistances.x);
@@ -2801,22 +2892,61 @@ void main() {
 						return false;
 					}
 
-					fmt::print("colliding!");
+					static constexpr auto vec_sign = [](Vec2 vec, const Line& line) -> int {
+						return (vec.x * line.m_Direction.x) + (vec.y * line.m_Direction.y) > 0 ? 1 : -1;
+					};
+
+					Vec2 min = { float_max, float_max };
+
+					Vec2 vec1 = relMaxX.SqrMagnitude() > relMinX.SqrMagnitude() ? relMinX : relMaxX;
+					int sign = vec_sign(vec1, aLines[0]);
+					Vec2 vec2 = aLines[0].m_Direction * aFence.m_HalfDimensions.x;
+					Vec2 vec3 = (vec2 - vec1 * sign) * sign;
+
+					if (vec1.SqrMagnitude() < vec2.SqrMagnitude()) {
+						min = vec3;
+					}
+
+					vec1 = relMaxY.SqrMagnitude() > relMinY.SqrMagnitude() ? relMinY : relMaxY;
+					sign = vec_sign(vec1, aLines[1]);
+					vec2 = aLines[1].m_Direction * aFence.m_HalfDimensions.z;
+					Vec2 vec4 = (vec2 - vec1 * sign) * sign;
+
+					float threshold = aVelocity.SqrMagnitude() / 2;
+
+					if (vec1.SqrMagnitude() < vec2.SqrMagnitude()) {
+						min = Min(min, vec4);
+						if (min.SqrMagnitude() < threshold) {
+							if (vec4.SqrMagnitude() < threshold) {
+								min = vec3;
+							}
+							else {
+								min = vec4;
+							}
+						}
+					}
+
+					outAPushBack = Vec3(min.x, 0.0f, min.y);
+
+					//fmt::print("colliding!");
 
 					return true;
 				}
 				return false;
 			}
 
-			static bool ColliderToStaticColliderCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
+			static bool ColliderToStaticColliderCollides(const Collider& a, const Vec3& aVelocity, const Collider& b, Vec3& outAPushBack) {
 				if (a.m_Type == Type::Fence) {
 					if (b.m_Type == Type::Fence) {
-						BoxToStaticBoxCollides(a, b, outAPushBack);
+						return FenceToStaticFenceCollides(a, aVelocity, b, outAPushBack);
 					}
 				}
 				if (a.m_Type == Type::Pole) {
+					if (b.m_Type == Type::Fence) {
+						return PoleToStaticFenceCollides(a, b, outAPushBack);
+					}
 					if (b.m_Type == Type::Pole) {
-						PoleToStaticPoleCollides(a, b, outAPushBack);
+						return PoleToStaticPoleCollides(a, b, outAPushBack);
 					}
 				}
 				return false;
@@ -2904,8 +3034,8 @@ void main() {
 
 			Obstacle(Obstacle&& other) noexcept = default;
 
-			bool Collides(const Collider& collider, const Vec3& colliderBodyPos, Vec3& outColliderPushBack) {
-				return Collider::ColliderToStaticColliderCollides(collider, m_Collider, outColliderPushBack);
+			bool Collides(const Collider& collider, const Vec3& colliderVelocity, Vec3& outColliderPushBack) const {
+				return Collider::ColliderToStaticColliderCollides(collider, colliderVelocity, m_Collider, outColliderPushBack);
 			}
 		};
 
@@ -3007,7 +3137,7 @@ void main() {
 				for (const Reference<Obstacle>& obstacle : m_Chunk->m_Obstacles) {
 					assert(obstacle.m_Val);
 					Vec3 pushBack;
-					if (obstacle.m_Val->Collides(m_Collider, m_Position, pushBack)) {
+					if (obstacle.m_Val->Collides(m_Collider, deltaPos, pushBack)) {
 						Vec2_T<bool> deltaDirSameAsPushBack = { 
 							deltaPos.x > 0 && pushBack.x > 0 || deltaPos.x < 0 && pushBack.x < 0,
 							deltaPos.z > 0 && pushBack.z > 0 || deltaPos.z < 0 && pushBack.z < 0,
