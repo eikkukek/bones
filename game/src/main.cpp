@@ -39,8 +39,8 @@ public:
 			m_Creature(world.AddCreature({ 3.0f, 0.0f, 0.0f }, 
 				{ 
 					.m_LocalPosition {}, 
-					.m_Type { engine::Collider::Type::Fence },
-					.u_TypeInfo { .m_FenceInfo { .m_Dimensions { 2, 2, 2 }, .m_YRotation = 0, } },
+					.m_Type { engine::Collider::Type::Pole },
+					.u_TypeInfo { .m_PoleInfo { .m_Radius = 1, .m_Height = 2 } },
 				}
 			)), 
 			m_Mesh(mesh), m_RenderData(world.AddRenderData(*m_Creature, {}, {})) {
@@ -127,13 +127,13 @@ int main() {
 
 	Engine::ObstacleInfo obstacleInfo {
 		.m_Position = {},
-		.m_Rotation = Quaternion::AxisRotation(Vec3(1.0f, 1.0f, 0.0), pi / 4),
+		.m_Rotation = Quaternion::AxisRotation(Vec3(0.0f, 1.0f, 0.0), pi / 4),
 		.m_Dimensions = { 2.0f, 2.0f, 2.0f },
 		.m_ColliderInfo {
 			.m_LocalPosition = {},
 			.m_Type = Collider::Type::Fence,
 			.u_TypeInfo {
-				.m_FenceInfo { .m_Dimensions = { 2, 2, 2 }, .m_YRotation = 0, },
+				.m_FenceInfo { .m_Dimensions { 4, 4, 4 }, .m_YRotation = pi / 4 },
 			}
 		},
 	};
@@ -168,6 +168,9 @@ int main() {
 	const Engine::DynamicArray<Engine::Obstacle>& obstacles = world.GetObstacles();
 
 	Mat4 obstacleTransform = obstacleInfo.m_Rotation.AsMat4();
+	for (size_t i = 0; i < 3; i++) {
+		obstacleTransform[i] *= 2;
+	}
 
 	world.AddRenderData(obstacles[0], obstacleTransform, cubeMesh.GetMeshData());
 	world.AddDebugRenderData(obstacles[0], obstacleTransform, Vec4(0.0f, 0.8f, 0.3f, 1.0f), cubeMesh.GetMeshData());
