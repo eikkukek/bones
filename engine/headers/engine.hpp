@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <utility>
+#include <chrono>
 
 namespace engine {
 
@@ -1295,6 +1296,33 @@ namespace engine {
 
 			static bool WasMouseButtonHeld(MouseButton button) {
 				return s_HeldMouseButtons[static_cast<size_t>(button)];
+			}
+		};
+
+		class Time {
+
+			friend class Engine;
+
+		private:
+			
+			using steady_clock = std::chrono::steady_clock;
+			using microseconds = std::chrono::microseconds;
+
+			static inline steady_clock::time_point s_FrameStartTime{};
+			static inline float s_DeltaTime = 0.0f;
+
+			static void BeginFrame() {
+				s_FrameStartTime = steady_clock::now();
+			}
+
+			static void EndFrame() {
+				s_DeltaTime = std::chrono::duration_cast<microseconds>((steady_clock::now() - s_FrameStartTime)).count() / 1000000.0f;
+			}
+
+		public:
+
+			static float DeltaTime() {
+				return s_DeltaTime;
 			}
 		};
 
@@ -4050,6 +4078,8 @@ void main() {
 
 		bool Loop() {
 
+			Time::BeginFrame();
+
 			glfwPollEvents();
 
 			if (m_Mode & EngineMode_Play) {
@@ -4082,12 +4112,17 @@ void main() {
 
 			Input::ResetInput();
 
-			return !glfwWindowShouldClose(m_Renderer.m_Window);
+			bool closing = glfwWindowShouldClose(m_Renderer.m_Window);
+
+			Time::EndFrame();
+
+			return !closing;
 		}
 	};
 
-	typedef Engine::UI UI;
+	typedef Engine::Time Time;
 	typedef Engine::Input Input;
+	typedef Engine::UI UI;
 	typedef Engine::StaticMesh StaticMesh;
 	typedef Engine::StaticTexture StaticTexture;
 	typedef Engine::MeshData MeshData;
