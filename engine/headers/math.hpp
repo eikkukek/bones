@@ -41,6 +41,7 @@ namespace engine {
 		}
 
 		constexpr inline Vec2_T operator*(T scalar) const noexcept { return Vec2_T(x * scalar, y * scalar); }
+		constexpr inline Vec2_T& operator*=(T scalar) noexcept { x *= scalar; y *= scalar; return *this; }
 		constexpr inline Vec2_T operator/(T scalar) const noexcept { return Vec2_T(x / scalar, y / scalar); }
 		constexpr inline Vec2_T operator-() const noexcept { return Vec2_T(-x, -y); }
 		constexpr inline Vec2_T operator+(Vec2_T other) const noexcept { return Vec2_T(x + other.x, y + other.y); }
@@ -51,11 +52,22 @@ namespace engine {
 		constexpr inline bool operator==(const Vec2_T& other) const noexcept = default;
 	};
 
+	template<typename T>
+	Vec2_T<T> Min(Vec2_T<T> a, Vec2_T<T> b) {
+		if (a.SqrMagnitude() < b.SqrMagnitude()) {
+			return a;
+		}
+		return b;
+	}
+
 	typedef Vec2_T<float> Vec2;
 	typedef Vec2_T<int> IntVec2;
 
 	template<typename T>
 	struct Mat3_T;
+
+	template<typename T>
+	struct Vec4_T;
 
 	template<typename T>
 	struct Vec3_T {
@@ -67,14 +79,29 @@ namespace engine {
 			return up;
 		}
 
+		static constexpr const Vec3_T& Down() {
+			static constexpr Vec3_T down = Vec3_T(Cast(0), Cast(-1), Cast(0));
+			return down;
+		}
+
 		static constexpr const Vec3_T& Right() {
 			static constexpr Vec3_T right = Vec3_T(Cast(1), Cast(0), Cast(0));
 			return right;
 		}
 
+		static constexpr const Vec3_T& Left() {
+			static constexpr Vec3_T left = Vec3_T(Cast(-1), Cast(0), Cast(0));
+			return left;
+		}
+
 		static constexpr const Vec3_T& Forward() {
 			static constexpr Vec3_T forward = Vec3_T(Cast(0), Cast(0), Cast(1));
 			return forward;
+		}
+
+		static constexpr const Vec3_T& Backward() {
+			static constexpr Vec3_T backward = Vec3_T(Cast(0), Cast(0), Cast(-1));
+			return backward;
 		}
 
 		T x, y, z;
@@ -83,8 +110,7 @@ namespace engine {
 
 		constexpr inline Vec3_T(const Vec2_T<T>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(0)) {}
 
-		template<typename Vec>
-		constexpr inline Vec3_T(const Vec& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(other.z)) {}
+		constexpr inline Vec3_T(const Vec4_T<T>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(other.z)) {}
 
 		static constexpr inline T Dot(const Vec3_T& a, const Vec3_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
@@ -121,8 +147,6 @@ namespace engine {
 		constexpr inline Vec3_T& operator-=(const Vec3_T& other) noexcept { x -= other.x; y -= other.y; z -= other.z; return *this; }
 		constexpr inline Vec3_T& operator*=(T scalar) noexcept { x *= scalar; y *= scalar; z *= scalar; return *this; }
 
-		constexpr inline T& operator[](size_t index) const { assert(index < size); return ((T*)this)[index]; }
-
 		constexpr inline Vec3_T operator*(const Mat3_T<T>& other) const {
 			return Vec3_T<T>(
 				x * other[0].x + y * other[0].y + z * other[0].z,
@@ -130,6 +154,8 @@ namespace engine {
 				x * other[2].x + y * other[2].y + z * other[2].z
 			);
 		}
+
+		constexpr inline T& operator[](size_t index) const { assert(index < size); return ((T*)this)[index]; }
 
 		constexpr inline bool operator==(const Vec3_T& other) const noexcept = default;
 	};
