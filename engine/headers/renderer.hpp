@@ -73,12 +73,6 @@ namespace engine {
 
 		typedef void (*CriticalErrorCallback)(const Renderer* renderer, ErrorOrigin origin, const char* err, VkResult vkErr);
 
-		enum class Queue {
-			Graphics = 0,
-			Transfer = 1,
-			Present = 2,
-		};
-
 		struct Stack {
 
 			template<typename T>
@@ -567,6 +561,13 @@ namespace engine {
 			}
 		};
 
+		enum class Queue {
+			Graphics = 0,
+			Transfer = 1,
+			Present = 2,
+			Compute = 3,
+		};
+
 		enum CommandBufferFlag {
 			CommandBufferFlag_SubmitCallback = 1,
 			CommandBufferFlag_FreeAfterSubmit = 2,
@@ -944,6 +945,17 @@ namespace engine {
 				.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
 			};
 
+			static constexpr VkPipelineColorBlendAttachmentState color_blend_attachment_state_no_blend {
+				.blendEnable = VK_FALSE,
+				.srcColorBlendFactor = {},
+				.dstColorBlendFactor = {},
+				.colorBlendOp = {},
+				.srcAlphaBlendFactor = {},
+				.dstAlphaBlendFactor = {},
+				.alphaBlendOp = {},
+				.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+			};
+
 			static constexpr VkPipelineColorBlendStateCreateInfo color_blend_state {
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
 				.pNext = nullptr,
@@ -1027,6 +1039,7 @@ namespace engine {
 
 		CommandBufferFreeList m_TransferCommandBufferFreeList;
 		CommandBufferFreeList m_GraphicsCommandBufferFreeList;
+		CommandBufferFreeList m_ComputeCommandBufferFreeList;
 
 		uint32_t m_MaxFragmentOutPutAttachments;
 		VkSampleCountFlags m_ColorMsaaSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -1034,20 +1047,20 @@ namespace engine {
 		VkSurfaceFormatKHR m_SwapchainSurfaceFormat{};
 		VkFormat m_DepthOnlyFormat{};
 
-		Stack::Array<Fence> m_InFlightEarlyGraphicsFences { 0, nullptr };
-		Stack::Array<Fence> m_InFlightTransferFences { 0, nullptr };
-		Stack::Array<Fence> m_InFlightGraphicsFences { 0, nullptr };
 		Stack::Array<VkSemaphore> m_EarlyGraphicsSignalSemaphores { 0, nullptr };
 		Stack::Array<VkCommandBuffer> m_RenderCommandBuffers { 0, nullptr };
 		Stack::Array<VkSemaphore> m_RenderFinishedSemaphores { 0, nullptr };
 		Stack::Array<VkSemaphore> m_RenderWaitSemaphores { 0, nullptr };
+		Stack::Array<VkSemaphore> m_RenderComputeFinishedSemaphores { 0, nullptr };
+		Stack::Array<Fence> m_InFlightEarlyGraphicsFences { 0, nullptr };
+		Stack::Array<Fence> m_InFlightTransferFences { 0, nullptr };
+		Stack::Array<Fence> m_InFlightGraphicsFences { 0, nullptr };
+		Stack::Array<Fence> m_InFlightRenderComputeFences { 0, nullptr };
 
 		Stack::Array<VkImageView> m_SwapchainImageViews { 0, nullptr };
-		std::mutex m_GraphicsQueueMutex{};
 		VkQueue m_GraphicsQueue = VK_NULL_HANDLE;
-		std::mutex m_TransferQueueMutex{};
 		VkQueue m_TransferQueue = VK_NULL_HANDLE;
-
+		VkQueue m_ComputeQueue = VK_NULL_HANDLE;
 		VkQueue m_PresentQueue = VK_NULL_HANDLE;
 		VkExtent2D m_SwapchainExtent = { 0, 0 };
 
@@ -1057,6 +1070,7 @@ namespace engine {
 		uint32_t m_GraphicsQueueFamilyIndex = 0;
 		uint32_t m_TransferQueueFamilyIndex = 0;
 		uint32_t m_PresentQueueFamilyIndex = 0;
+		uint32_t m_ComputeQueueFamilyIndex = 0;
 
 		GLFWwindow* m_Window = nullptr;
 		VkSwapchainKHR m_Swapchain = VK_NULL_HANDLE;
@@ -1117,6 +1131,7 @@ namespace engine {
 				m_TransferCommandBufferQueue(),
 				m_GraphicsCommandBufferFreeList(*this),
 				m_TransferCommandBufferFreeList(*this),
+				m_ComputeCommandBufferFreeList(*this),
 				m_MainThreadID(std::this_thread::get_id()),
 				m_CriticalErrorCallback(criticalErrorCallback), m_SwapchainCreateCallback(swapchainCreateCallback) {
 
@@ -1196,7 +1211,7 @@ namespace engine {
 
 			int bestGpuScore = 0;
 			VkPhysicalDevice bestGpu = VK_NULL_HANDLE;
-			uint32_t bestGpuQueueFamilyIndices[3];
+			uint32_t bestGpuQueueFamilyIndices[4];
 			VkSampleCountFlags bestGpuColorSamples = 1;
 			VkSampleCountFlags bestGpuDepthSamples = 1;
 
@@ -1237,21 +1252,33 @@ namespace engine {
 				vkGetPhysicalDeviceQueueFamilyProperties(gpu, &queueFamilyCount, nullptr);
 				Stack::Array<VkQueueFamilyProperties> queueFamilies = m_SingleThreadStack.Allocate<VkQueueFamilyProperties>(queueFamilyCount);
 				vkGetPhysicalDeviceQueueFamilyProperties(gpu, &queueFamilyCount, queueFamilies.m_Data);
-				uint32_t queueFamilyIndices[3]; 
+				uint32_t queueFamilyIndices[4]; 
 				bool graphicsQueueFound = false;
 				bool transferQueueFound = false;
 				bool presentQueueFound = false;
+				bool computeQueueFound = false;
+				bool seperateComputeQueueFound = false;
 				uint32_t queueFamilyIndex = 0;
 				for (VkQueueFamilyProperties& queueFamily : queueFamilies) {
 					if (!graphicsQueueFound && queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-						queueFamilyIndices[0] = queueFamilyIndex++;
+						queueFamilyIndices[0] = queueFamilyIndex;
 						graphicsQueueFound = true;
+						if (!seperateComputeQueueFound && queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT) {
+							queueFamilyIndices[3] = queueFamilyIndex;
+							computeQueueFound = true;
+						}
+						++queueFamilyIndex;
 						continue;
 					}
 					if (!transferQueueFound && queueFamily.queueFlags & VK_QUEUE_TRANSFER_BIT) {
 						queueFamilyIndices[1] = queueFamilyIndex++;
 						transferQueueFound = true;
 						continue;
+					}
+					if (!seperateComputeQueueFound && queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT) {
+						queueFamilyIndices[3] = queueFamilyIndex;
+						seperateComputeQueueFound = true;
+						computeQueueFound = true;
 					}
 					if (!presentQueueFound) {
 						VkBool32 presentSupported;
@@ -1261,12 +1288,15 @@ namespace engine {
 							presentQueueFound = true;
 						}
 					}
-					if (graphicsQueueFound && transferQueueFound && presentQueueFound) {
+					if (graphicsQueueFound && transferQueueFound && presentQueueFound && seperateComputeQueueFound) {
 						break;
 					}
 					++queueFamilyIndex;
 				}
 				m_SingleThreadStack.Deallocate<VkQueueFamilyProperties>(queueFamilies.m_Size);
+				if (!(graphicsQueueFound && transferQueueFound && presentQueueFound && computeQueueFound)) {
+					continue;
+				}
 				int score = 10;
 				VkPhysicalDeviceProperties properties;
 				vkGetPhysicalDeviceProperties(gpu, &properties);
@@ -1280,6 +1310,7 @@ namespace engine {
 					bestGpuQueueFamilyIndices[0] = queueFamilyIndices[0];
 					bestGpuQueueFamilyIndices[1] = queueFamilyIndices[1];
 					bestGpuQueueFamilyIndices[2] = queueFamilyIndices[2];
+					bestGpuQueueFamilyIndices[3] = queueFamilyIndices[3];
 					bestGpuColorSamples = properties.limits.sampledImageColorSampleCounts;
 					bestGpuDepthSamples = properties.limits.sampledImageColorSampleCounts;
 				}
@@ -1295,6 +1326,7 @@ namespace engine {
 			m_GraphicsQueueFamilyIndex = bestGpuQueueFamilyIndices[0];
 			m_TransferQueueFamilyIndex = bestGpuQueueFamilyIndices[1];
 			m_PresentQueueFamilyIndex = bestGpuQueueFamilyIndices[2];
+			m_ComputeQueueFamilyIndex = bestGpuQueueFamilyIndices[3];
 
 			VkFormat depthOnlyFormatCandidate = VK_FORMAT_D32_SFLOAT;
 			m_DepthOnlyFormat = FindSupportedFormat(1, &depthOnlyFormatCandidate,
@@ -1368,7 +1400,8 @@ namespace engine {
 
 			vkGetDeviceQueue(m_VulkanDevice, m_GraphicsQueueFamilyIndex, 0, &m_GraphicsQueue);
 			vkGetDeviceQueue(m_VulkanDevice, m_TransferQueueFamilyIndex, 0, &m_TransferQueue);
-			vkGetDeviceQueue(m_VulkanDevice, m_PresentQueueFamilyIndex, 0, &m_PresentQueue);	
+			vkGetDeviceQueue(m_VulkanDevice, m_ComputeQueueFamilyIndex, 0, &m_ComputeQueue);
+			vkGetDeviceQueue(m_VulkanDevice, m_PresentQueueFamilyIndex, 0, &m_PresentQueue);
 
 			m_SingleThreadStack.Clear();
 
@@ -1417,9 +1450,11 @@ namespace engine {
 					vkDestroySemaphore(m_VulkanDevice, m_EarlyGraphicsSignalSemaphores[i], m_VulkanAllocationCallbacks);
 					vkDestroySemaphore(m_VulkanDevice, m_RenderFinishedSemaphores[i], m_VulkanAllocationCallbacks);
 					vkDestroySemaphore(m_VulkanDevice, m_RenderWaitSemaphores[i], m_VulkanAllocationCallbacks);
+					vkDestroySemaphore(m_VulkanDevice, m_RenderComputeFinishedSemaphores[i], m_VulkanAllocationCallbacks);
 					vkDestroyFence(m_VulkanDevice, m_InFlightEarlyGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
 					vkDestroyFence(m_VulkanDevice, m_InFlightTransferFences[i].fence, m_VulkanAllocationCallbacks);
 					vkDestroyFence(m_VulkanDevice, m_InFlightGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
+					vkDestroyFence(m_VulkanDevice, m_InFlightRenderComputeFences[i].fence, m_VulkanAllocationCallbacks);
 				}
 				vkDestroySwapchainKHR(m_VulkanDevice, m_Swapchain, m_VulkanAllocationCallbacks);
 				vkDestroyCommandPool(m_VulkanDevice, m_GraphicsCommandPool, m_VulkanAllocationCallbacks);
@@ -1555,9 +1590,11 @@ namespace engine {
 					vkDestroySemaphore(m_VulkanDevice, m_EarlyGraphicsSignalSemaphores[i], m_VulkanAllocationCallbacks);
 					vkDestroySemaphore(m_VulkanDevice, m_RenderFinishedSemaphores[i], m_VulkanAllocationCallbacks);
 					vkDestroySemaphore(m_VulkanDevice, m_RenderWaitSemaphores[i], m_VulkanAllocationCallbacks);
+					vkDestroySemaphore(m_VulkanDevice, m_RenderComputeFinishedSemaphores[i], m_VulkanAllocationCallbacks);
 					vkDestroyFence(m_VulkanDevice, m_InFlightEarlyGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
 					vkDestroyFence(m_VulkanDevice, m_InFlightTransferFences[i].fence, m_VulkanAllocationCallbacks);
 					vkDestroyFence(m_VulkanDevice, m_InFlightGraphicsFences[i].fence, m_VulkanAllocationCallbacks);
+					vkDestroyFence(m_VulkanDevice, m_InFlightRenderComputeFences[i].fence, m_VulkanAllocationCallbacks);
 					for (const CommandBufferSubmitCallback& callback : m_CommandBufferSubmitCallbacks[i]) {
 						callback.Callback(*this);
 					}
@@ -1568,9 +1605,11 @@ namespace engine {
 					!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_EarlyGraphicsSignalSemaphores) ||
 					!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_RenderFinishedSemaphores) ||
 					!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_RenderWaitSemaphores) ||
+					!m_InFlightRenderStack.Allocate<VkSemaphore>(m_FramesInFlight, &m_RenderComputeFinishedSemaphores) ||
 					!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightEarlyGraphicsFences) ||
 					!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightTransferFences) ||
 					!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightGraphicsFences) ||
+					!m_InFlightRenderStack.Allocate<Fence>(m_FramesInFlight, &m_InFlightRenderComputeFences) ||
 					!m_InFlightRenderStack.Allocate<VkCommandBuffer>(m_FramesInFlight, &m_RenderCommandBuffers) ||
 					!m_InFlightRenderStack.Allocate<OneTypeStack<CommandBufferSubmitCallback, max_command_buffer_submit_callbacks>>(
 						m_FramesInFlight, &m_CommandBufferSubmitCallbacks) ||
@@ -1637,12 +1676,16 @@ namespace engine {
 						"failed to create render finished semaphore (function vkCreateSemaphore in function CreateSwapchain)!");
 					VkAssert(vkCreateSemaphore(m_VulkanDevice, &semaphoreInfo, m_VulkanAllocationCallbacks, &m_RenderWaitSemaphores[i]), 
 						"failed to create render wait semaphore (function vkCreateSemaphore in function CreateSwapchain)!");
+					VkAssert(vkCreateSemaphore(m_VulkanDevice, &semaphoreInfo, m_VulkanAllocationCallbacks, &m_RenderComputeFinishedSemaphores[i]), 
+						"failed to create render wait semaphore (function vkCreateSemaphore in function CreateSwapchain)!");
 					VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, 
 						&m_InFlightEarlyGraphicsFences[i].fence),
 						"failed to create in flight early graphics fence (function vkCreateFence in function CreateSwapchain)!");
 					VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, &m_InFlightTransferFences[i].fence), 
 						"failed to create in flight transfer fence (function vkCreateFence in function CreateSwapchain)!");
 					VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, &m_InFlightGraphicsFences[i].fence), 
+						"failed to create in flight graphis fence (function vkCreateFence in function CreateSwapchain)!");
+					VkAssert(vkCreateFence(m_VulkanDevice, &fenceInfo, m_VulkanAllocationCallbacks, &m_InFlightRenderComputeFences[i].fence), 
 						"failed to create in flight graphis fence (function vkCreateFence in function CreateSwapchain)!");
 					VkSubmitInfo dummySubmitInfo {
 						.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -1652,9 +1695,11 @@ namespace engine {
 					vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightEarlyGraphicsFences[i].fence);
 					vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightTransferFences[i].fence);
 					vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightGraphicsFences[i].fence);
+					vkQueueSubmit(m_GraphicsQueue, 1, &dummySubmitInfo, m_InFlightRenderComputeFences[i].fence);
 					m_InFlightEarlyGraphicsFences[i].state = Fence::State::Resettable;
 					m_InFlightTransferFences[i].state = Fence::State::Resettable;
 					m_InFlightGraphicsFences[i].state = Fence::State::Resettable;
+					m_InFlightRenderComputeFences[i].state = Fence::State::Resettable;
 				}
 				m_CurrentFrame = 0;
 			}
@@ -1662,7 +1707,7 @@ namespace engine {
 
 				vkGetSwapchainImagesKHR(m_VulkanDevice, m_Swapchain, &m_FramesInFlight, m_SwapchainImages.m_Data);
 
-				Stack::Array<VkFence> resetFences = m_SingleThreadStack.Allocate<VkFence>(m_FramesInFlight * 3);
+				Stack::Array<VkFence> resetFences = m_SingleThreadStack.Allocate<VkFence>(m_FramesInFlight * 4);
 				uint32_t resetFenceCount = 0;
 
 				for (size_t i = 0; i < m_FramesInFlight; i++) {
@@ -1701,6 +1746,10 @@ namespace engine {
 					if (m_InFlightEarlyGraphicsFences[i].state == Fence::State::Resettable) {
 						resetFences[resetFenceCount++] = m_InFlightEarlyGraphicsFences[i].fence;
 						m_InFlightEarlyGraphicsFences[i].state = Fence::State::None;
+					}
+					if (m_InFlightRenderComputeFences[i].state == Fence::State::Resettable) {
+						resetFences[resetFenceCount++] = m_InFlightRenderComputeFences[i].fence;
+						m_InFlightRenderComputeFences[i].state = Fence::State::None;
 					}
 				}
 				vkResetFences(m_VulkanDevice, resetFenceCount, resetFences.m_Data);
@@ -2113,7 +2162,7 @@ namespace engine {
 				return false;
 			}
 
-			VkFence waitFences[3]{};
+			VkFence waitFences[4]{};
 			uint32_t waitFenceCount{};
 
 			if (m_InFlightEarlyGraphicsFences[m_CurrentFrame].state == Fence::State::Resettable) {
@@ -2128,6 +2177,10 @@ namespace engine {
 				waitFences[waitFenceCount++] = m_InFlightGraphicsFences[m_CurrentFrame].fence;
 			}
 
+			if (m_InFlightRenderComputeFences[m_CurrentFrame].state == Fence::State::Resettable) {
+				waitFences[waitFenceCount++] = m_InFlightRenderComputeFences[m_CurrentFrame].fence;
+			}
+
 			if (waitFenceCount) {
 				if (!VkCheck(vkWaitForFences(m_VulkanDevice, waitFenceCount, waitFences, VK_TRUE, frame_timeout), 
 						"failed to wait for in flight fences (function vkWaitForFences in function BeginFrame)!")) {
@@ -2139,6 +2192,7 @@ namespace engine {
 			m_InFlightEarlyGraphicsFences[m_CurrentFrame].state = Fence::State::None;
 			m_InFlightTransferFences[m_CurrentFrame].state = Fence::State::None;
 			m_InFlightGraphicsFences[m_CurrentFrame].state = Fence::State::None;
+			m_InFlightRenderComputeFences[m_CurrentFrame].state = Fence::State::None;
 
 			for (const CommandBufferSubmitCallback& callback : m_CommandBufferSubmitCallbacks[m_CurrentFrame]) {
 				callback.Callback(*this);
@@ -2318,7 +2372,7 @@ namespace engine {
 			return true;
 		}
 
-		void EndFrame() {
+		void EndFrame(uint32_t renderWaitComputeCommandBufferCount, CommandBuffer<Queue::Compute>* renderWaitComputeCommandBuffers) {
 
 			vkEndCommandBuffer(m_RenderCommandBuffers[m_CurrentFrame]);
 
@@ -2399,13 +2453,58 @@ namespace engine {
 				return;
 			}
 
-			m_InFlightGraphicsFences[m_CurrentFrame].state = Fence::State::Resettable;	
+			m_InFlightGraphicsFences[m_CurrentFrame].state = Fence::State::Resettable;
+
+			VkPipelineStageFlags computeWaitStages[1] { VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT };
+
+			if (renderWaitComputeCommandBufferCount) {
+				Stack::Array<VkCommandBuffer> commandBuffers = m_SingleThreadStack.Allocate<VkCommandBuffer>(renderWaitComputeCommandBufferCount);
+				for (uint32_t i = 0; i < renderWaitComputeCommandBufferCount; i++) {
+					CommandBuffer<Queue::Compute>& commandBuffer = renderWaitComputeCommandBuffers[i];
+					commandBuffers[i] = commandBuffer.m_CommandBuffer;
+					if (commandBuffer.m_Flags & CommandBufferFlag_FreeAfterSubmit) {
+						if (commandBuffer.m_Flags & CommandBufferFlag_FreeAfterSubmit) {
+							if (commandBuffer.m_ThreadID == m_MainThreadID) {
+								m_ComputeCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
+							}
+							else {
+								PrintWarning("multithreaded compute command buffers not submitted yet!");
+							}
+						}
+						if (commandBuffer.m_Flags & CommandBufferFlag_SubmitCallback) {
+							m_CommandBufferSubmitCallbacks[m_CurrentFrame].New(commandBuffer.m_SubmitCallback);
+						}
+					}
+				}
+
+				VkSubmitInfo computeSubmit {
+					.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+					.pNext = nullptr,
+					.waitSemaphoreCount = 1,
+					.pWaitSemaphores = &m_RenderFinishedSemaphores[m_CurrentFrame],
+					.pWaitDstStageMask = computeWaitStages,
+					.commandBufferCount = renderWaitComputeCommandBufferCount,
+					.pCommandBuffers = commandBuffers.m_Data,
+					.signalSemaphoreCount = 1,
+					.pSignalSemaphores = &m_RenderComputeFinishedSemaphores[m_CurrentFrame],
+				};
+
+				if (VkCheck(vkQueueSubmit(m_ComputeQueue, 1, &computeSubmit, m_InFlightRenderComputeFences[m_CurrentFrame].fence),
+						"failed to submit to render compute queue (function vkQueueSubmit in function EndFrame)!")) {
+					m_InFlightRenderComputeFences[m_CurrentFrame].state = Fence::State::Resettable;
+				}
+			}
+
+			VkSemaphore presentWaitSemaphores[2] {
+				m_RenderFinishedSemaphores[m_CurrentFrame],
+				m_RenderComputeFinishedSemaphores[m_CurrentFrame],
+			};
 
 			VkPresentInfoKHR presentInfo {
 				.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
 				.pNext = nullptr,
-				.waitSemaphoreCount = 1,
-				.pWaitSemaphores = &m_RenderFinishedSemaphores[m_CurrentFrame],
+				.waitSemaphoreCount = renderWaitComputeCommandBufferCount ? 2U : 1U,
+				.pWaitSemaphores = presentWaitSemaphores,
 				.swapchainCount = 1,
 				.pSwapchains = &m_Swapchain,
 				.pImageIndices = &m_CurrentFrame,
