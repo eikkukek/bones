@@ -1,6 +1,8 @@
 #pragma once
 
 #include "algorithm.hpp"
+#include "fmt/printf.h"
+#include "fmt/color.h"
 #include <cstdio>
 #include <math.h>
 #include <assert.h>
@@ -392,18 +394,6 @@ namespace engine {
 			result[3][3] = Cast(1);
 			return result;
 		}
-
-		static constexpr inline Mat4_T Transpose(const Mat4_T& a) noexcept {
-			Mat4_T result = a;
-			Swap(result[0].y, result[1].x);
-			Swap(result[0].z, result[2].x);
-			Swap(result[0].w, result[3].x);
-			Swap(result[1].z, result[3].y);
-			Swap(result[3].y, result[1].w);
-			Swap(result[3].z, result[2].w);
-			return result;
-		}
-
 		constexpr inline const Vec4_T<T>& operator[](size_t index) const { return columns[index]; }
 		constexpr inline Vec4_T<T>& operator[](size_t index) { return columns[index]; }
 
@@ -411,6 +401,174 @@ namespace engine {
 			return Mat4_T((Vec3_T<T>)columns[0], (Vec3_T<T>)columns[1], (Vec3_T<T>)columns[2]);
 		}
 	};
+
+	template<typename T>
+	constexpr inline Mat4_T<T> Transpose(const Mat4_T<T>& a) noexcept {
+		Mat4_T result = a;
+		Swap(result[0].y, result[1].x);
+		Swap(result[0].z, result[2].x);
+		Swap(result[0].w, result[3].x);
+		Swap(result[1].z, result[3].y);
+		Swap(result[3].y, result[1].w);
+		Swap(result[3].z, result[2].w);
+		return result;
+	}
+
+	template<typename T>
+	constexpr inline Mat4_T<T> Invert(const Mat4_T<T>& a) noexcept {
+
+		Mat4_T<T> res;
+
+		const float* pA = (float*)&a;
+		float* pRes = (float*)&res;
+
+		pRes[0] = 
+				pA[5] * pA[10] * pA[15] -
+				pA[5] * pA[11] * pA[14] -
+				pA[9] * pA[6] * pA[15] +
+				pA[9] * pA[7] * pA[14] +
+				pA[13] * pA[6] * pA[11] -
+				pA[13] * pA[7] * pA[10];
+
+		pRes[1] = 
+				-pA[1] * pA[10] * pA[15] +
+				pA[1] * pA[11] * pA[14] +
+				pA[9] * pA[2] * pA[15] -
+				pA[9] *	pA[3] * pA[14] -
+				pA[13] * pA[2] * pA[11] +
+				pA[13] * pA[3] * pA[10];
+
+		pRes[2] =
+				pA[1] * pA[6] * pA[15] -
+				pA[1] * pA[7] * pA[14] -
+				pA[5] * pA[2] * pA[15] +
+				pA[5] * pA[3] * pA[14] +
+				pA[13] * pA[2] * pA[7] -
+				pA[13] * pA[3] * pA[6];
+
+		pRes[3] =
+				-pA[1] * pA[6] * pA[11] +
+				pA[1] * pA[7] * pA[10] +
+				pA[5] * pA[2] * pA[11] -
+				pA[5] * pA[3] * pA[10] -
+				pA[9] * pA[2] * pA[7] +
+				pA[9] * pA[3] * pA[6];
+
+		pRes[4] =
+				-pA[4] * pA[10] * pA[15] +
+				pA[4] * pA[11] * pA[14] +
+				pA[8] * pA[6] * pA[15] -
+				pA[8] * pA[7] * pA[14] -
+				pA[12] * pA[6] * pA[11] +
+				pA[12] * pA[7] * pA[10];
+
+		pRes[5] =
+				pA[0] * pA[10] * pA[15] -
+				pA[0] * pA[11] * pA[14] -
+				pA[8] * pA[2] * pA[15] +
+				pA[8] * pA[3] * pA[14] +
+				pA[12] * pA[2] * pA[11] -
+				pA[12] * pA[3] * pA[10];
+
+		pRes[6] =
+				-pA[0] * pA[6] * pA[15] +
+				pA[0] * pA[7] * pA[14] +
+				pA[4] * pA[2] * pA[15] -
+				pA[4] * pA[3] * pA[14] -
+				pA[12] * pA[2] * pA[7] +
+				pA[12] * pA[3] * pA[6];
+
+		pRes[7] = 
+				pA[0] * pA[6] * pA[11] -
+				pA[0] * pA[7] * pA[10] -
+				pA[4] * pA[2] * pA[11] +
+				pA[4] * pA[3] * pA[10] +
+				pA[8] * pA[2] * pA[7] -
+				pA[8] * pA[3] * pA[6];
+
+		pRes[8] =
+				pA[4] * pA[9] * pA[15] -
+				pA[4] * pA[11] * pA[13] -
+				pA[8] * pA[5] * pA[15] +
+				pA[8] * pA[7] * pA[13] +
+				pA[12] * pA[5] * pA[11] -
+				pA[12] * pA[7] * pA[9];
+
+		pRes[9] = 
+				-pA[0] * pA[9] * pA[15] +
+            	pA[0] * pA[11] * pA[13] +
+				pA[8] * pA[1] * pA[15] -
+				pA[8] * pA[3] * pA[13] -
+				pA[12] * pA[1] * pA[11] +
+				pA[12] * pA[3] * pA[9];
+
+				
+	    pRes[10] = 
+				pA[0] * pA[5] * pA[15] -
+				pA[0] * pA[7] * pA[13] -
+				pA[4] * pA[1] * pA[15] +
+				pA[4] * pA[3] * pA[13] +
+				pA[12] * pA[1] * pA[7] -
+				pA[12] * pA[3] * pA[5];
+
+    	pRes[11] = 
+				-pA[0] * pA[5] * pA[11] +
+				pA[0] * pA[7] * pA[9] +
+				pA[4] * pA[1] * pA[11] -
+				pA[4] * pA[3] * pA[9] -
+				pA[8] * pA[1] * pA[7] +
+				pA[8] * pA[3] * pA[5]; 
+
+    	pRes[12] = 
+				-pA[4]  * pA[9] * pA[14] +
+				pA[4]  * pA[10] * pA[13] +
+				pA[8]  * pA[5] * pA[14] -
+				pA[8]  * pA[6] * pA[13] -
+				pA[12] * pA[5] * pA[10] +
+				pA[12] * pA[6] * pA[9];
+
+
+    	pRes[13] = 
+				pA[0]  * pA[9] * pA[14] -
+            	pA[0]  * pA[10] * pA[13] -
+        		pA[8]  * pA[1] * pA[14] +
+            	pA[8]  * pA[2] * pA[13] +
+        		pA[12] * pA[1] * pA[10] -
+        		pA[12] * pA[2] * pA[9];
+
+    	pRes[14] = 
+				-pA[0]  * pA[5] * pA[14] +
+        		pA[0]  * pA[6] * pA[13] +
+        		pA[4]  * pA[1] * pA[14] -
+        		pA[4]  * pA[2] * pA[13] -
+        		pA[12] * pA[1] * pA[6] +
+        		pA[12] * pA[2] * pA[5];
+
+    	pRes[15] = 
+				pA[0] * pA[5] * pA[10] -
+        		pA[0] * pA[6] * pA[9] -
+        		pA[4] * pA[1] * pA[10] +
+        		pA[4] * pA[2] * pA[9] +
+        		pA[8] * pA[1] * pA[6] -
+        		pA[8] * pA[2] * pA[5];
+
+		float det = pA[0] * pRes[0] + pA[1] * pRes[4] + pA[2] * pRes[8] + pA[3] * pRes[12];
+
+		if (det == 0.0f) {
+			fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold, 
+				"attempting to invert non-invertible 4x4 matrix (in function engine::Invert)!");
+			return Mat4_T<T>(1);
+		}
+
+		det = 1.0f / det;
+
+		for (size_t i = 0; i < 16; i++) {
+			pRes[i] *= det;
+		}
+
+		return res;
+	}
+
 
 	typedef Mat4_T<float> Mat4;
 
