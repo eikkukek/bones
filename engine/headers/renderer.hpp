@@ -1444,11 +1444,6 @@ namespace engine {
 
 			m_GraphicsCommandBufferFreeList.Initialize(m_GraphicsCommandPool);
 			m_TransferCommandBufferFreeList.Initialize(m_TransferCommandPool);
-
-			VkDescriptorPoolSize modelPoolSize {
-				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-				.descriptorCount = 2,
-			};
 		}	
 
 		~Renderer() {
@@ -2128,7 +2123,7 @@ namespace engine {
 		}
 
 		bool AllocateDescriptorSets(const void* pNext, VkDescriptorPool descriptorPool, uint32_t setCount,
-			VkDescriptorSetLayout* pLayouts, VkDescriptorSet outSets[]) const {
+				VkDescriptorSetLayout* pLayouts, VkDescriptorSet outSets[]) const {
 			if (descriptorPool == VK_NULL_HANDLE) {
 				PrintError(ErrorOrigin::Vulkan, 
 					"attempting to allocate descriptor sets with a descriptor pool that's null (in function AllocateDescriptorSets)!");

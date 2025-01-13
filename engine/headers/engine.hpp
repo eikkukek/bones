@@ -3091,6 +3091,33 @@ void main() {
 				Mat4 m_View;
 			};
 
+			class DirectionalLight {
+
+				friend class World;
+
+			private:
+
+				struct DrawBuffer {
+					const uint64_t m_ObjectID;
+					Mat4 m_Projection;
+					Mat4 m_View;
+				};
+
+				struct RenderBuffer {
+					const uint64_t m_ObjectID;
+					Mat4 m_Projection;
+					Mat4 m_View;
+					Vec3 m_Color;
+					Vec3 m_Direction;
+				};
+
+				DynamicArray<VkImageView> m_DepthImageViews{};
+				DynamicArray<VkImage> m_DepthImages{};
+				DynamicArray<VkDeviceMemory> m_DepthImagesMemory{};
+
+			public:
+			};
+
 			static constexpr const char* pbr_draw_pipeline_vertex_shader = R"(
 	#version 450
 
