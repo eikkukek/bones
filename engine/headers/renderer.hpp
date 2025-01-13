@@ -934,6 +934,21 @@ namespace engine {
 				.maxDepthBounds = 1.0f,
 			};
 
+			static constexpr VkPipelineDepthStencilStateCreateInfo depth_stencil_state_no_depth_tests {
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.depthTestEnable = VK_FALSE,
+				.depthWriteEnable = VK_FALSE,
+				.depthCompareOp = {},
+				.depthBoundsTestEnable = VK_FALSE,
+				.stencilTestEnable = VK_FALSE,
+				.front {},
+				.back {},
+				.minDepthBounds = 0.0f,
+				.maxDepthBounds = 1.0f,
+			};
+
 			static constexpr VkPipelineColorBlendAttachmentState color_blend_attachment_state {
 				.blendEnable = VK_TRUE,
 				.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
@@ -1751,6 +1766,14 @@ namespace engine {
 						resetFences[resetFenceCount++] = m_InFlightRenderComputeFences[i].fence;
 						m_InFlightRenderComputeFences[i].state = Fence::State::None;
 					}
+					vkDestroySemaphore(m_VulkanDevice, m_EarlyGraphicsSignalSemaphores[i], m_VulkanAllocationCallbacks);
+					VkSemaphoreCreateInfo semaphoreInfo {
+						.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+					};
+					VkAssert(vkCreateSemaphore(m_VulkanDevice, &semaphoreInfo, m_VulkanAllocationCallbacks, &m_EarlyGraphicsSignalSemaphores[i]),
+						"failed to create early graphics semaphore!");
 				}
 				vkResetFences(m_VulkanDevice, resetFenceCount, resetFences.m_Data);
 			}
@@ -1892,6 +1915,36 @@ namespace engine {
 			return VK_NULL_HANDLE;
 		}
 
+		static VkCommandBufferAllocateInfo GetDefaultCommandBufferAllocateInfo(VkCommandPool commandPool, uint32_t commandBufferCount) {
+			return {
+				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+				.pNext = nullptr,
+				.commandPool = commandPool,
+				.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+				.commandBufferCount = commandBufferCount,
+			};
+		}
+
+		bool AllocateCommandBuffers(const VkCommandBufferAllocateInfo& allocInfo, VkCommandBuffer* outCommandBuffers) {
+			return VkCheck(vkAllocateCommandBuffers(m_VulkanDevice, &allocInfo, outCommandBuffers), 
+				"failed to allocate command buffers (function vkAllocateCommandBuffers in function AllocateCommandBuffers)!");
+		}
+
+		static const VkCommandBufferBeginInfo& GetDefaultCommandBufferBeginInfo() {
+			static constexpr VkCommandBufferBeginInfo res {
+				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.pInheritanceInfo = nullptr,
+			};
+			return res;
+		};
+
+		bool BeginCommandBuffer(VkCommandBuffer commandBuffer, const VkCommandBufferBeginInfo& beginInfo = GetDefaultCommandBufferBeginInfo()) {
+			return VkCheck(vkBeginCommandBuffer(commandBuffer, &beginInfo), 
+				"failed to begin command buffer (function vkBeginCommandBuffer in function BeginCommandBuffer)!");
+		}
+
 		VkImage CreateImage(VkImageType type, VkFormat format, const VkExtent3D& extent, 
 				uint32_t mipLevels, uint32_t arrayLayers, VkSampleCountFlagBits samples,
 				VkImageTiling tiling, VkImageUsageFlags usage, VkSharingMode sharingMode, 
@@ -1998,6 +2051,39 @@ namespace engine {
 
 		void DestroyImageView(VkImageView imageView) const {
 			vkDestroyImageView(m_VulkanDevice, imageView, m_VulkanAllocationCallbacks);
+		}
+
+		static const VkSamplerCreateInfo& GetDefaultSamplerInfo() {
+			static constexpr VkSamplerCreateInfo res {
+				.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.magFilter = VK_FILTER_NEAREST,
+				.minFilter = VK_FILTER_NEAREST,
+				.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+				.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+				.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+				.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+				.mipLodBias = 0.0f,
+				.anisotropyEnable = VK_FALSE,
+				.maxAnisotropy = 0.0f,
+				.compareEnable = VK_FALSE,
+				.compareOp = VK_COMPARE_OP_NEVER,
+				.minLod = 0.0f,
+				.maxLod = VK_LOD_CLAMP_NONE,
+				.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
+				.unnormalizedCoordinates = VK_FALSE,
+			};
+			return res;
+		};
+
+		VkSampler CreateSampler(const VkSamplerCreateInfo& createInfo) {
+			VkSampler res;
+			if (!VkCheck(vkCreateSampler(m_VulkanDevice, &createInfo, m_VulkanAllocationCallbacks, &res),
+					"failed to create sampler (function vkCreateSampler in function CreateSampler!)")) {
+				return VK_NULL_HANDLE;
+			}
+			return res;
 		}
 
 		VkDescriptorSetLayout CreateDescriptorSetLayout(const void* pNext, uint32_t bindingCount, VkDescriptorSetLayoutBinding* pBindings) const {
