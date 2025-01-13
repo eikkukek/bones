@@ -2252,7 +2252,9 @@ void main() {
 					}
 					size_t j = 0;
 					for (; j < outVertices.m_Size; j++) {
-						outVertices[j] == newVertex;
+						if (outVertices[j] == newVertex) {
+							break;
+						}
 					}
 					if (j == outVertices.m_Size) {
 						outVertices.PushBack(newVertex);
@@ -3283,7 +3285,7 @@ void main() {
 
 	void main() {
 
-		const vec3 point_light_pos = vec3(3.0f, 0.0f, 0.0f);
+		const vec3 point_light_pos = vec3(0.0f, 0.0f, 0.0f);
 
 		vec3 pos = vec3(texture(position_and_metallic, inUV));
 		vec3 normal = vec3(texture(normal_and_roughness, inUV));
