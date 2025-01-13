@@ -2335,13 +2335,13 @@ void main() {
 		};
 
 		template<typename T>
-		struct PersistentPersistentReferenceHolder;
+		struct PersistentReferenceHolder;
 
 		template<typename T>
 		class PersistentReference {
 		public:	
 
-				static_assert(std::is_base_of<PersistentPersistentReferenceHolder<T>, T>());
+				static_assert(std::is_base_of<PersistentReferenceHolder<T>, T>());
 
 				T* m_Val;
 
@@ -2384,7 +2384,7 @@ void main() {
 		};
 
 		template<typename T>
-		class PersistentPersistentReferenceHolder {
+		class PersistentReferenceHolder {
 			
 			friend class PersistentReference<T>;
 				
@@ -2392,11 +2392,11 @@ void main() {
 
 			DynamicArray<PersistentReference<T>*> m_PersistentReferences;
 
-			PersistentPersistentReferenceHolder() : m_PersistentReferences() {
+			PersistentReferenceHolder() : m_PersistentReferences() {
 				m_PersistentReferences.Reserve(4);
 			}
 
-			PersistentPersistentReferenceHolder(PersistentPersistentReferenceHolder&& other) 
+			PersistentReferenceHolder(PersistentReferenceHolder&& other) 
 				: m_PersistentReferences(std::move(other.m_PersistentReferences)) {
 				for (PersistentReference<T>* reference : m_PersistentReferences) {
 					assert(reference);
@@ -2404,7 +2404,7 @@ void main() {
 				}
 			}
 
-			virtual ~PersistentPersistentReferenceHolder() {
+			virtual ~PersistentReferenceHolder() {
 				for (PersistentReference<T>* reference : m_PersistentReferences) {
 					assert(reference);
 					reference->m_Val = nullptr;
@@ -2824,7 +2824,7 @@ void main() {
 			Rect<float> m_TopViewBoundingRect{};
 		};
 
-		struct Ground : PersistentPersistentReferenceHolder<Ground> {
+		struct Ground : PersistentReferenceHolder<Ground> {
 
 			friend class Engine;
 
@@ -2840,7 +2840,7 @@ void main() {
 			uint32_t* m_HeightMap;
 
 			Ground(const GroundInfo& groundInfo, uint64_t objectID) 
-				: PersistentPersistentReferenceHolder<Ground>(), m_ObjectID(objectID), m_TopViewBoundingRect(groundInfo.m_TopViewBoundingRect) {}
+				: PersistentReferenceHolder<Ground>(), m_ObjectID(objectID), m_TopViewBoundingRect(groundInfo.m_TopViewBoundingRect) {}
 
 			Ground(const Ground&) = delete;
 
@@ -2882,7 +2882,7 @@ void main() {
 			Collider::CreateInfo m_ColliderInfo{};
 		};
 
-		struct Obstacle : PersistentPersistentReferenceHolder<Obstacle> {
+		struct Obstacle : PersistentReferenceHolder<Obstacle> {
 
 			friend class Engine;
 
@@ -2895,7 +2895,7 @@ void main() {
 		public:
 
 			Obstacle(const ObstacleInfo& info, uint64_t objectID) noexcept 
-				: PersistentPersistentReferenceHolder<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position), m_Collider(m_Position, info.m_ColliderInfo) {}
+				: PersistentReferenceHolder<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position), m_Collider(m_Position, info.m_ColliderInfo) {}
 
 			Obstacle(const Obstacle&) = delete;
 
@@ -2946,7 +2946,7 @@ void main() {
 			}
 		};
 
-		class Creature : PersistentPersistentReferenceHolder<Creature> {
+		class Creature : PersistentReferenceHolder<Creature> {
 
 			friend class Engine;
 
@@ -2958,7 +2958,7 @@ void main() {
 			Collider m_Collider;
 
 			Creature(uint64_t objectID, const Vec3& position, const Chunk* chunk, const Collider::CreateInfo& colliderInfo)
-				: PersistentPersistentReferenceHolder<Creature>(), m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
+				: PersistentReferenceHolder<Creature>(), m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
 					m_Collider(m_Position, colliderInfo) {
 				assert(chunk);
 				Vec2_T<bool> _;
@@ -3041,7 +3041,7 @@ void main() {
 				VkDescriptorSetLayout m_RenderPBRImagesDescriptorSetLayout = VK_NULL_HANDLE;
 			};
 
-			struct RenderData : PersistentPersistentReferenceHolder<RenderData> {
+			struct RenderData : PersistentReferenceHolder<RenderData> {
 
 				friend class Engine;
 
@@ -3049,7 +3049,7 @@ void main() {
 
 	
 				RenderData(uint64_t objectID, const Mat4& transform, const MeshData& meshData) noexcept 
-					: PersistentPersistentReferenceHolder<RenderData>(), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
+					: PersistentReferenceHolder<RenderData>(), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
 
 				RenderData(const RenderData&) = delete;
 
@@ -3063,14 +3063,14 @@ void main() {
 				MeshData m_MeshData;
 			};
 
-			struct DebugRenderData : PersistentPersistentReferenceHolder<DebugRenderData> {
+			struct DebugRenderData : PersistentReferenceHolder<DebugRenderData> {
 
 				friend class Engine;
 
 			private:
 
 				DebugRenderData(uint64_t objectID, const Mat4& transform, const Vec4& wireColor, const MeshData& meshData) noexcept 
-					: PersistentPersistentReferenceHolder<DebugRenderData>(), 
+					: PersistentReferenceHolder<DebugRenderData>(), 
 						m_ObjectID(objectID), m_Transform(transform), m_WireColor(wireColor), m_MeshData(meshData) {}
 
 				DebugRenderData(const DebugRenderData&) = delete;
