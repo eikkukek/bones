@@ -698,7 +698,7 @@ namespace engine {
 				vertex.m_Position = pos;
 			}
 
-			static void SetUV(Vertex& vertex, const Vec3& UV) {
+			static void SetUV(Vertex& vertex, const Vec2& UV) {
 				vertex.m_UV = UV;
 			}
 
@@ -2126,7 +2126,7 @@ void main() {
 			uint32_t m_LinesParsed = 0;
 
 			DynamicArray<Vec3> m_Vs;
-			DynamicArray<Vec3> m_Vts;
+			DynamicArray<Vec2> m_Vts;
 			DynamicArray<Vec3> m_Vns;
 
 			DynamicArray<uint32_t> m_VIndices{};
@@ -2160,11 +2160,13 @@ void main() {
 						if (buf[1]) {
 							if (buf[1] == 't') {
 								long fPos = ftell(fileStream);
-								Vec3& vt = m_Vts.EmplaceBack();
-								if (fscanf(fileStream, "%f%f%f", &vt.x, &vt.y, &vt.z) != 3) {
+								Vec2& vt = m_Vts.EmplaceBack();
+								if (fscanf(fileStream, "%f%f", &vt.x, &vt.y) != 2) {
 									fseek(fileStream, fPos, SEEK_SET);
 								}
-								for (char c = fgetc(fileStream); c != '\n' && c != EOF; c = fgetc(fileStream)) {}
+								for (char c = fgetc(fileStream); c != '\n' && c != EOF;) {
+									c = fgetc(fileStream);
+								}
 							}
 							else if (buf[1] == 'n') {
 								long fPos = ftell(fileStream);
@@ -2229,7 +2231,7 @@ void main() {
 			}
 
 			template<typename VertexType>
-			bool GetMesh(void (*setPos)(Vertex&, const Vec3&), void (*setUV)(Vertex&, const Vec3&), 
+			bool GetMesh(void (*setPos)(Vertex&, const Vec3&), void (*setUV)(Vertex&, const Vec2&), 
 					void (*setNormal)(Vertex&, const Vec3&), DynamicArray<VertexType>& outVertices, DynamicArray<uint32_t>& outIndices) const {
 				if (m_LinesParsed == 0) {
 					PrintError(ErrorOrigin::FileParsing, 
@@ -3225,14 +3227,12 @@ void main() {
 
 		outUV = inUV;
 
-		vec3 pos = vec3(inPosition.x, -inPosition.y, inPosition.z);
-
 		mat4 normalMat = transpose(inverse(pc.c_Transform));
 
-		outPosition = vec3(pc.c_Transform * vec4(pos, 1.0f));
+		outPosition = vec3(pc.c_Transform * vec4(inPosition, 1.0f));
 		outNormal = normalize(vec3(normalMat * vec4(inNormal, 0.0f)));
 
-		gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(pos, 1.0f);
+		gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
 	}
 			)";
 
@@ -3285,7 +3285,7 @@ void main() {
 
 	void main() {
 
-		const vec3 point_light_pos = vec3(0.0f, 0.0f, 0.0f);
+		const vec3 point_light_pos = vec3(0.0f, 3.0f, 0.0f);
 
 		vec3 pos = vec3(texture(position_and_metallic, inUV));
 		vec3 normal = vec3(texture(normal_and_roughness, inUV));
@@ -4517,22 +4517,22 @@ void main() {
 			static constexpr Vertex quad_vertices[quad_vertex_count] {
 				{
 					.m_Position { 1.0f, -1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, 1.0f },
+					.m_Normal { 0.0f, 0.0f, -1.0f },
 					.m_UV { 1.0f, 0.0f },
 				},	
 				{
 					.m_Position { 1.0f, 1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, 1.0f },
+					.m_Normal { 0.0f, 0.0f, -1.0f },
 					.m_UV { 1.0f, 1.0f },
 				},
 				{
 					.m_Position { -1.0f, -1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, 1.0f },
+					.m_Normal { 0.0f, 0.0f, -1.0f },
 					.m_UV { 0.0f, 0.0f },
 				},
 				{
 					.m_Position { -1.0f, 1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, 1.0f },
+					.m_Normal { 0.0f, 0.0f, -1.0f },
 					.m_UV { 0.0f, 1.0f },
 				},
 			};
