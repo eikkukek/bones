@@ -2192,16 +2192,20 @@ void main() {
 						bool failed = false;
 						for (size_t i = 0; i < 3; i++) {
 							uint32_t& vI = m_VIndices.EmplaceBack();
-							uint32_t& vtI = m_VtIndices.EmplaceBack();
-							int res = fscanf(fileStream, "%i/%i", &vI, &vtI);
-							if (res != 2) {
+							int res = fscanf(fileStream, "%i", &vI);
+							if (res != 1) {
 								m_LinesParsed = 0;
 								return false;
 							}
 							--vI;
-							--vtI;
 							maxVIndex = Max(vI, maxVIndex);
-							maxVtIndex = Max(vtI, maxVtIndex);
+							if (fgetc(fileStream) == '/') {
+								uint32_t vtI;
+								if (fscanf(fileStream, "%i", &vtI) == 1) {
+									m_VtIndices.PushBack(--vtI);
+									maxVtIndex = Max(vtI, maxVtIndex);
+								}
+							}
 							if (fgetc(fileStream) == '/') {
 								uint32_t& vnI = m_VnIndices.EmplaceBack();
 								if (fscanf(fileStream, "%i", &vnI) != 1) {
@@ -2217,9 +2221,9 @@ void main() {
 					}
 					for (char c = fgetc(fileStream); c != '\n' && c != EOF; c = fgetc(fileStream)) {}
 				}
-				if (!(m_VIndices.m_Size == m_VtIndices.m_Size &&
-					(!m_VnIndices.m_Size || m_VnIndices.m_Size == m_VtIndices.m_Size) && !(m_VtIndices.m_Size % 3) &&
-					maxVIndex < m_Vs.m_Size && maxVtIndex < m_Vts.m_Size && maxVnIndex < m_Vns.m_Size)) {
+				if (!((!m_VtIndices.m_Size || m_VIndices.m_Size == m_VtIndices.m_Size) &&
+					(!m_VnIndices.m_Size || m_VIndices.m_Size == m_VnIndices.m_Size) && !(m_VtIndices.m_Size % 3) &&
+					maxVIndex < m_Vs.m_Size && (!m_VtIndices.m_Size || maxVtIndex < m_Vts.m_Size) && (!m_VnIndices.m_Size || maxVnIndex < m_Vns.m_Size))) {
 					m_LinesParsed = 0;
 					return false;
 				}
@@ -2248,7 +2252,9 @@ void main() {
 				for (uint32_t i = 0; i < m_VIndices.m_Size; i++) {
 					VertexType newVertex{};
 					setPos(newVertex, m_Vs[m_VIndices[i]]);
-					setUV(newVertex, m_Vts[m_VtIndices[i]]);
+					if (m_VtIndices.m_Size) {
+						setUV(newVertex, m_Vts[m_VtIndices[i]]);
+					}
 					if (m_VnIndices.m_Size) {
 						setNormal(newVertex, m_Vns[m_VnIndices[i]]);
 					}
