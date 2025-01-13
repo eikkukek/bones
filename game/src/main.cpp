@@ -161,11 +161,7 @@ int main() {
 	Engine::DynamicArray<Engine::Vertex> cubeVertices{};
 
 	assert(cubeObj.GetMesh(Engine::Vertex::SetPosition, Engine::Vertex::SetUV, 
-		Engine::Vertex::SetNormal, cubeVertices, cubeIndices));
-
-	for (Engine::Vertex& vertex : cubeVertices) {
-		fmt::print("normal {}, {}, {}\n", vertex.m_Normal.x, vertex.m_Normal.y, vertex.m_Normal.z);
-	}
+		Engine::Vertex::SetNormal, cubeVertices, cubeIndices));	
 
 	StaticMesh cubeMesh(engine);
 	cubeMesh.CreateBuffers(cubeVertices.m_Size, cubeVertices.m_Data, cubeIndices.m_Size, cubeIndices.m_Data);
