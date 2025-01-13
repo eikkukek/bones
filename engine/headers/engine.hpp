@@ -2335,41 +2335,41 @@ void main() {
 		};
 
 		template<typename T>
-		struct Field;
+		struct PersistentPersistentReferenceHolder;
 
 		template<typename T>
-		class Reference {
+		class PersistentReference {
 		public:	
 
-				static_assert(std::is_base_of<Field<T>, T>());
+				static_assert(std::is_base_of<PersistentPersistentReferenceHolder<T>, T>());
 
 				T* m_Val;
 
-				Reference() noexcept : m_Val(nullptr) {}
+				PersistentReference() noexcept : m_Val(nullptr) {}
 
-				Reference(T& val) noexcept : m_Val(&val) {
-					m_Val->AddReference(this);
+				PersistentReference(T& val) noexcept : m_Val(&val) {
+					m_Val->AddPersistentReference(this);
 				}
 
-				Reference(const Reference& other) noexcept : m_Val(other.m_Val) {
+				PersistentReference(const PersistentReference& other) noexcept : m_Val(other.m_Val) {
 					if (m_Val) {
-						m_Val->AddReference(this);
+						m_Val->AddPersistentReference(this);
 					}
 				}
 
-				~Reference() {
-					RemoveReference();
+				~PersistentReference() {
+					RemovePersistentReference();
 				}
 
-				void SetReference(T& val) {
-					RemoveReference();
+				void SetPersistentReference(T& val) {
+					RemovePersistentReference();
 					m_Val = &val;
-					m_Val->AddReference(this);
+					m_Val->AddPersistentReference(this);
 				}
 
-				void RemoveReference() {
+				void RemovePersistentReference() {
 					if (m_Val) {
-						m_Val->RemoveReference(this);
+						m_Val->RemovePersistentReference(this);
 						m_Val = nullptr;
 					}
 				}
@@ -2377,32 +2377,35 @@ void main() {
 				T& operator*() {
 					if (!m_Val) {
 						CriticalError(ErrorOrigin::NullDereference,
-							"attempting to deference null reference (in Reference::operator*)");
+							"attempting to deference null reference (in PersistentReference::operator*)");
 					}
 					return *m_Val;
 				}
 		};
 
 		template<typename T>
-		class Field {
+		class PersistentPersistentReferenceHolder {
 			
-			friend class Reference<T>;
+			friend class PersistentReference<T>;
 				
 		public:
 
-			DynamicArray<Reference<T>*> m_References;
+			DynamicArray<PersistentReference<T>*> m_PersistentReferences;
 
-			Field() : m_References() {}
+			PersistentPersistentReferenceHolder() : m_PersistentReferences() {
+				m_PersistentReferences.Reserve(4);
+			}
 
-			Field(Field&& other) : m_References(std::move(other.m_References)) {
-				for (Reference<T>* reference : m_References) {
+			PersistentPersistentReferenceHolder(PersistentPersistentReferenceHolder&& other) 
+				: m_PersistentReferences(std::move(other.m_PersistentReferences)) {
+				for (PersistentReference<T>* reference : m_PersistentReferences) {
 					assert(reference);
 					reference->m_Val = (T*)this;
 				}
 			}
 
-			virtual ~Field() {
-				for (Reference<T>* reference : m_References) {
+			virtual ~PersistentPersistentReferenceHolder() {
+				for (PersistentReference<T>* reference : m_PersistentReferences) {
 					assert(reference);
 					reference->m_Val = nullptr;
 				}
@@ -2410,20 +2413,20 @@ void main() {
 
 		private:
 
-			bool AddReference(Reference<T>* reference) {
+			bool AddPersistentReference(PersistentReference<T>* reference) {
 				if (reference) {
-					m_References.PushBack(reference);
+					m_PersistentReferences.PushBack(reference);
 					return true;
 				}
 				return false;
 			}
 
-			bool RemoveReference(Reference<T>* reference) {
+			bool RemovePersistentReference(PersistentReference<T>* reference) {
 				if (reference) {
-					auto end = m_References.end();
-					for (auto iter = m_References.begin(); iter != end; iter++) {
+					auto end = m_PersistentReferences.end();
+					for (auto iter = m_PersistentReferences.begin(); iter != end; iter++) {
 						if (*iter == reference) {
-							m_References.Erase(iter);
+							m_PersistentReferences.Erase(iter);
 							return true;
 						}
 					}
@@ -2431,124 +2434,6 @@ void main() {
 				return false;
 			}
 		};
-
-		/*
-		struct RectCollider {
-
-			friend class Engine;
-
-		private:
-
-			Vec3 m_Position;
-			Quaternion m_Rotation;
-			Vec3 m_Dimensions;
-			Vec3 m_Corners[8]{};
-			Box<float> m_AABB{};
-
-		public:
-
-			RectCollider(const Vec3& position = {}, const Quaternion& rotation = {}, const Vec3& dimensions = {})
-				: m_Position(position), m_Rotation(rotation), m_Dimensions(dimensions) {
-				CalcCorners();
-				CalcAABB();
-			}
-
-			RectCollider(const RectCollider&) = delete;
-			
-			RectCollider(RectCollider&&) = default;
-
-		private:
-
-			void CalcCorners() {
-
-				Vec3 halfDimensionsPos = m_Dimensions / 2;
-				Vec3 halfDimensionsNeg = -halfDimensionsPos;
-
-				m_Corners[0].x = halfDimensionsPos.x;
-				m_Corners[0].y = halfDimensionsPos.y;
-				m_Corners[0].z = halfDimensionsPos.z;
-
-				m_Corners[1].x = halfDimensionsNeg.x;
-				m_Corners[1].y = halfDimensionsNeg.y;
-				m_Corners[1].z = halfDimensionsNeg.z;
-
-				m_Corners[2].x = halfDimensionsNeg.x;
-				m_Corners[2].y = halfDimensionsPos.y;
-				m_Corners[2].z = halfDimensionsPos.z;
-
-				m_Corners[3].x = halfDimensionsPos.x;
-				m_Corners[3].y = halfDimensionsNeg.y;
-				m_Corners[3].z = halfDimensionsPos.z;
-
-				m_Corners[4].x = halfDimensionsPos.x;
-				m_Corners[4].y = halfDimensionsPos.y;
-				m_Corners[4].z = halfDimensionsNeg.z;
-
-				m_Corners[5].x = halfDimensionsPos.x;
-				m_Corners[5].y = halfDimensionsNeg.y;
-				m_Corners[5].z = halfDimensionsNeg.z;
-
-				m_Corners[6].x = halfDimensionsNeg.x;
-				m_Corners[6].y = halfDimensionsPos.y;
-				m_Corners[6].z = halfDimensionsNeg.z;
-
-				m_Corners[7].x = halfDimensionsNeg.x;
-				m_Corners[7].y = halfDimensionsNeg.y;
-				m_Corners[7].z = halfDimensionsPos.z;
-
-				Mat3 transform(m_Rotation.AsMat4());
-
-				for (size_t i = 0; i < 8; i++) {
-					m_Corners[i] = m_Corners[i] * transform + m_Position;
-				}
-			}
-
-			void CalcAABB() {
-				static constexpr float max_float = std::numeric_limits<float>::max();
-				static constexpr float min_float = -max_float;
-				m_AABB.m_Min = { max_float, max_float, max_float };
-				m_AABB.m_Max = { min_float, min_float, min_float };
-				for (size_t i = 0; i < 8; i++) {
-					Vec3& corner = m_Corners[i];
-					m_AABB.m_Min.x = Min(corner.x, m_AABB.m_Min.x);
-					m_AABB.m_Min.y = Min(corner.y, m_AABB.m_Min.y);
-					m_AABB.m_Min.z = Min(corner.z, m_AABB.m_Min.z);
-					m_AABB.m_Max.x = Max(corner.x, m_AABB.m_Max.x);
-					m_AABB.m_Max.y = Max(corner.y, m_AABB.m_Max.y);
-					m_AABB.m_Max.z = Max(corner.z, m_AABB.m_Max.z);
-				}
-			}
-
-		public:	
-
-			void SetPosition(const Vec3& position) {
-				m_Position = position;
-				CalcCorners();
-				CalcAABB();
-			}
-
-			void SetRotation(const Quaternion& rotation) {
-				m_Rotation = rotation;
-				CalcCorners();
-				CalcAABB();
-			}
-
-			void SetPositionAndRotation(const Vec3& position, const Quaternion& rotation) {
-				m_Position = position;
-				m_Rotation = rotation;
-				CalcCorners();
-				CalcAABB();
-			}
-
-			bool CheckCollision(const BoxCollider& collider, Vec3& outPushBack) const {
-				if (!m_AABB.OverLaps(collider.m_AABB)) {
-					return false;
-				}
-				fmt::print("colliding!");
-				return true;
-			}
-		};
-		*/
 
 		class Collider {
 
@@ -2939,7 +2824,7 @@ void main() {
 			Rect<float> m_TopViewBoundingRect{};
 		};
 
-		struct Ground : Field<Ground> {
+		struct Ground : PersistentPersistentReferenceHolder<Ground> {
 
 			friend class Engine;
 
@@ -2955,7 +2840,7 @@ void main() {
 			uint32_t* m_HeightMap;
 
 			Ground(const GroundInfo& groundInfo, uint64_t objectID) 
-				: Field<Ground>(), m_ObjectID(objectID), m_TopViewBoundingRect(groundInfo.m_TopViewBoundingRect) {}
+				: PersistentPersistentReferenceHolder<Ground>(), m_ObjectID(objectID), m_TopViewBoundingRect(groundInfo.m_TopViewBoundingRect) {}
 
 			Ground(const Ground&) = delete;
 
@@ -2997,7 +2882,7 @@ void main() {
 			Collider::CreateInfo m_ColliderInfo{};
 		};
 
-		struct Obstacle : Field<Obstacle> {
+		struct Obstacle : PersistentPersistentReferenceHolder<Obstacle> {
 
 			friend class Engine;
 
@@ -3010,7 +2895,7 @@ void main() {
 		public:
 
 			Obstacle(const ObstacleInfo& info, uint64_t objectID) noexcept 
-				: Field<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position), m_Collider(m_Position, info.m_ColliderInfo) {}
+				: PersistentPersistentReferenceHolder<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position), m_Collider(m_Position, info.m_ColliderInfo) {}
 
 			Obstacle(const Obstacle&) = delete;
 
@@ -3027,8 +2912,8 @@ void main() {
 
 			const Rect<float> m_BoundingRect;
 			const Vec2_T<uint32_t> m_ChunkMatrixCoords;
-			DynamicArray<Reference<Ground>> m_Grounds{};
-			DynamicArray<Reference<Obstacle>> m_Obstacles{};
+			DynamicArray<PersistentReference<Ground>> m_Grounds{};
+			DynamicArray<PersistentReference<Obstacle>> m_Obstacles{};
 			
 			Chunk(Vec2_T<uint32_t> chunkCoords, Vec2 min, Vec2 dimensions) noexcept 
 				: m_BoundingRect { .m_Min { min }, .m_Max { min + dimensions } }, m_ChunkMatrixCoords(chunkCoords), m_Grounds() {}
@@ -3041,7 +2926,7 @@ void main() {
 				outAxisBlocked = { false, false };
 				Vec2 newPosTopView(oldPosition.x + deltaPosition.x, oldPosition.z + deltaPosition.z);
 				Vec2 oldPositionTopView(oldPosition.x, oldPosition.z);
-				for (const Reference<Ground>& ground : m_Grounds) {
+				for (const PersistentReference<Ground>& ground : m_Grounds) {
 					if (!ground.m_Val) {
 						continue;
 					}
@@ -3061,7 +2946,7 @@ void main() {
 			}
 		};
 
-		class Creature : Field<Creature> {
+		class Creature : PersistentPersistentReferenceHolder<Creature> {
 
 			friend class Engine;
 
@@ -3073,7 +2958,7 @@ void main() {
 			Collider m_Collider;
 
 			Creature(uint64_t objectID, const Vec3& position, const Chunk* chunk, const Collider::CreateInfo& colliderInfo)
-				: Field<Creature>(), m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
+				: PersistentPersistentReferenceHolder<Creature>(), m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
 					m_Collider(m_Position, colliderInfo) {
 				assert(chunk);
 				Vec2_T<bool> _;
@@ -3116,7 +3001,7 @@ void main() {
 					assert(height != std::numeric_limits<float>::max());
 					m_Position.y = height;
 				}
-				for (const Reference<Obstacle>& obstacle : m_Chunk->m_Obstacles) {
+				for (const PersistentReference<Obstacle>& obstacle : m_Chunk->m_Obstacles) {
 					assert(obstacle.m_Val);
 					Vec3 pushBack;
 					if (obstacle.m_Val->Collides(m_Collider, deltaPos, pushBack)) {
@@ -3156,7 +3041,7 @@ void main() {
 				VkDescriptorSetLayout m_RenderPBRImagesDescriptorSetLayout = VK_NULL_HANDLE;
 			};
 
-			struct RenderData : Field<RenderData> {
+			struct RenderData : PersistentPersistentReferenceHolder<RenderData> {
 
 				friend class Engine;
 
@@ -3164,7 +3049,7 @@ void main() {
 
 	
 				RenderData(uint64_t objectID, const Mat4& transform, const MeshData& meshData) noexcept 
-					: Field<RenderData>(), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
+					: PersistentPersistentReferenceHolder<RenderData>(), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
 
 				RenderData(const RenderData&) = delete;
 
@@ -3178,14 +3063,15 @@ void main() {
 				MeshData m_MeshData;
 			};
 
-			struct DebugRenderData : Field<DebugRenderData> {
+			struct DebugRenderData : PersistentPersistentReferenceHolder<DebugRenderData> {
 
 				friend class Engine;
 
 			private:
 
 				DebugRenderData(uint64_t objectID, const Mat4& transform, const Vec4& wireColor, const MeshData& meshData) noexcept 
-					: Field<DebugRenderData>(), m_ObjectID(objectID), m_Transform(transform), m_WireColor(wireColor), m_MeshData(meshData) {}
+					: PersistentPersistentReferenceHolder<DebugRenderData>(), 
+						m_ObjectID(objectID), m_Transform(transform), m_WireColor(wireColor), m_MeshData(meshData) {}
 
 				DebugRenderData(const DebugRenderData&) = delete;
 
@@ -3556,7 +3442,8 @@ void main() {
 					= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &renderer.m_SwapchainSurfaceFormat.format, VK_FORMAT_UNDEFINED);
 
 				VkPipelineRenderingCreateInfo debugPipelineRenderingInfo 
-					= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &m_Engine.m_Renderer.m_SwapchainSurfaceFormat.format, m_Engine.m_Renderer.m_DepthOnlyFormat);
+					= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &m_Engine.m_Renderer.m_SwapchainSurfaceFormat.format, 
+						m_Engine.m_Renderer.m_DepthOnlyFormat);
 
 				VkPipelineColorBlendStateCreateInfo pbrDrawPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
 				pbrDrawPipelineColorBlendState.attachmentCount = 3;
@@ -3644,7 +3531,8 @@ void main() {
 				VkPipeline pipelines[3];
 
 				if (!renderer.CreateGraphicsPipelines(3, graphicsPipelineInfos, pipelines)) {
-					CriticalError(ErrorOrigin::Renderer, "failed to create world graphics pipeline (function Renderer::CreateGraphicsPipelines in function World::Initialize)!");
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create world graphics pipeline (function Renderer::CreateGraphicsPipelines in function World::Initialize)!");
 				}
 
 				m_Pipelines.m_DrawPipelinePBR = pipelines[0];
@@ -3777,19 +3665,20 @@ void main() {
 				m_CameraFollowObjectID = creature.m_ObjectID;
 			}
 
-			Reference<RenderData> AddRenderData(const Creature& creature, const Mat4& transform, const MeshData& meshData) {
+			PersistentReference<RenderData> AddRenderData(const Creature& creature, const Mat4& transform, const MeshData& meshData) {
 				return m_RenderDatas.EmplaceBack(creature.m_ObjectID, transform, meshData);
 			}
 
-			Reference<RenderData> AddRenderData(const Ground& ground, const Mat4& transform, const MeshData& meshData) {
+			PersistentReference<RenderData> AddRenderData(const Ground& ground, const Mat4& transform, const MeshData& meshData) {
 				return m_RenderDatas.EmplaceBack(ground.m_ObjectID, transform, meshData);
 			}
 				
-			Reference<RenderData> AddRenderData(const Obstacle& obstacle, const Mat4& transform, const MeshData& meshData) {
+			PersistentReference<RenderData> AddRenderData(const Obstacle& obstacle, const Mat4& transform, const MeshData& meshData) {
 				return m_RenderDatas.EmplaceBack(obstacle.m_ObjectID, transform, meshData);
 			}
 
-			Reference<DebugRenderData> AddDebugRenderData(const Obstacle& obstacle, const Mat4& transform, const Vec4& wireColor, const MeshData& meshData) {
+			PersistentReference<DebugRenderData> AddDebugRenderData(const Obstacle& obstacle, const Mat4& transform, 
+					const Vec4& wireColor, const MeshData& meshData) {
 				return m_DebugRenderDatas.EmplaceBack(obstacle.m_ObjectID, transform, wireColor, meshData);
 			}
 
@@ -3871,12 +3760,16 @@ void main() {
 					.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 					.descriptorCount = 1,
 				};
-				VkDescriptorPoolSize poolSizes[3] {
-					poolSize,
-					poolSize,
-					poolSize,
-				};
-				m_RenderPBRImagesDescriptorPool = renderer.CreateDescriptorPool(0, imageCount, 3, poolSizes);
+				DynamicArray<VkDescriptorPoolSize> poolSizes(3 * imageCount);
+				for (VkDescriptorPoolSize& size : poolSizes) {
+					size = poolSize;
+				}
+				m_RenderPBRImagesDescriptorPool = renderer.CreateDescriptorPool(0, imageCount, poolSizes.m_Size, poolSizes.m_Data);
+
+				if (m_RenderPBRImagesDescriptorPool == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to create pbr render pipeline image descriptor pool (function Renderer::CreateDescriptorPool in function World::SwapchainCreateCallback)!");
+				}
 
 				m_RenderPBRImagesDescriptorSets.Resize(imageCount);
 
@@ -3886,7 +3779,8 @@ void main() {
 					set = m_Pipelines.m_RenderPBRImagesDescriptorSetLayout;
 				}
 
-				if (!renderer.AllocateDescriptorSets(nullptr, m_RenderPBRImagesDescriptorPool, imageCount, setLayouts.m_Data, m_RenderPBRImagesDescriptorSets.m_Data)) {
+				if (!renderer.AllocateDescriptorSets(nullptr, m_RenderPBRImagesDescriptorPool, imageCount, 
+						setLayouts.m_Data, m_RenderPBRImagesDescriptorSets.m_Data)) {
 					CriticalError(ErrorOrigin::Renderer, 
 						"failed to allocate pbr rendering pipeline image descriptor sets (function Renderer::AllocateDescriptorSets in function World::SwapchainCreateCallback)!");
 				}
