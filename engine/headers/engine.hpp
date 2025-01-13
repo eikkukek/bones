@@ -2950,7 +2950,13 @@ void main() {
 
 			friend class Engine;
 
-		private:
+		public:
+
+			typedef Vec3 (*MovementVectorUpdateFun)(const Creature& creature);
+			typedef void (*MoveCallbackFun)(const Creature& creature, const Vec3& position, const Vec3& deltaPosition);
+			typedef void (*CameraFollowCallbackFun)(const Creature& creature, Vec3& outCameraPos, Vec3& outCameraLookAt);
+
+		private:	
 
 			const Chunk* m_Chunk;
 			Vec3 m_Position;
@@ -2972,9 +2978,9 @@ void main() {
 
 		public:
 
-			Vec3 (*m_MovementVectorUpdate)(const Creature& creature){};
-			void (*m_MoveCallback)(const Creature& creature, const Vec3& position, const Vec3& deltaPosition){};
-			void (*m_CameraFollowCallback)(const Creature& creature, Mat4& outViewMatrix);
+			MovementVectorUpdateFun m_MovementVectorUpdate;
+			MoveCallbackFun m_MoveCallback;
+			CameraFollowCallbackFun m_CameraFollowCallback;
 
 			const Vec3& GetPosition() const {
 				return m_Position;
@@ -3091,31 +3097,80 @@ void main() {
 				Mat4 m_View;
 			};
 
-			class DirectionalLight {
+			struct DirectionalLight {
 
-				friend class World;
-
-			private:
-
-				struct DrawBuffer {
-					const uint64_t m_ObjectID;
+				struct MatricesBuffer {
 					Mat4 m_Projection;
 					Mat4 m_View;
 				};
 
-				struct RenderBuffer {
-					const uint64_t m_ObjectID;
-					Mat4 m_Projection;
-					Mat4 m_View;
-					Vec3 m_Color;
-					Vec3 m_Direction;
+				struct FragmentBuffer {
+					Vec3 m_Direction{};
+					Vec3 m_Color{};
 				};
+
+				World& m_World;
 
 				DynamicArray<VkImageView> m_DepthImageViews{};
-				DynamicArray<VkImage> m_DepthImages{};
-				DynamicArray<VkDeviceMemory> m_DepthImagesMemory{};
 
-			public:
+				MatricesBuffer* m_MatricesMap{};
+
+				VkDescriptorSet m_RenderDescriptorSet{};
+
+				FragmentBuffer* m_FragmentMap{};
+
+				Vec2_T<uint32_t> m_Resolution;
+				DynamicArray<VkImage> m_DepthStencilImages{};
+				DynamicArray<VkDeviceMemory> m_DepthStencilImagesMemory{};
+				Renderer::Buffer m_MatricesBuffer;
+				Renderer::Buffer m_FragmentBuffer;
+				VkFormat m_DepthStencilFormat = VK_FORMAT_UNDEFINED;
+
+				DirectionalLight(World& world, Vec2_T<uint32_t> resolution) 
+					: m_World(world), m_Resolution(resolution), m_MatricesBuffer(world.m_Engine.m_Renderer), 
+						m_FragmentBuffer(world.m_Engine.m_Renderer) {}
+
+				void SwapchainCreateCallback(uint32_t imageCount) {
+					Renderer& renderer = m_World.m_Engine.m_Renderer;
+					if (m_DepthStencilFormat == VK_FORMAT_UNDEFINED) {
+						VkFormat candidates[3] {
+							VK_FORMAT_S8_UINT,
+						};
+					}
+					if (m_DepthStencilImages.m_Size < imageCount) {
+						size_t oldImageCount = m_DepthStencilImages.m_Size;
+						m_DepthStencilImages.Resize(imageCount);
+						m_DepthStencilImagesMemory.Resize(imageCount);
+						m_DepthImageViews.Resize(imageCount);
+						for (size_t i = oldImageCount; i < m_DepthStencilImages.m_Size; i++) {
+							VkImage& image = m_DepthStencilImages[i];
+							VkDeviceMemory& memory = m_DepthStencilImagesMemory[i];
+							VkImageView& imageView = m_DepthImageViews[i];
+							image = renderer.CreateImage(VK_IMAGE_TYPE_2D, renderer.m_DepthOnlyFormat, 
+								{ .width = m_Resolution.x, .height = m_Resolution.y, .depth = 1, },
+								1, 1, VK_SAMPLE_COUNT_1_BIT, 
+								VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+								VK_SHARING_MODE_EXCLUSIVE, 1, &renderer.m_GraphicsQueueFamilyIndex);
+							if (image == VK_NULL_HANDLE) {
+								CriticalError(ErrorOrigin::Renderer, 
+									"failed to create image for directional light (function Renderer::CreateImage in function World::DirectionalLight::SwapchainCreateCallback)!");
+							}
+						}
+					}
+					else if (m_DepthImages.m_Size > imageCount) {
+						for (size_t i = imageCount; i > m_DepthImages.m_Size; i++) {
+							renderer.DestroyImageView(m_DepthImageViews[i]);
+							renderer.DestroyImage(m_DepthImages[i]);
+							renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
+						}
+						m_DepthImages.Resize(imageCount);
+						m_DepthImagesMemory.Resize(imageCount);
+						m_DepthImageViews.Resize(imageCount);
+					}
+				}
+
+				void Terminate() {
+				}
 			};
 
 			static constexpr const char* pbr_draw_pipeline_vertex_shader = R"(
@@ -3332,7 +3387,8 @@ void main() {
 					.size = 128,
 				};
 
-				m_Pipelines.m_DrawPipelineLayoutPBR = renderer.CreatePipelineLayout(1, &m_Pipelines.m_CameraDescriptorSetLayout, 1, &pbrDrawPushConstantRange);
+				m_Pipelines.m_DrawPipelineLayoutPBR 
+					= renderer.CreatePipelineLayout(1, &m_Pipelines.m_CameraDescriptorSetLayout, 1, &pbrDrawPushConstantRange);
 
 				if (m_Pipelines.m_DrawPipelineLayoutPBR == VK_NULL_HANDLE) {
 					CriticalError(ErrorOrigin::Renderer,
@@ -3735,7 +3791,8 @@ void main() {
 				Renderer& renderer = m_Engine.m_Renderer;
 				if (m_ColorImageResourcesFormat == VK_FORMAT_UNDEFINED) {
 					VkFormat colorImageResourcesFormatCandidates[2] = { VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_B8G8R8A8_SRGB };
-					m_ColorImageResourcesFormat = renderer.FindSupportedFormat(1, colorImageResourcesFormatCandidates, VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
+					m_ColorImageResourcesFormat = renderer.FindSupportedFormat(1, colorImageResourcesFormatCandidates, 
+						VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
 					if (m_ColorImageResourcesFormat == VK_FORMAT_UNDEFINED) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"couldn't find suitable format for color image resources (function Renderer::FindSupportedFormat in function World::SwapchainCreateCallback)!");
@@ -3760,7 +3817,8 @@ void main() {
 					pbrRenderPipelineDescriptorSetBindings[1].binding = 1;
 					pbrRenderPipelineDescriptorSetBindings[2].binding = 2;
 
-					m_Pipelines.m_RenderPBRImagesDescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 3, pbrRenderPipelineDescriptorSetBindings);
+					m_Pipelines.m_RenderPBRImagesDescriptorSetLayout 
+						= renderer.CreateDescriptorSetLayout(nullptr, 3, pbrRenderPipelineDescriptorSetBindings);
 
 					if (m_Pipelines.m_RenderPBRImagesDescriptorSetLayout == VK_NULL_HANDLE) {
 						CriticalError(ErrorOrigin::Renderer, 
@@ -3831,13 +3889,9 @@ void main() {
 					.height = swapchainExtent.height,
 					.depth = 1,
 				};
-				uint32_t colorImageQueueFamilies[2] { renderer.m_GraphicsQueueFamilyIndex, renderer.m_ComputeQueueFamilyIndex };
-				uint32_t colorImageQueueFamilyCount = 2;
-				VkSharingMode colorImageSharingMode = VK_SHARING_MODE_CONCURRENT;
-				if (colorImageQueueFamilies[0] == colorImageQueueFamilies[1]) {
-					colorImageQueueFamilyCount = 1;
-					colorImageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-				}
+				uint32_t colorImageQueueFamilies[1] { renderer.m_GraphicsQueueFamilyIndex, };
+				uint32_t colorImageQueueFamilyCount = 1;
+				VkSharingMode colorImageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 				LockGuard graphicsQueueLockGuard(renderer.m_EarlyGraphicsCommandBufferQueueMutex);
 				Renderer::CommandBuffer<Renderer::Queue::Graphics>* commandBuffer
 					= renderer.m_EarlyGraphicsCommandBufferQueue.New();
@@ -3845,7 +3899,8 @@ void main() {
 					CriticalError(ErrorOrigin::Renderer,
 						"renderer graphics command buffer was out of memory (in function World::SwapchainCreateCallback)!");
 				}
-				if (!renderer.AllocateCommandBuffers(Renderer::GetDefaultCommandBufferAllocateInfo(renderer.GetCommandPool<Renderer::Queue::Graphics>(), 1), 
+				if (!renderer.AllocateCommandBuffers(Renderer::GetDefaultCommandBufferAllocateInfo(
+						renderer.GetCommandPool<Renderer::Queue::Graphics>(), 1), 
 						&commandBuffer->m_CommandBuffer)) {
 					CriticalError(ErrorOrigin::Renderer, 
 						"failed to allocate command buffer (function Renderer::AllocateCommandBuffers in function Wrold::SwapchainCreateCallback)");
@@ -3859,8 +3914,10 @@ void main() {
 						VkImage& image = m_DiffuseImages[i];
 						VkDeviceMemory& imageMemory = m_DiffuseImagesMemory[i];
 						VkImageView& imageView = m_DiffuseImageViews[i];
-						image = renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
-							VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
+						image = renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
+							VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
+							VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+							colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
 						if (image == VK_NULL_HANDLE) {
 							CriticalError(ErrorOrigin::Renderer, 
 								"failed to create world diffuse image (function Renderer::CreateImage in function World::SwapchainCreateCallback)!");
@@ -3880,8 +3937,10 @@ void main() {
 						VkImage& image = m_PositionAndMetallicImages[i];
 						VkDeviceMemory& imageMemory = m_PositionAndMetallicImagesMemory[i];
 						VkImageView& imageView = m_PositionAndMetallicImageViews[i];
-						image = renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
-							VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
+						image = renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
+							VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
+							VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+							colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
 						if (image == VK_NULL_HANDLE) {
 							CriticalError(ErrorOrigin::Renderer, 
 								"failed to create position/metallic image (function Renderer::CreateImage in function World::SwapchainCreateCallback)!");
@@ -3901,8 +3960,10 @@ void main() {
 						VkImage& image = m_NormalAndRougnessImages[i];
 						VkDeviceMemory& imageMemory = m_NormalAndRougnessImagesMemory[i];
 						VkImageView& imageView = m_NormalAndRougnessImageViews[i];
-						image = renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
-							VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
+						image = renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
+							VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
+							VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, colorImageSharingMode, 
+							colorImageQueueFamilyCount, colorImageQueueFamilies);
 						if (image == VK_NULL_HANDLE) {
 							CriticalError(ErrorOrigin::Renderer, 
 								"failed to create normal/roughness image (function Renderer::CreateImage in function World::SwapchainCreateCallback)!");
@@ -4101,7 +4162,10 @@ void main() {
 					creature.Move(newPos);
 					if (m_CameraFollowObjectID == creature.m_ObjectID) {
 						if (creature.m_CameraFollowCallback) {
-							creature.m_CameraFollowCallback(creature, m_CameraMatricesMap->m_View);
+							Vec3 eye;
+							Vec3 lookAt;
+							creature.m_CameraFollowCallback(creature, eye, lookAt);
+							m_CameraMatricesMap->m_View = Mat4::LookAt(eye, Vec3::Up(), lookAt);
 						}
 					}
 				}
