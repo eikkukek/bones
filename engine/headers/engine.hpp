@@ -2245,7 +2245,7 @@ void main() {
 				outIndices.Reserve(m_VIndices.m_Size);
 				for (uint32_t i = 0; i < m_VIndices.m_Size; i++) {
 					VertexType newVertex{};
-					setPos(newVertex, m_Vs[m_VnIndices[i]]);
+					setPos(newVertex, m_Vs[m_VIndices[i]]);
 					setUV(newVertex, m_Vts[m_VtIndices[i]]);
 					if (m_VnIndices.m_Size) {
 						setNormal(newVertex, m_Vns[m_VnIndices[i]]);
@@ -3225,8 +3225,10 @@ void main() {
 
 		vec3 pos = vec3(inPosition.x, -inPosition.y, inPosition.z);
 
+		mat4 normalMat = transpose(inverse(pc.c_Transform));
+
 		outPosition = vec3(pc.c_Transform * vec4(pos, 1.0f));
-		outNormal = normalize(vec3(pc.c_NormalMatrix * vec4(inNormal, 1.0f)));
+		outNormal = normalize(vec3(normalMat * vec4(inNormal, 0.0f)));
 
 		gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(pos, 1.0f);
 	}
@@ -3280,7 +3282,21 @@ void main() {
 	layout(set = 0, binding = 2) uniform sampler2D normal_and_roughness;
 
 	void main() {
-		outColor = texture(position_and_metallic, inUV);
+
+		const vec3 point_light_pos = vec3(3.0f, 0.0f, 0.0f);
+
+		vec3 pos = vec3(texture(position_and_metallic, inUV));
+		vec3 normal = vec3(texture(normal_and_roughness, inUV));
+
+		const vec3 light_dir = normalize(point_light_pos - pos);
+
+		float diff = max(dot(normal, light_dir), 0.0f);
+
+		vec3 diffuse = diff * vec3(1.0f, 0.5f, 0.5f);
+	
+		vec3 color = (vec3(0.2f, 0.2f, 0.2f) + diffuse) * vec3(texture(diffuse_colors, inUV));
+
+		outColor = vec4(color, 1.0f);
 	}
 			)";
 
