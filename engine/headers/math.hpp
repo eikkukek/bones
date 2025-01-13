@@ -405,12 +405,12 @@ namespace engine {
 	template<typename T>
 	constexpr inline Mat4_T<T> Transpose(const Mat4_T<T>& a) noexcept {
 		Mat4_T result = a;
-		Swap(result[0].y, result[1].x);
-		Swap(result[0].z, result[2].x);
-		Swap(result[0].w, result[3].x);
-		Swap(result[1].z, result[3].y);
-		Swap(result[3].y, result[1].w);
-		Swap(result[3].z, result[2].w);
+		Swap(result[0][1], result[1][0]);
+		Swap(result[0][2], result[2][0]);
+		Swap(result[0][3], result[3][0]);
+		Swap(result[1][2], result[2][1]);
+		Swap(result[3][1], result[1][3]);
+		Swap(result[3][2], result[2][3]);
 		return result;
 	}
 
