@@ -9,8 +9,8 @@ public:
 	engine::World& m_World;
 	engine::StaticMesh& m_Mesh;
 	engine::Quaternion m_Rotation;
-	engine::Engine::Reference<engine::Creature> m_Creature;
-	engine::Engine::Reference<engine::World::RenderData> m_RenderData;
+	engine::Engine::PersistentReference<engine::Creature> m_Creature;
+	engine::Engine::PersistentReference<engine::World::RenderData> m_RenderData;
 
 	static engine::Vec3 MovementVectorUpdate(const engine::Creature& creature) {
 		using namespace engine;
