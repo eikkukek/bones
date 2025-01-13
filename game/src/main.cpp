@@ -153,7 +153,7 @@ int main() {
 	world.AddRenderData(grounds[0], groundTransform, groundMesh);
 
 	Engine::Obj cubeObj{};
-	FILE* fileStream = fopen("resources\\meshes\\cube.obj", "r");
+	FILE* fileStream = fopen("resources\\meshes\\sphere2.obj", "r");
 	assert(cubeObj.Load(fileStream));
 	fclose(fileStream);
 
