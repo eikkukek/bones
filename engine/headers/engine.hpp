@@ -3233,10 +3233,8 @@ void main() {
 
 		outUV = inUV;
 
-		mat4 normalMat = transpose(inverse(pc.c_Transform));
-
 		outPosition = vec3(pc.c_Transform * vec4(inPosition, 1.0f));
-		outNormal = normalize(vec3(normalMat * vec4(inNormal, 0.0f)));
+		outNormal = normalize(vec3(pc.c_NormalMatrix * vec4(inNormal, 0.0f)));
 
 		gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
 	}
