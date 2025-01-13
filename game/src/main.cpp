@@ -153,7 +153,7 @@ int main() {
 	world.AddRenderData(grounds[0], groundTransform, groundMesh);
 
 	Engine::Obj cubeObj{};
-	FILE* fileStream = fopen("resources\\meshes\\sphere2.obj", "r");
+	FILE* fileStream = fopen("resources\\meshes\\cube.obj", "r");
 	assert(cubeObj.Load(fileStream));
 	fclose(fileStream);
 
@@ -162,10 +162,6 @@ int main() {
 
 	assert(cubeObj.GetMesh(Engine::Vertex::SetPosition, Engine::Vertex::SetUV, 
 		Engine::Vertex::SetNormal, cubeVertices, cubeIndices));	
-
-	for (const Engine::Vertex& vertex : cubeVertices) {
-		fmt::print("normal: {}, {}, {}\n", vertex.m_Normal.x, vertex.m_Normal.y, vertex.m_Normal.z);
-	}
 
 	StaticMesh cubeMesh(engine);
 	cubeMesh.CreateBuffers(cubeVertices.m_Size, cubeVertices.m_Data, cubeIndices.m_Size, cubeIndices.m_Data);
