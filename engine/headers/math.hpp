@@ -190,6 +190,7 @@ namespace engine {
 
 		constexpr inline Vec4_T operator*(T scalar) const noexcept { return Vec4_T(x * scalar, y * scalar, z * scalar, w * scalar); }
 		constexpr inline Vec4_T& operator*=(T scalar) noexcept { x *= scalar; y *= scalar; z *= scalar; w *= scalar; return *this; }
+		constexpr inline Vec4_T& operator+=(const Vec4_T& other) noexcept { x += other.x; y += other.y; z += other.z; w += other.w; return *this; }
 
 		constexpr inline bool operator==(const Vec4_T& other) const noexcept = default;
 
@@ -274,7 +275,7 @@ namespace engine {
 	template<typename T>
 	struct Mat4_T {
 
-		static constexpr inline size_t size = 4;
+		static constexpr inline size_t col_length = 4;
 
 		Vec4_T<T> columns[4];
 
@@ -283,23 +284,6 @@ namespace engine {
 			: columns{ { num, Cast(0), Cast(0), Cast(0) }, { Cast(0), num, Cast(0), Cast(0) }, { Cast(0), Cast(0), num, Cast(0) }, { Cast(0), Cast(0), Cast(0), num } } {}
 		constexpr inline Mat4_T(T n0, T n1, T n2, T n3, T n4, T n5, T n6, T n7, T n8, T n9, T n10, T n11, T n12, T n13, T n14, T n15) noexcept
 			: columns{ { n0, n1, n2, n3 }, { n4, n5, n6, n7 }, { n8, n9, n10, n11 }, { n12, n13, n14, n15 } } {}
-
-		static constexpr inline Mat4_T Multiply(const Mat4_T& a, const Mat4_T& b) noexcept {
-			Mat4_T result{};
-			T (*aF)[4] = (T(*)[4])&a;
-			T (*bF)[4] = (T(*)[4])&b;
-			T (*resF)[4] = (T(*)[4])&result;
-			for (int i = 0; i < 4; i++) {
-				T num = Cast(0);
-				for (int j = 0; j < 4; j++) {
-					for (int k = 0; k < 4; k++) {
-						num += aF[k][j] * bF[i][k];
-					}
-					resF[i][j] += num;
-				}
-			}
-			return result;
-		}
 
 		static constexpr inline Vec4_T<T> Multiply(const Mat4_T& a, const Vec4_T<T>& b) noexcept {
 			return Vec4_T<T>(
@@ -372,6 +356,10 @@ namespace engine {
 			return result;
 		}
 
+		constexpr inline Vec3_T<T> LookAtFront() const {
+			return Vec3_T<T>(-columns[0].z, columns[1].z, -columns[2].z);
+		}
+
 		static constexpr inline Mat4_T Projection(T radFovY, T aspectRatio, T zNear, T zFar) noexcept {
 			T halfTan = tan(radFovY / 2);
 			Mat4_T result(1);
@@ -384,7 +372,7 @@ namespace engine {
 		}
 
 		static constexpr inline Mat4_T Orthogonal(T leftPlane, T rightPlane, T bottomPlane, T topPlane, T nearPlane, T farPlane) noexcept {
-			Mat4_T result{};
+			Mat4_T result(1);
 			result[0][0] = Cast(2) / (rightPlane - leftPlane);
 			result[1][1] = Cast(2) / (topPlane - bottomPlane);
 			result[2][2] = Cast(2) / (nearPlane + farPlane);
@@ -394,6 +382,44 @@ namespace engine {
 			result[3][3] = Cast(1);
 			return result;
 		}
+
+		friend constexpr inline Mat4_T<T> operator*(const Mat4_T<T>& a, const Mat4_T<T>& b) {
+
+			const Vec4_T<T>& aCol0 = a[0];
+			const Vec4_T<T>& aCol1 = a[1];
+			const Vec4_T<T>& aCol2 = a[2];
+			const Vec4_T<T>& aCol3 = a[3];
+
+			const Vec4_T<T>& bCol0 = b[0];
+			const Vec4_T<T>& bCol1 = b[1];
+			const Vec4_T<T>& bCol2 = b[2];
+			const Vec4_T<T>& bCol3 = b[3];
+
+			Mat4_T<T> result;
+			Vec4_T<T> col; 
+			col =  aCol0 * bCol0.x;
+			col += aCol1 * bCol0.y;
+			col += aCol2 * bCol0.z;
+			col += aCol3 * bCol0.w;
+			result[0] = col;
+			col =  aCol0 * bCol1.x;
+			col += aCol1 * bCol1.y;
+			col += aCol2 * bCol1.z;
+			col += aCol3 * bCol1.w;
+			result[1] = col;
+			col =  aCol0 * bCol2.x;
+			col += aCol1 * bCol2.y;
+			col += aCol2 * bCol2.z;
+			col += aCol3 * bCol2.w;
+			result[2] = col;
+			col =  aCol0 * bCol3.x;
+			col += aCol1 * bCol3.y;
+			col += aCol2 * bCol3.z;
+			col += aCol3 * bCol3.w;
+			result[3] = col;
+			return result;
+		}
+
 		constexpr inline const Vec4_T<T>& operator[](size_t index) const { return columns[index]; }
 		constexpr inline Vec4_T<T>& operator[](size_t index) { return columns[index]; }
 
@@ -415,7 +441,7 @@ namespace engine {
 	}
 
 	template<typename T>
-	constexpr inline Mat4_T<T> Invert(const Mat4_T<T>& a) noexcept {
+	constexpr inline Mat4_T<T> Inverse(const Mat4_T<T>& a) noexcept {
 
 		Mat4_T<T> res;
 
