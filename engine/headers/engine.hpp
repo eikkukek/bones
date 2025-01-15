@@ -3927,7 +3927,8 @@ bool IsInShadowDirLight(vec4 lightViewPos) {
 
 	if (shadowMapCoords.z > -1.0f && shadowMapCoords.z < 1.0f) {
 		float dist = texture(directional_light_shadow_map, shadowMapCoords.st * 0.5f + 0.5f).r;
-		return shadowMapCoords.w > 0.0f && dist < shadowMapCoords.z;
+		float bias = 0.005f;
+		return shadowMapCoords.w > 0.0f && dist < shadowMapCoords.z - bias;
 	}
 
 	return false;
