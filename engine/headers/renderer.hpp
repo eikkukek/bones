@@ -617,6 +617,10 @@ namespace engine {
 				m_BufferSize = 0;
 			}
 
+			bool IsNull() {
+				return m_Buffer == VK_NULL_HANDLE | m_VulkanDeviceMemory == VK_NULL_HANDLE;
+			}
+
 			bool Create(VkDeviceSize size, VkBufferUsageFlags bufferUsage, VkMemoryPropertyFlags bufferProperties, 
 				VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE, uint32_t queueFamilyIndexCount = 0, 
 				const uint32_t* pQueueFamilyIndices = nullptr) {
@@ -815,6 +819,16 @@ namespace engine {
 					return false;
 				}
 				return true;
+			}
+
+			bool MapMemory(VkDeviceSize offset, VkDeviceSize size, void** ppMap) const {
+				if (m_VulkanDeviceMemory == VK_NULL_HANDLE) {
+					PrintError(ErrorOrigin::Buffer, 
+						"attempting to map memory for buffer that's null (in function Buffer::MapMemory)!");
+					return false;
+				}
+				return VkCheck(vkMapMemory(m_Renderer.m_VulkanDevice, m_VulkanDeviceMemory, offset, size, 0, ppMap),
+					"failed to map buffer memory (function vkMapMemory in function buffer::MapMemory)!");
 			}
 		};
 
@@ -1110,7 +1124,7 @@ namespace engine {
 			}
 		}
 
-		bool VkCheck(VkResult result, const char* err) const {
+		static bool VkCheck(VkResult result, const char* err) {
 			if (result != VK_SUCCESS) {
 				PrintError(ErrorOrigin::Vulkan, err, result);
 				return false;
@@ -1118,8 +1132,8 @@ namespace engine {
 			return true;
 		}
 
-		VkFormat FindSupportedFormat(uint32_t candidateCount, VkFormat candidates[],
-				VkImageTiling tiling, VkFormatFeatureFlags features) {
+		VkFormat FindSupportedFormat(uint32_t candidateCount, const VkFormat candidates[],
+				VkImageTiling tiling, VkFormatFeatureFlags features) const {
 			for (uint32_t i = 0; i < candidateCount; i++) {
 				VkFormat format = candidates[i];
 				VkFormatProperties properties;
@@ -2081,7 +2095,17 @@ namespace engine {
 			return res;
 		}
 
-		VkDescriptorSetLayout CreateDescriptorSetLayout(const void* pNext, uint32_t bindingCount, VkDescriptorSetLayoutBinding* pBindings) const {
+		static constexpr VkDescriptorSetLayoutBinding GetDescriptorSetLayoutBinding(uint32_t binding, VkDescriptorType type, VkShaderStageFlags stages, uint32_t descriptorCount = 1) {
+			return {
+				.binding = binding,
+				.descriptorType = type,
+				.descriptorCount = 1,
+				.stageFlags = stages,
+				.pImmutableSamplers = nullptr,
+			};
+		}
+
+		VkDescriptorSetLayout CreateDescriptorSetLayout(const void* pNext, uint32_t bindingCount, const VkDescriptorSetLayoutBinding* pBindings) const {
 			VkDescriptorSetLayoutCreateInfo createInfo {
 				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
 				.pNext = pNext,
@@ -2149,6 +2173,11 @@ namespace engine {
 			return true;
 		}
 
+		bool FreeDescriptorSets(VkDescriptorPool descriptorPool, uint32_t setCount, const VkDescriptorSet sets[]) const {
+			return VkCheck(vkFreeDescriptorSets(m_VulkanDevice, descriptorPool, setCount, sets),
+				"failed to free desriptor sets (function vkFreeDescriptorSets in function FreeDescriptorSets)!");
+		};
+
 		static VkWriteDescriptorSet GetDescriptorWrite(const void* pNext, uint32_t binding, VkDescriptorSet set, VkDescriptorType type,
 				VkDescriptorImageInfo* pImageInfo, VkDescriptorBufferInfo* pBufferInfo, uint32_t dstArrayElement = 0, uint32_t descriptorCount = 1) {
 			return {
@@ -2169,7 +2198,7 @@ namespace engine {
 		}
 
 		VkPipelineLayout CreatePipelineLayout(uint32_t setLayoutCount, const VkDescriptorSetLayout* pSetLayouts, 
-				uint32_t pushConstantRangeCount, const VkPushConstantRange* pPushConstantRanges) {
+				uint32_t pushConstantRangeCount, const VkPushConstantRange* pPushConstantRanges) const {
 			VkPipelineLayoutCreateInfo createInfo {
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
 				.pNext = nullptr,
