@@ -673,6 +673,27 @@ namespace engine {
 			};
 		};
 
+		template<typename T>
+		struct Quadruple {
+
+			static constexpr uint32_t length = 4;
+
+			T t0{}, t1{}, t2{}, t3{};
+
+			constexpr T& operator[](uint32_t index) {
+				assert(index < length);
+				return (static_cast<T*>(this))[index];
+			}
+
+			operator T*() {
+				return (T*)this;
+			}
+
+			operator const T*() const {
+				return (const T*)this;
+			}
+		};
+
 		struct Vertex {
 
 			static const VkPipelineVertexInputStateCreateInfo& GetVertexInputState() {
@@ -3033,7 +3054,9 @@ void main() {
 
 		public:
 
-			struct Pipelines {
+			class Pipelines {
+
+				friend class World;
 
 				VkPipeline m_DrawPipelinePBR = VK_NULL_HANDLE;
 				VkPipelineLayout m_DrawPipelineLayoutPBR = VK_NULL_HANDLE;
@@ -3043,8 +3066,291 @@ void main() {
 
 				VkPipeline m_DebugPipeline = VK_NULL_HANDLE;
 				VkPipelineLayout m_DebugPipelineLayout = VK_NULL_HANDLE;
+
+				VkDescriptorSetLayout m_DirectionalLightShadowMapDescriptorSetLayout = VK_NULL_HANDLE;
 				VkDescriptorSetLayout m_CameraDescriptorSetLayout = VK_NULL_HANDLE;
 				VkDescriptorSetLayout m_RenderPBRImagesDescriptorSetLayout = VK_NULL_HANDLE;
+
+				void Initialize(Renderer& renderer, VkFormat colorImageResourceFormat) {
+
+					static constexpr VkDescriptorSetLayoutBinding camera_descriptor_set_layout_binding 
+						= Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT);
+
+					m_CameraDescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 1, &camera_descriptor_set_layout_binding);
+
+					if (m_CameraDescriptorSetLayout == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create camera descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Initialize)!");
+					}
+
+					VkPushConstantRange pbrDrawPushConstantRange {
+						.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+						.offset = 0,
+						.size = 128,
+					};
+
+					m_DrawPipelineLayoutPBR 
+						= renderer.CreatePipelineLayout(1, &m_CameraDescriptorSetLayout, 1, &pbrDrawPushConstantRange);
+
+					if (m_DrawPipelineLayoutPBR == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer,
+							"failed to create pbr draw pipeline layout for world (function Renderer::CreatePipelineLayout in function World::Initialize)!");
+					}
+
+					VkPushConstantRange pbrRenderPushConstantRange {
+						.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+						.offset = 0,
+						.size = 64,
+					};
+
+					const VkDescriptorSetLayout pbrRenderPipelineDescriptorSetLayouts[2] {
+						m_RenderPBRImagesDescriptorSetLayout,
+						m_DirectionalLightShadowMapDescriptorSetLayout,
+					};
+
+					m_RenderPipelineLayoutPBR 
+							= renderer.CreatePipelineLayout(2, pbrRenderPipelineDescriptorSetLayouts, 1, &pbrRenderPushConstantRange);
+
+					if (m_RenderPipelineLayoutPBR == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"faileld to create pbr render pipeline layout for world (function Renderer::CreatePipelineLayout in function World::Initialize)!");
+					}
+
+					VkPushConstantRange debugPushConstantRanges[2] {
+						{
+							.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+							.offset = 0,
+							.size = 64,
+						},
+						{
+							.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+							.offset = 64,
+							.size = 16,
+						},
+					};
+
+					m_DebugPipelineLayout = renderer.CreatePipelineLayout(1, &m_CameraDescriptorSetLayout, 2, debugPushConstantRanges);
+
+					if (m_DebugPipelineLayout == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer,
+							"failed to create debug pipeline layout for world (function Renderer::CreatePipelineLayout in function World::initialize)");
+					}
+
+					Renderer::Shader pbrDrawVertexShader(renderer);
+					Renderer::Shader pbrDrawFragmentShader(renderer);
+
+					if (!pbrDrawVertexShader.Compile(pbr_draw_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to compile pbr draw vertex shader code (function Renderer::Shader::Compile in function World::Initialize)!");
+					}
+
+					if (!pbrDrawFragmentShader.Compile(pbr_draw_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to compile pbr draw fragment shader code (function Renderer::Shader::Compile in function World::Initialize)!");
+					}
+
+					VkShaderModule pbrDrawShaderModules[2] {
+						pbrDrawVertexShader.CreateShaderModule(),
+						pbrDrawFragmentShader.CreateShaderModule(),
+					};
+
+					if (pbrDrawShaderModules[0] == VK_NULL_HANDLE || pbrDrawShaderModules[1] == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer,
+							"failed to create shader modules for pbr draw pipeline (function Renderer::Shader::CreateShaderModule in function World::Initialize)!");
+					}
+
+					VkPipelineShaderStageCreateInfo pbrDrawPipelineShaderStageInfos[2] {
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
+					};
+
+					Renderer::Shader pbrRenderVertexShader(renderer);
+					Renderer::Shader pbrRenderFragmentShader(renderer);
+
+					if (!pbrRenderVertexShader.Compile(pbr_render_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to compile pbr render vertex shader code (function Renderer::Shader::Compile in function World::Initialize)!");
+					}
+
+					if (!pbrRenderFragmentShader.Compile(pbr_render_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to compile pbr render fragment shader code (function Renderer::Shader::Compile in function World::Initialize)");
+					}
+
+					VkShaderModule pbrRenderShaderModules[2] {
+						pbrRenderVertexShader.CreateShaderModule(),
+						pbrRenderFragmentShader.CreateShaderModule(),
+					};
+
+					if (pbrRenderShaderModules[0] == VK_NULL_HANDLE || pbrRenderShaderModules[1] == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create shader modules for world pipeline (function Renderer::Shader::CreateShaderModule in function World::Initialize)!");
+					}
+
+					VkPipelineShaderStageCreateInfo pbrRenderPipelineShaderStageInfos[2] {
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
+					};
+
+					Renderer::Shader debugPipelineVertexShader(renderer);
+					Renderer::Shader debugPipelineFragmentShader(renderer);
+
+					if (!debugPipelineVertexShader.Compile(debug_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to compile vertex shader code (function Renderer::Shader::Compile in function World::Initialize)!");
+					}
+
+					if (!debugPipelineFragmentShader.Compile(debug_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to compile fragment shader code (function Renderer::Shader::Compile in function World::Initialize)!");
+					}
+
+					VkShaderModule debugPipelineShaderModules[2] {
+						debugPipelineVertexShader.CreateShaderModule(),
+						debugPipelineFragmentShader.CreateShaderModule(),
+					};
+
+					if (debugPipelineShaderModules[0] == VK_NULL_HANDLE || debugPipelineShaderModules[1] == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer,
+							"failed to create shader modules for world pipeline (function Renderer::Shader::CreateShaderModule in function World::Initialize)!");
+					}
+
+					VkPipelineShaderStageCreateInfo debugPipelineShaderStageInfos[2] {
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugPipelineShaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugPipelineShaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
+					};
+
+					static constexpr uint32_t color_attachment_count = 3;
+
+					VkFormat pbrDrawRenderingColorFormats[color_attachment_count] {
+						colorImageResourceFormat,
+						colorImageResourceFormat,
+						colorImageResourceFormat,
+					};
+
+					VkPipelineRenderingCreateInfo pbrDrawPipelineRenderingInfo 
+						= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(color_attachment_count, pbrDrawRenderingColorFormats, renderer.m_DepthOnlyFormat);
+
+					VkPipelineRenderingCreateInfo pbrRenderPipelineRenderingInfo
+						= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &renderer.m_SwapchainSurfaceFormat.format, VK_FORMAT_UNDEFINED);
+
+					VkPipelineRenderingCreateInfo debugPipelineRenderingInfo 
+						= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &renderer.m_SwapchainSurfaceFormat.format, 
+							renderer.m_DepthOnlyFormat);
+
+					VkPipelineColorBlendStateCreateInfo pbrDrawPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
+					pbrDrawPipelineColorBlendState.attachmentCount = color_attachment_count;
+					VkPipelineColorBlendAttachmentState pbrDrawPipelineColorAttachmentStates[color_attachment_count] {
+						Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
+						Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
+						Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
+					};
+					pbrDrawPipelineColorBlendState.pAttachments = pbrDrawPipelineColorAttachmentStates;
+
+					VkPipelineColorBlendStateCreateInfo pbrRenderPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
+					pbrRenderPipelineColorBlendState.attachmentCount = 1;
+					pbrRenderPipelineColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend;
+
+					VkPipelineColorBlendStateCreateInfo debugPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
+					debugPipelineColorBlendState.attachmentCount = 1;
+					debugPipelineColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
+
+					VkPipelineRasterizationStateCreateInfo debugPipelineRasterizationState = Renderer::GraphicsPipelineDefaults::rasterization_state;
+					debugPipelineRasterizationState.polygonMode = VK_POLYGON_MODE_LINE;
+
+					VkGraphicsPipelineCreateInfo graphicsPipelineInfos[3] = { 
+						{
+							.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+							.pNext = &pbrDrawPipelineRenderingInfo,
+							.stageCount = 2,
+							.pStages = pbrDrawPipelineShaderStageInfos,
+							.pVertexInputState = &Vertex::GetVertexInputState(),
+							.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
+							.pTessellationState = nullptr,
+							.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
+							.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
+							.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
+							.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
+							.pColorBlendState = &pbrDrawPipelineColorBlendState,
+							.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
+							.layout = m_DrawPipelineLayoutPBR,
+							.renderPass = VK_NULL_HANDLE,
+							.subpass = 0,
+							.basePipelineHandle = VK_NULL_HANDLE,
+							.basePipelineIndex = 0,
+						},
+						{
+							.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+							.pNext = &pbrRenderPipelineRenderingInfo,
+							.stageCount = 2,
+							.pStages = pbrRenderPipelineShaderStageInfos,
+							.pVertexInputState = &Vertex2D::GetVertexInputState(),
+							.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
+							.pTessellationState = nullptr,
+							.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
+							.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
+							.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
+							.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state_no_depth_tests,
+							.pColorBlendState = &pbrRenderPipelineColorBlendState,
+							.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
+							.layout = m_RenderPipelineLayoutPBR,
+							.renderPass = nullptr,
+							.subpass = 0,
+							.basePipelineHandle = VK_NULL_HANDLE,
+							.basePipelineIndex = 0,
+						},
+						{
+							.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+							.pNext = &debugPipelineRenderingInfo,
+							.stageCount = 2,
+							.pStages = debugPipelineShaderStageInfos,
+							.pVertexInputState = &Vertex::GetVertexInputState(),
+							.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
+							.pTessellationState = nullptr,
+							.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
+							.pRasterizationState = &debugPipelineRasterizationState,
+							.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
+							.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
+							.pColorBlendState = &debugPipelineColorBlendState,
+							.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
+							.layout = m_DebugPipelineLayout,
+							.renderPass = VK_NULL_HANDLE,
+							.subpass = 0,
+							.basePipelineHandle = VK_NULL_HANDLE,
+							.basePipelineIndex = 0,
+						},
+					};
+
+					VkPipeline pipelines[3];
+
+					if (!renderer.CreateGraphicsPipelines(3, graphicsPipelineInfos, pipelines)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create world graphics pipeline (function Renderer::CreateGraphicsPipelines in function World::Initialize)!");
+					}
+
+					m_DrawPipelinePBR = pipelines[0];
+					m_RenderPipelinePBR = pipelines[1];
+					m_DebugPipeline = pipelines[2];
+
+					renderer.DestroyShaderModule(pbrDrawShaderModules[0]);
+					renderer.DestroyShaderModule(pbrDrawShaderModules[1]);
+					renderer.DestroyShaderModule(pbrRenderShaderModules[0]);
+					renderer.DestroyShaderModule(pbrRenderShaderModules[1]);
+					renderer.DestroyShaderModule(debugPipelineShaderModules[0]);
+					renderer.DestroyShaderModule(debugPipelineShaderModules[1]);
+				}
+
+				void Terminate(Renderer& renderer) {
+					renderer.DestroyDescriptorSetLayout(m_CameraDescriptorSetLayout);
+					renderer.DestroyDescriptorSetLayout(m_RenderPBRImagesDescriptorSetLayout);
+					renderer.DestroyDescriptorSetLayout(m_DirectionalLightShadowMapDescriptorSetLayout);
+					renderer.DestroyPipeline(m_DrawPipelinePBR);
+					renderer.DestroyPipelineLayout(m_DrawPipelineLayoutPBR);
+					renderer.DestroyPipeline(m_RenderPipelinePBR);
+					renderer.DestroyPipelineLayout(m_RenderPipelineLayoutPBR);
+					renderer.DestroyPipeline(m_DebugPipeline);
+					renderer.DestroyPipelineLayout(m_DebugPipelineLayout);
+				}
 			};
 
 			struct RenderData : PersistentReferenceHolder<RenderData> {
@@ -3097,218 +3403,601 @@ void main() {
 				Mat4 m_View;
 			};
 
-			struct DirectionalLight {
+			class DirectionalLight {
 
-				struct MatricesBuffer {
-					Mat4 m_Projection;
-					Mat4 m_View;
+				friend class World;
+
+				struct Matrices {
+
+					Mat4 m_Projection { 1 };
+					Mat4 m_View { 1 };
+
+					Mat4 GetLightViewMatrix() const {
+						return m_Projection * m_View;
+					}
+
+					Vec3 GetDirection() const {
+						return m_View.LookAtFront();
+					}
 				};
 
 				struct FragmentBuffer {
+					Mat4 m_ViewMatrix;
 					Vec3 m_Direction{};
+					uint8_t pad0[4];
 					Vec3 m_Color{};
 				};
+
+				static constexpr const char * vertex_shader = R"(
+#version 450
+
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUV;
+layout(location = 3) in vec3 inTangent;
+layout(location = 4) in vec3 inBitangent;
+
+layout(push_constant) uniform PushConstant {
+	layout(offset = 0)
+	mat4 c_LightView;
+	mat4 c_Transform;
+} pc;
+
+void main() {
+	gl_Position = pc.c_LightView * pc.c_Transform * vec4(inPosition.x, -inPosition.y, inPosition.z, 1.0f);
+}
+				)";
 
 				World& m_World;
 
 				DynamicArray<VkImageView> m_DepthImageViews{};
+				Vec2_T<uint32_t> m_Resolution;
 
-				MatricesBuffer* m_MatricesMap{};
+				Matrices m_ViewMatrices{};
 
-				VkDescriptorSet m_RenderDescriptorSet{};
+				VkPipeline m_DrawPipeline{};
+				VkPipelineLayout m_DrawPipelineLayout{};
+				DynamicArray<VkDescriptorSet> m_ShadowMapDescriptorSets{};
 
 				FragmentBuffer* m_FragmentMap{};
 
-				Vec2_T<uint32_t> m_Resolution;
-				DynamicArray<VkImage> m_DepthStencilImages{};
-				DynamicArray<VkDeviceMemory> m_DepthStencilImagesMemory{};
-				Renderer::Buffer m_MatricesBuffer;
+				DynamicArray<VkImage> m_DepthImages{};
+				DynamicArray<VkDeviceMemory> m_DepthImagesMemory{};
+				VkDescriptorPool m_ShadowMapDescriptorPool{};
+				VkSampler m_ShadowMapSampler{};
 				Renderer::Buffer m_FragmentBuffer;
-				VkFormat m_DepthStencilFormat = VK_FORMAT_UNDEFINED;
 
 				DirectionalLight(World& world, Vec2_T<uint32_t> resolution) 
-					: m_World(world), m_Resolution(resolution), m_MatricesBuffer(world.m_Engine.m_Renderer), 
+					: m_World(world), m_Resolution(resolution), 
 						m_FragmentBuffer(world.m_Engine.m_Renderer) {}
 
-				void SwapchainCreateCallback(uint32_t imageCount) {
-					Renderer& renderer = m_World.m_Engine.m_Renderer;
-					if (m_DepthStencilFormat == VK_FORMAT_UNDEFINED) {
-						VkFormat candidates[3] {
-							VK_FORMAT_S8_UINT,
-						};
+				DirectionalLight(const DirectionalLight&) = delete;
+				DirectionalLight(DirectionalLight&&) = delete;
+
+				void Initialize() {
+
+					Renderer& renderer = m_World.m_Engine.m_Renderer;	
+
+					VkPushConstantRange pushConstantRange {
+						.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+						.offset = 0,
+						.size = 128,
+					};
+
+					m_DrawPipelineLayout = renderer.CreatePipelineLayout(0, nullptr, 1, &pushConstantRange);
+
+					if (m_DrawPipelineLayout == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create pipeline layout for directional light (function Renderer::CreateDescriptorSetLayout in function World::DirectionalLight::Initialize)!");
 					}
-					if (m_DepthStencilImages.m_Size < imageCount) {
-						size_t oldImageCount = m_DepthStencilImages.m_Size;
-						m_DepthStencilImages.Resize(imageCount);
-						m_DepthStencilImagesMemory.Resize(imageCount);
-						m_DepthImageViews.Resize(imageCount);
-						for (size_t i = oldImageCount; i < m_DepthStencilImages.m_Size; i++) {
-							VkImage& image = m_DepthStencilImages[i];
-							VkDeviceMemory& memory = m_DepthStencilImagesMemory[i];
-							VkImageView& imageView = m_DepthImageViews[i];
-							image = renderer.CreateImage(VK_IMAGE_TYPE_2D, renderer.m_DepthOnlyFormat, 
-								{ .width = m_Resolution.x, .height = m_Resolution.y, .depth = 1, },
-								1, 1, VK_SAMPLE_COUNT_1_BIT, 
-								VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
-								VK_SHARING_MODE_EXCLUSIVE, 1, &renderer.m_GraphicsQueueFamilyIndex);
-							if (image == VK_NULL_HANDLE) {
-								CriticalError(ErrorOrigin::Renderer, 
-									"failed to create image for directional light (function Renderer::CreateImage in function World::DirectionalLight::SwapchainCreateCallback)!");
-							}
-						}
+
+					Renderer::Shader vertexShader(renderer);
+
+					if (!vertexShader.Compile(vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to compile vertex shader for directional light (function Renderer::CreateDescriptorSetLayout in function World::DirectionalLight::Initialize)!");
 					}
-					else if (m_DepthImages.m_Size > imageCount) {
-						for (size_t i = imageCount; i > m_DepthImages.m_Size; i++) {
-							renderer.DestroyImageView(m_DepthImageViews[i]);
-							renderer.DestroyImage(m_DepthImages[i]);
-							renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
-						}
-						m_DepthImages.Resize(imageCount);
-						m_DepthImagesMemory.Resize(imageCount);
-						m_DepthImageViews.Resize(imageCount);
+
+					VkShaderModule shaderModule = vertexShader.CreateShaderModule();
+
+					if (shaderModule == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create vertex shader module for directional light (function Renderer::Shader::CreateShaderModule in function World::DirectionalLight::Initialize)!");
 					}
+
+					const VkPipelineShaderStageCreateInfo pipelineShaderStageInfo 
+						= Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(shaderModule, VK_SHADER_STAGE_VERTEX_BIT);
+
+					const VkPipelineRenderingCreateInfo pipelineRenderingCreateInfo 
+						= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(0, nullptr, renderer.m_DepthOnlyFormat);
+
+					VkPipelineDepthStencilStateCreateInfo pipelineDepthStencilStateInfo = Renderer::GraphicsPipelineDefaults::depth_stencil_state;
+					pipelineDepthStencilStateInfo.depthTestEnable = VK_TRUE;
+					pipelineDepthStencilStateInfo.depthCompareOp = VK_COMPARE_OP_LESS;
+					pipelineDepthStencilStateInfo.depthWriteEnable = VK_TRUE;
+
+					VkGraphicsPipelineCreateInfo graphicsPipelineCreateInfo {
+						.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+						.pNext = &pipelineRenderingCreateInfo,
+						.flags = 0,
+						.stageCount = 1,
+						.pStages = &pipelineShaderStageInfo,
+						.pVertexInputState = &Vertex::GetVertexInputState(),
+						.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
+						.pTessellationState = nullptr,
+						.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
+						.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
+						.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
+						.pDepthStencilState = &pipelineDepthStencilStateInfo,
+						.pColorBlendState = &Renderer::GraphicsPipelineDefaults::color_blend_state,
+						.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
+						.layout = m_DrawPipelineLayout,
+						.renderPass = VK_NULL_HANDLE,
+						.subpass = 0,
+						.basePipelineHandle = VK_NULL_HANDLE,
+						.basePipelineIndex = 0,
+					};
+
+					if (!renderer.CreateGraphicsPipelines(1, &graphicsPipelineCreateInfo, &m_DrawPipeline)) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create graphics pipeline for directional light (function Renderer::CreateGraphicsPipelines in function World::DirectionalLight::Initialize)!");
+					}
+
+					renderer.DestroyShaderModule(shaderModule);
+
+					VkDescriptorPoolSize poolSize {
+						.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+						.descriptorCount = 1,
+					};
+
+
+					m_ViewMatrices.m_Projection = Mat4::Orthogonal(-10.0f, 10.0f, -10.0f, 10.0f, 0.1f, 100.0f);
+					m_ViewMatrices.m_View = Mat4::LookAt(Vec3(10.0f, 10.0f, 0.0f), Vec3::Up(), Vec3(0.0f, 0.0f, 0.0f));
+
+					*m_FragmentMap = {
+						.m_ViewMatrix = m_ViewMatrices.GetLightViewMatrix(),
+						.m_Direction = m_ViewMatrices.GetDirection(),
+						.m_Color = Vec3(1.0f, 1.0f, 1.0f),
+					};
 				}
 
 				void Terminate() {
+					Renderer& renderer = m_World.m_Engine.m_Renderer;
+					for (uint32_t i = 0; i < m_DepthImages.m_Size; i++) {
+						renderer.DestroyImageView(m_DepthImageViews[i]);
+						renderer.DestroyImage(m_DepthImages[i]);
+						renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
+					}
+					renderer.DestroyPipeline(m_DrawPipeline);
+					renderer.DestroyPipelineLayout(m_DrawPipelineLayout);
+					renderer.DestroyDescriptorPool(m_ShadowMapDescriptorPool);
+					renderer.DestroySampler(m_ShadowMapSampler);
+					m_FragmentBuffer.Terminate();
+				}
+
+				void Render(const Renderer::DrawData& drawData) const {
+
+					VkImageMemoryBarrier memoryBarrier1 {
+						.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+						.pNext = nullptr,
+						.srcAccessMask = 0,
+						.dstAccessMask = 0,
+						.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+						.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+						.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+						.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+						.image = m_DepthImages[drawData.m_CurrentFrame],
+						.subresourceRange {
+							.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+							.baseMipLevel = 0,
+							.levelCount = 1,
+							.baseArrayLayer = 0,
+							.layerCount = 1,
+						},
+					};
+
+					vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
+						0, 0, nullptr, 0, nullptr, 1, &memoryBarrier1);
+
+					VkExtent2D extent { m_Resolution.x, m_Resolution.y };
+
+					VkRect2D scissor {
+						.offset = { 0, 0 },
+						.extent = extent,
+					};
+
+					VkViewport viewport {
+						.x = 0,
+						.y = 0,
+						.width = (float)extent.width,
+						.height = (float)extent.height,
+						.minDepth = 0.0f,
+						.maxDepth = 1.0f,
+					};
+
+					vkCmdSetScissor(drawData.m_CommandBuffer, 0, 1, &scissor);
+					vkCmdSetViewport(drawData.m_CommandBuffer, 0, 1, &viewport);
+
+					VkRenderingAttachmentInfo depthAttachment {
+						.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+						.pNext = nullptr,
+						.imageView = m_DepthImageViews[drawData.m_CurrentFrame],
+						.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+						.resolveMode = VK_RESOLVE_MODE_NONE,
+						.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+						.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+						.clearValue { .depthStencil { .depth = 1.0f, .stencil = 0 } },
+					};
+
+					VkRenderingInfo renderingInfo {
+						.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.renderArea = { .offset { 0, 0 }, .extent { extent }, },
+						.layerCount = 1,
+						.viewMask = 0,
+						.colorAttachmentCount = 0,
+						.pColorAttachments = nullptr,
+						.pDepthAttachment = &depthAttachment,
+						.pStencilAttachment = nullptr,
+					};
+
+					vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
+					vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_DrawPipeline);
+					Mat4 matrices[2] {
+						m_ViewMatrices.GetLightViewMatrix(),
+						{},
+					};
+					for (const RenderData& renderData : m_World.m_RenderDatas) {
+						matrices[1] = renderData.m_Transform;
+						vkCmdPushConstants(drawData.m_CommandBuffer, m_DrawPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, 128, matrices);
+						vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 0, 1, renderData.m_MeshData.m_VertexBuffers, renderData.m_MeshData.m_VertexBufferOffsets);
+						vkCmdBindIndexBuffer(drawData.m_CommandBuffer, renderData.m_MeshData.m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+						vkCmdDrawIndexed(drawData.m_CommandBuffer, renderData.m_MeshData.m_IndexCount, 1, 0, 0, 0);
+					}	
+					vkCmdEndRendering(drawData.m_CommandBuffer);
+
+					VkExtent2D swapchainExtent = m_World.m_Engine.m_Renderer.m_SwapchainExtent;
+					scissor.extent = swapchainExtent;
+					viewport.width = (float)swapchainExtent.width;
+					viewport.height = (float)swapchainExtent.height;
+					vkCmdSetScissor(drawData.m_CommandBuffer, 0, 1, &scissor);
+					vkCmdSetViewport(drawData.m_CommandBuffer, 0, 1, &viewport);
+
+					VkImageMemoryBarrier memoryBarrier2 {
+						.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+						.pNext = nullptr,
+						.srcAccessMask = 0,
+						.dstAccessMask = 0,
+						.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+						.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+						.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+						.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+						.image = m_DepthImages[drawData.m_CurrentFrame],
+						.subresourceRange {
+							.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+							.baseMipLevel = 0,
+							.levelCount = 1,
+							.baseArrayLayer = 0,
+							.layerCount = 1,
+						},
+					};
+
+					vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
+						0, 0, nullptr, 0, nullptr, 1, &memoryBarrier2);
+				}
+
+				void SwapchainCreateCallback(uint32_t imageCount, VkCommandBuffer commandBuffer) {
+
+					Renderer& renderer = m_World.m_Engine.m_Renderer;
+
+					if (m_FragmentBuffer.IsNull()) {
+						if (!m_FragmentBuffer.Create(sizeof(FragmentBuffer), 
+								VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+							CriticalError(ErrorOrigin::Renderer, 
+								"failed to create buffer for directional light (function Renderer::Buffer::Create in function World::DirectionalLight::SwapchainCreateCallback)!");
+						}
+						if (!m_FragmentBuffer.MapMemory(0, m_FragmentBuffer.m_BufferSize, (void**)&m_FragmentMap)) {
+							CriticalError(ErrorOrigin::Renderer, 
+								"failed to map buffer memory for directional light (function Renderer::Buffer::MapMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
+						}
+					}
+
+					if (m_DepthImageViews.m_Size != imageCount) {
+						if (m_DepthImages.m_Size < imageCount) {
+
+							size_t oldImageCount = m_DepthImages.m_Size;
+
+							m_DepthImages.Resize(imageCount);
+							m_DepthImagesMemory.Resize(imageCount);
+							m_DepthImageViews.Resize(imageCount);
+
+							VkExtent3D extent = { m_Resolution.x, m_Resolution.y, 1 };
+
+							for (size_t i = oldImageCount; i < imageCount; i++) {
+								VkImage& image = m_DepthImages[i];
+								VkDeviceMemory& memory = m_DepthImagesMemory[i];
+								VkImageView& imageView = m_DepthImageViews[i];
+								image = renderer.CreateImage(VK_IMAGE_TYPE_2D, renderer.m_DepthOnlyFormat, 
+									extent, 1, 1, VK_SAMPLE_COUNT_1_BIT, 
+									VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+									VK_SHARING_MODE_EXCLUSIVE, 1, &renderer.m_GraphicsQueueFamilyIndex);
+								if (image == VK_NULL_HANDLE) {
+									CriticalError(ErrorOrigin::Renderer, 
+										"failed to create depth image for directional light (function Renderer::CreateImage in function World::DirectionalLight::SwapchainCreateCallback)!");
+								}
+								memory = renderer.AllocateImageMemory(image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+								if (memory == VK_NULL_HANDLE) {
+									CriticalError(ErrorOrigin::Renderer, 
+										"failed to allocate depth image memory for directional light (function Renderer::AllocateImageMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
+								}
+								imageView = renderer.CreateImageView(image, VK_IMAGE_VIEW_TYPE_2D, renderer.m_DepthOnlyFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+								if (imageView == VK_NULL_HANDLE) {
+									CriticalError(ErrorOrigin::Renderer, 
+										"failed to create depth image view for directional light (function Renderer::AllocateImageMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
+								}
+
+								VkImageMemoryBarrier memoryBarrier = {
+									.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+									.pNext = nullptr,
+									.srcAccessMask = 0,
+									.dstAccessMask = 0,
+									.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+									.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+									.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+									.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+									.image = image,
+									.subresourceRange {
+										.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+										.baseMipLevel = 0,
+										.levelCount = 1,
+										.baseArrayLayer = 0,
+										.layerCount = 1,
+									},
+								};
+
+								vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
+									VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &memoryBarrier);
+							}
+						}
+						else if (m_DepthImages.m_Size > imageCount) {
+							for (size_t i = imageCount; i > m_DepthImages.m_Size; i++) {
+								renderer.DestroyImageView(m_DepthImageViews[i]);
+								renderer.DestroyImage(m_DepthImages[i]);
+								renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
+							}
+							m_DepthImages.Resize(imageCount);
+							m_DepthImagesMemory.Resize(imageCount);
+							m_DepthImageViews.Resize(imageCount);
+						}
+						if (m_ShadowMapSampler == VK_NULL_HANDLE) {
+							m_ShadowMapSampler = renderer.CreateSampler(Renderer::GetDefaultSamplerInfo());
+							if (m_ShadowMapSampler == VK_NULL_HANDLE) {
+								CriticalError(ErrorOrigin::Renderer, 
+									"failed to create shadow map sampler for directional light (function Renderer::CreateSampler in function World::DirectionalLight::SwapchainCreateCallback)!");
+							}
+						}
+						if (m_ShadowMapDescriptorPool != VK_NULL_HANDLE) {
+							renderer.DestroyDescriptorPool(m_ShadowMapDescriptorPool);
+						}
+						DynamicArray<VkDescriptorPoolSize> poolSizes(2 * imageCount);
+						for (uint32_t i = 0; i < poolSizes.m_Size;) {
+							poolSizes[i++] = {
+								.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+								.descriptorCount = 1,
+							};
+							poolSizes[i++] = {
+								.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+								.descriptorCount = 1,
+							};
+						}
+						m_ShadowMapDescriptorPool = renderer.CreateDescriptorPool(0, imageCount, poolSizes.m_Size, poolSizes.m_Data);
+						if (m_ShadowMapDescriptorPool == VK_NULL_HANDLE) {
+							CriticalError(ErrorOrigin::Renderer, 
+								"failed to create descriptor pool for directional light (function Renderer::CreateDescriptorPool in function World::DirectionalLight::SwapchainCreateCallback)!");
+						}
+						m_ShadowMapDescriptorSets.Resize(imageCount);
+						DynamicArray<VkDescriptorSetLayout> setLayouts(imageCount);
+						for (VkDescriptorSetLayout& layout : setLayouts) {
+							layout = m_World.m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout;
+						}
+						if (!renderer.AllocateDescriptorSets(nullptr, m_ShadowMapDescriptorPool, imageCount, setLayouts.m_Data, m_ShadowMapDescriptorSets.m_Data)) {
+							CriticalError(ErrorOrigin::Renderer, 
+								"failed to allocate descriptor sets for directional light (function Renderer::AllocateDescriptorSets in function World::DirectionalLight::SwapchainCreateCallback)!");
+						}
+						VkDescriptorBufferInfo descriptorBufferInfo {
+							.buffer = m_FragmentBuffer.m_Buffer,
+							.offset = 0,
+							.range = sizeof(FragmentBuffer),
+						};
+						for (uint32_t i = 0; i < imageCount; i++) {
+							VkDescriptorImageInfo imageInfo {
+								.sampler = m_ShadowMapSampler,
+								.imageView = m_DepthImageViews[i],
+								.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+							};
+							VkWriteDescriptorSet descriptorWrites[2] {
+								Renderer::GetDescriptorWrite(nullptr, 0, m_ShadowMapDescriptorSets[i], VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr),
+								Renderer::GetDescriptorWrite(nullptr, 1, m_ShadowMapDescriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &descriptorBufferInfo),
+							};
+							renderer.UpdateDescriptorSets(2, descriptorWrites);
+						}
+					}	
 				}
 			};
 
 			static constexpr const char* pbr_draw_pipeline_vertex_shader = R"(
-	#version 450
+#version 450
 
-	layout(location = 0) in vec3 inPosition;
-	layout(location = 1) in vec3 inNormal;
-	layout(location = 2) in vec2 inUV;
-	layout(location = 3) in vec3 inTangent;
-	layout(location = 4) in vec3 inBitangent;
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUV;
+layout(location = 3) in vec3 inTangent;
+layout(location = 4) in vec3 inBitangent;
 
-	layout(location = 0) out vec2 outUV;
-	layout(location = 1) out vec3 outPosition;
-	layout(location = 2) out vec3 outNormal;
+layout(location = 0) out vec2 outUV;
+layout(location = 1) out vec3 outPosition;
+layout(location = 2) out vec3 outNormal;
 
-	layout(set = 0, binding = 0) uniform CameraMatrices {
-		mat4 c_Projection;
-		mat4 c_View;
-	} camera_matrices;
+layout(set = 0, binding = 0) uniform CameraMatrices {
+	mat4 c_Projection;
+	mat4 c_View;
+} camera_matrices;
 
-	layout(push_constant) uniform PushConstant {
-		layout(offset = 0) 
-		mat4 c_Transform;
-		mat4 c_NormalMatrix;
-	} pc;
+layout(push_constant) uniform PushConstant {
+	layout(offset = 0) 
+	mat4 c_Transform;
+	mat4 c_NormalMatrix;
+} pc;
 
-	void main() {
+void main() {
 
-		outUV = inUV;
+	vec3 modelPos = vec3(inPosition.x, -inPosition.y, inPosition.z);
 
-		outPosition = vec3(pc.c_Transform * vec4(inPosition, 1.0f));
-		outNormal = normalize(vec3(pc.c_NormalMatrix * vec4(inNormal, 0.0f)));
+	outUV = inUV;
+	
+	outNormal = normalize(vec3(pc.c_NormalMatrix * vec4(inNormal, 0.0f)));
+	
+	outPosition = vec3(pc.c_Transform * vec4(modelPos, 1.0f));
 
-		gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
-	}
+	gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(modelPos, 1.0f);
+}
 			)";
 
 			static constexpr const char* pbr_draw_pipeline_fragment_shader = R"(
-	#version 450
+#version 450
 
-	layout(location = 0) in vec2 inUV;
-	layout(location = 1) in vec3 inPosition;
-	layout(location = 2) in vec3 inNormal;
+layout(location = 0) in vec2 inUV;
+layout(location = 1) in vec3 inPosition;
+layout(location = 2) in vec3 inNormal;
 
-	layout(location = 0) out vec4 outDiffuseColor;
-	layout(location = 1) out vec4 outPositionAndMetallic;
-	layout(location = 2) out vec4 outNormalAndRougness;
+layout(location = 0) out vec4 outDiffuseColor;
+layout(location = 1) out vec4 outPositionAndMetallic;
+layout(location = 2) out vec4 outNormalAndRougness;
 
-	void main() {
-		outDiffuseColor = vec4(1.0f, 1.0f, 1.0f, 1.0f);
-		outPositionAndMetallic = vec4(inPosition, 1.0f);
-		outNormalAndRougness = vec4(inNormal, 1.0f);
-	}
+void main() {
+
+	outDiffuseColor = vec4(1.0f, 1.0f, 1.0f, 1.0f);
+	outPositionAndMetallic = vec4(inPosition, 1.0f);
+	outNormalAndRougness = vec4(inNormal, 1.0f);
+}
 			)";
 
 			static constexpr const char* pbr_render_pipeline_vertex_shader = R"(
-	#version 450
+#version 450
 
-	layout(location = 0) in vec3 inPosition;
-	layout(location = 1) in vec2 inUV;
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec2 inUV;
 
-	layout(location = 0) out vec2 outUV;
+layout(location = 0) out vec2 outUV;
 
-	layout(push_constant) uniform PushConstant {
-		mat4 c_Transform;
-	} pc;
+layout(push_constant) uniform PushConstant {
+	layout(offset = 0)
+	mat4 c_Transform;
+} pc;
 
-	void main() {
-		outUV = inUV;
-		gl_Position = pc.c_Transform * vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
-	}
+void main() {
+	outUV = inUV;
+	gl_Position = pc.c_Transform * vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
+}
 			)";
 
 			static constexpr const char* pbr_render_pipeline_fragment_shader = R"(
-	#version 450
+#version 450
 
-	layout(location = 0) in vec2 inUV;
+layout(location = 0) in vec2 inUV;
 
-	layout(location = 0) out vec4 outColor;
+layout(location = 0) out vec4 outColor;
 
-	layout(set = 0, binding = 0) uniform sampler2D diffuse_colors;
-	layout(set = 0, binding = 1) uniform sampler2D position_and_metallic;
-	layout(set = 0, binding = 2) uniform sampler2D normal_and_roughness;
+layout(set = 0, binding = 0) uniform sampler2D diffuse_colors;
+layout(set = 0, binding = 1) uniform sampler2D position_and_metallic;
+layout(set = 0, binding = 2) uniform sampler2D normal_and_roughness;
 
-	void main() {
+layout(set = 1, binding = 0) uniform sampler2D directional_light_shadow_map;
 
-		const vec3 point_light_pos = vec3(0.0f, 3.0f, 0.0f);
+layout(set = 1, binding = 1) uniform DirectionalLight {
+	mat4 c_ViewSpaceMatrix;
+	vec3 c_Direction;
+	vec3 c_Color;
+} directional_light;
 
-		vec3 pos = vec3(texture(position_and_metallic, inUV));
-		vec3 normal = vec3(texture(normal_and_roughness, inUV));
+bool IsInShadowDirLight(vec4 lightViewPos) {
 
-		const vec3 light_dir = normalize(point_light_pos - pos);
+	const vec4 shadowMapCoords = lightViewPos / lightViewPos.w;
 
-		float diff = max(dot(normal, light_dir), 0.0f);
-
-		vec3 diffuse = diff * vec3(1.0f, 0.5f, 0.5f);
-	
-		vec3 color = (vec3(0.2f, 0.2f, 0.2f) + diffuse) * vec3(texture(diffuse_colors, inUV));
-
-		outColor = vec4(color, 1.0f);
+	if (shadowMapCoords.z > -1.0f && shadowMapCoords.z < 1.0f) {
+		float dist = texture(directional_light_shadow_map, shadowMapCoords.st * 0.5f + 0.5f).r;
+		return shadowMapCoords.w > 0.0f && dist < shadowMapCoords.z;
 	}
+
+	return false;
+
+/*
+	const float smallestDepth = texture(directional_light_shadow_map, uv).r;
+
+	const float currentDepth = shadowMapCoords.z;
+
+	return currentDepth > smallestDepth;
+*/
+}
+
+void main() {
+
+	const vec4 modelPosAndMetal = texture(position_and_metallic, inUV);
+
+	const vec3 pos = modelPosAndMetal.xyz;
+	const vec3 normal = vec3(texture(normal_and_roughness, inUV));	
+
+	vec4 lightViewPos
+		= directional_light.c_ViewSpaceMatrix * vec4(modelPosAndMetal.xyz, 1.0f);
+
+	vec3 lightDir = directional_light.c_Direction;
+
+	const float diff = IsInShadowDirLight(lightViewPos) ? 0.0f : max(dot(normal, lightDir), 0.0f);
+
+	const vec3 diffuse = diff * directional_light.c_Color;
+	
+	const vec3 color = (vec3(0.2f, 0.2f, 0.2f) + diffuse) * vec3(texture(diffuse_colors, inUV));
+
+	outColor = vec4(color, 1.0f);
+}
 			)";
 
 			static constexpr const char* debug_pipeline_vertex_shader = R"(
-	#version 450
+#version 450
 
-	layout(location = 0) in vec3 inPosition;
-	layout(location = 1) in vec3 inNormal;
-	layout(location = 2) in vec2 inUV;
-	layout(location = 3) in vec3 inTangent;
-	layout(location = 4) in vec3 inBitangent;
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUV;
+layout(location = 3) in vec3 inTangent;
+layout(location = 4) in vec3 inBitangent;
 
-	layout(set = 0, binding = 0) uniform CameraMatrices {
-		mat4 c_Projection;
-		mat4 c_View;
-	} camera_matrices;
+layout(set = 0, binding = 0) uniform CameraMatrices {
+	mat4 c_Projection;
+	mat4 c_View;
+} camera_matrices;
 
-	layout(push_constant) uniform PushConstant {
-		layout(offset = 0) mat4 c_Transform;
-	} pc;
+layout(push_constant) uniform PushConstant {
+	layout(offset = 0) mat4 c_Transform;
+} pc;
 
-	void main() {
-		gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(inPosition, 1.0f);
-	}
+void main() {
+	gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(inPosition, 1.0f);
+}
 			)";
 
 			static constexpr const char* debug_pipeline_fragment_shader = R"(
-	#version 450
+#version 450
 
-	layout(location = 0) out vec4 outColor;
+layout(location = 0) out vec4 outColor;
 
-	layout(push_constant) uniform PushConstant {
-		layout(offset = 64) vec4 c_Color;
-	} pc;
+layout(push_constant) uniform PushConstant {
+	layout(offset = 64) vec4 c_Color;
+} pc;
 
-	void main() {
-		outColor = pc.c_Color;
-	}
+void main() {
+	outColor = pc.c_Color;
+}
 			)";
 
 		private:
@@ -3337,9 +4026,10 @@ void main() {
 			DynamicArray<RenderData> m_RenderDatas{};
 			VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
 			DynamicArray<VkDescriptorSet> m_RenderPBRImagesDescriptorSets{};
+			DirectionalLight m_DirectionalLight;
 			Mat4 m_RenderPBRQuadTransform{1};
 			MeshData m_StaticQuadMeshDataPBR;
-			
+		
 			DynamicArray<DebugRenderData> m_DebugRenderDatas{};
 
 			DynamicArray<VkImage> m_DiffuseImages{};
@@ -3352,10 +4042,10 @@ void main() {
 			DynamicArray<VkDeviceMemory> m_DepthImagesMemory{};
 			VkDescriptorPool m_CameraMatricesDescriptorPool = VK_NULL_HANDLE;
 			VkDescriptorPool m_RenderPBRImagesDescriptorPool = VK_NULL_HANDLE;
-			DynamicArray<VkSampler> m_RenderPBRImagesSamplers{};
+			VkSampler m_RenderPBRImagesSampler{};
 			Renderer::Buffer m_CameraMatricesBuffer;
 
-			World(Engine& engine) : m_Engine(engine), m_CameraMatricesBuffer(m_Engine.m_Renderer) {}
+			World(Engine& engine) : m_Engine(engine), m_DirectionalLight(*this, { 1024, 1024 }), m_CameraMatricesBuffer(m_Engine.m_Renderer) {}
 
 			World(const World&) = delete;
 			World(World&&) = delete;
@@ -3365,269 +4055,8 @@ void main() {
 				m_StaticQuadMeshDataPBR = m_Engine.m_StaticQuadMesh2D.GetMeshData();
 
 				Renderer& renderer = m_Engine.m_Renderer;
-				// world pipeline
-				VkDescriptorSetLayoutBinding vertexUniformBufferDescriptorSetBinding {
-					.binding = 0,
-					.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-					.descriptorCount = 1,
-					.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-					.pImmutableSamplers = nullptr,
-				};
 
-				m_Pipelines.m_CameraDescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 1, &vertexUniformBufferDescriptorSetBinding);
-
-				if (m_Pipelines.m_CameraDescriptorSetLayout == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create camera descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Initialize)!");
-				}
-
-				VkPushConstantRange pbrDrawPushConstantRange {
-					.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-					.offset = 0,
-					.size = 128,
-				};
-
-				m_Pipelines.m_DrawPipelineLayoutPBR 
-					= renderer.CreatePipelineLayout(1, &m_Pipelines.m_CameraDescriptorSetLayout, 1, &pbrDrawPushConstantRange);
-
-				if (m_Pipelines.m_DrawPipelineLayoutPBR == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create pbr draw pipeline layout for world (function Renderer::CreatePipelineLayout in function World::Initialize)!");
-				}
-
-				VkPushConstantRange pbrRenderPushConstantRange {
-					.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-					.offset = 0,
-					.size = 64,
-				};
-
-				m_Pipelines.m_RenderPipelineLayoutPBR = renderer.CreatePipelineLayout(1, &m_Pipelines.m_RenderPBRImagesDescriptorSetLayout, 1, &pbrRenderPushConstantRange);
-
-				if (m_Pipelines.m_RenderPipelineLayoutPBR == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"faileld to create pbr render pipeline layout for world (function Renderer::CreatePipelineLayout in function World::Initialize)!");
-				}
-
-				VkPushConstantRange debugPushConstantRanges[2] {
-					{
-						.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-						.offset = 0,
-						.size = 64,
-					},
-					{
-						.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-						.offset = 64,
-						.size = 16,
-					},
-				};
-
-				m_Pipelines.m_DebugPipelineLayout = renderer.CreatePipelineLayout(1, &m_Pipelines.m_CameraDescriptorSetLayout, 2, debugPushConstantRanges);
-
-				if (m_Pipelines.m_DebugPipelineLayout == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create debug pipeline layout for world (function Renderer::CreatePipelineLayout in function World::initialize)");
-				}
-
-				Renderer::Shader pbrDrawVertexShader(renderer);
-				Renderer::Shader pbrDrawFragmentShader(renderer);
-
-				if (!pbrDrawVertexShader.Compile(pbr_draw_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile pbr draw vertex shader code (function Renderer::Shader::Compile in function World::Initialize)!");
-				}
-
-				if (!pbrDrawFragmentShader.Compile(pbr_draw_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile pbr draw fragment shader code (function Renderer::Shader::Compile in function World::Initialize)!");
-				}
-
-				VkShaderModule pbrDrawShaderModules[2] {
-					pbrDrawVertexShader.CreateShaderModule(),
-					pbrDrawFragmentShader.CreateShaderModule(),
-				};
-
-				if (pbrDrawShaderModules[0] == VK_NULL_HANDLE || pbrDrawShaderModules[1] == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create shader modules for world pipeline (function Renderer::Shader::CreateShaderModule in function World::Initialize)!");
-				}
-
-				VkPipelineShaderStageCreateInfo pbrDrawPipelineShaderStageInfos[2] {
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
-				};
-
-				Renderer::Shader pbrRenderVertexShader(renderer);
-				Renderer::Shader pbrRenderFragmentShader(renderer);
-
-				if (!pbrRenderVertexShader.Compile(pbr_render_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile pbr render vertex shader code (function Renderer::Shader::Compile in function World::Initialize)!");
-				}
-
-				if (!pbrRenderFragmentShader.Compile(pbr_render_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile pbr render fragment shader code (function Renderer::Shader::Compile in function World::Initialize)");
-				}
-
-				VkShaderModule pbrRenderShaderModules[2] {
-					pbrRenderVertexShader.CreateShaderModule(),
-					pbrRenderFragmentShader.CreateShaderModule(),
-				};
-
-				if (pbrRenderShaderModules[0] == VK_NULL_HANDLE || pbrRenderShaderModules[1] == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create shader modules for world pipeline (function Renderer::Shader::CreateShaderModule in function World::Initialize)!");
-				}
-
-				VkPipelineShaderStageCreateInfo pbrRenderPipelineShaderStageInfos[2] {
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
-				};
-
-				Renderer::Shader debugPipelineVertexShader(renderer);
-				Renderer::Shader debugPipelineFragmentShader(renderer);
-
-				if (!debugPipelineVertexShader.Compile(debug_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile vertex shader code (function Renderer::Shader::Compile in function World::Initialize)!");
-				}
-
-				if (!debugPipelineFragmentShader.Compile(debug_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile fragment shader code (function Renderer::Shader::Compile in function World::Initialize)!");
-				}
-
-				VkShaderModule debugPipelineShaderModules[2] {
-					debugPipelineVertexShader.CreateShaderModule(),
-					debugPipelineFragmentShader.CreateShaderModule(),
-				};
-
-				if (debugPipelineShaderModules[0] == VK_NULL_HANDLE || debugPipelineShaderModules[1] == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create shader modules for world pipeline (function Renderer::Shader::CreateShaderModule in function World::Initialize)!");
-				}
-
-				VkPipelineShaderStageCreateInfo debugPipelineShaderStageInfos[2] {
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugPipelineShaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugPipelineShaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
-				};
-
-				VkFormat pbrDrawRenderingColorFormats[3] {
-					m_ColorImageResourcesFormat,
-					m_ColorImageResourcesFormat,
-					m_ColorImageResourcesFormat,
-				};
-
-				VkPipelineRenderingCreateInfo pbrDrawPipelineRenderingInfo 
-					= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(3, pbrDrawRenderingColorFormats, m_Engine.m_Renderer.m_DepthOnlyFormat);
-
-				VkPipelineRenderingCreateInfo pbrRenderPipelineRenderingInfo
-					= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &renderer.m_SwapchainSurfaceFormat.format, VK_FORMAT_UNDEFINED);
-
-				VkPipelineRenderingCreateInfo debugPipelineRenderingInfo 
-					= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &m_Engine.m_Renderer.m_SwapchainSurfaceFormat.format, 
-						m_Engine.m_Renderer.m_DepthOnlyFormat);
-
-				VkPipelineColorBlendStateCreateInfo pbrDrawPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
-				pbrDrawPipelineColorBlendState.attachmentCount = 3;
-				VkPipelineColorBlendAttachmentState pbrDrawPipelineColorAttachmentStates[3] {
-					Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
-					Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
-					Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
-				};
-				pbrDrawPipelineColorBlendState.pAttachments = pbrDrawPipelineColorAttachmentStates;
-
-				VkPipelineColorBlendStateCreateInfo pbrRenderPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
-				pbrRenderPipelineColorBlendState.attachmentCount = 1;
-				pbrRenderPipelineColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend;
-
-				VkPipelineColorBlendStateCreateInfo debugPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
-				debugPipelineColorBlendState.attachmentCount = 1;
-				debugPipelineColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
-
-				VkPipelineRasterizationStateCreateInfo debugPipelineRasterizationState = Renderer::GraphicsPipelineDefaults::rasterization_state;
-				debugPipelineRasterizationState.polygonMode = VK_POLYGON_MODE_LINE;
-
-				VkGraphicsPipelineCreateInfo graphicsPipelineInfos[3] = { 
-					{
-						.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-						.pNext = &pbrDrawPipelineRenderingInfo,
-						.stageCount = 2,
-						.pStages = pbrDrawPipelineShaderStageInfos,
-						.pVertexInputState = &Vertex::GetVertexInputState(),
-						.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
-						.pTessellationState = nullptr,
-						.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
-						.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
-						.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
-						.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
-						.pColorBlendState = &pbrDrawPipelineColorBlendState,
-						.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
-						.layout = m_Pipelines.m_DrawPipelineLayoutPBR,
-						.renderPass = VK_NULL_HANDLE,
-						.subpass = 0,
-						.basePipelineHandle = VK_NULL_HANDLE,
-						.basePipelineIndex = 0,
-					},
-					{
-						.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-						.pNext = &pbrRenderPipelineRenderingInfo,
-						.stageCount = 2,
-						.pStages = pbrRenderPipelineShaderStageInfos,
-						.pVertexInputState = &Vertex2D::GetVertexInputState(),
-						.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
-						.pTessellationState = nullptr,
-						.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
-						.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
-						.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
-						.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state_no_depth_tests,
-						.pColorBlendState = &pbrRenderPipelineColorBlendState,
-						.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
-						.layout = m_Pipelines.m_RenderPipelineLayoutPBR,
-						.renderPass = nullptr,
-						.subpass = 0,
-						.basePipelineHandle = VK_NULL_HANDLE,
-						.basePipelineIndex = 0,
-					},
-					{
-						.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-						.pNext = &debugPipelineRenderingInfo,
-						.stageCount = 2,
-						.pStages = debugPipelineShaderStageInfos,
-						.pVertexInputState = &Vertex::GetVertexInputState(),
-						.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
-						.pTessellationState = nullptr,
-						.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
-						.pRasterizationState = &debugPipelineRasterizationState,
-						.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
-						.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
-						.pColorBlendState = &debugPipelineColorBlendState,
-						.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
-						.layout = m_Pipelines.m_DebugPipelineLayout,
-						.renderPass = VK_NULL_HANDLE,
-						.subpass = 0,
-						.basePipelineHandle = VK_NULL_HANDLE,
-						.basePipelineIndex = 0,
-					},
-				};
-
-				VkPipeline pipelines[3];
-
-				if (!renderer.CreateGraphicsPipelines(3, graphicsPipelineInfos, pipelines)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create world graphics pipeline (function Renderer::CreateGraphicsPipelines in function World::Initialize)!");
-				}
-
-				m_Pipelines.m_DrawPipelinePBR = pipelines[0];
-				m_Pipelines.m_RenderPipelinePBR = pipelines[1];
-				m_Pipelines.m_DebugPipeline = pipelines[2];
-
-				renderer.DestroyShaderModule(pbrDrawShaderModules[0]);
-				renderer.DestroyShaderModule(pbrDrawShaderModules[1]);
-				renderer.DestroyShaderModule(pbrRenderShaderModules[0]);
-				renderer.DestroyShaderModule(pbrRenderShaderModules[1]);
-				renderer.DestroyShaderModule(debugPipelineShaderModules[0]);
-				renderer.DestroyShaderModule(debugPipelineShaderModules[1]);
+				m_Pipelines.Initialize(renderer, m_ColorImageResourcesFormat);
 
 				if (!m_CameraMatricesBuffer.Create(sizeof(CameraMatricesBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
 						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
@@ -3673,25 +4102,19 @@ void main() {
 					VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &cameraDecriptorBufferInfo);
 
 				renderer.UpdateDescriptorSets(1, &cameraDescriptorSetWrite);
+
+				m_DirectionalLight.Initialize();
 			}
 
 			void Terminate() {
 				m_CameraMatricesBuffer.Terminate();
 				Renderer& renderer = m_Engine.m_Renderer;
-				renderer.DestroyDescriptorSetLayout(m_Pipelines.m_CameraDescriptorSetLayout);
 				renderer.DestroyDescriptorPool(m_CameraMatricesDescriptorPool);
-				renderer.DestroyDescriptorSetLayout(m_Pipelines.m_RenderPBRImagesDescriptorSetLayout);
 				renderer.DestroyDescriptorPool(m_RenderPBRImagesDescriptorPool);
-				for (VkSampler sampler : m_RenderPBRImagesSamplers) {
-					renderer.DestroySampler(sampler);
-				}
-				renderer.DestroyPipeline(m_Pipelines.m_DrawPipelinePBR);
-				renderer.DestroyPipelineLayout(m_Pipelines.m_DrawPipelineLayoutPBR);
-				renderer.DestroyPipeline(m_Pipelines.m_RenderPipelinePBR);
-				renderer.DestroyPipelineLayout(m_Pipelines.m_RenderPipelineLayoutPBR);
-				renderer.DestroyPipeline(m_Pipelines.m_DebugPipeline);
-				renderer.DestroyPipelineLayout(m_Pipelines.m_DebugPipelineLayout);
+				renderer.DestroySampler(m_RenderPBRImagesSampler);
+				m_Pipelines.Terminate(renderer);
 				DestroyImageResources();
+				m_DirectionalLight.Terminate();
 			}
 
 			void DestroyImageResources() {
@@ -3788,7 +4211,9 @@ void main() {
 		private:
 
 			void SwapchainCreateCallback(VkExtent2D swapchainExtent, uint32_t imageCount) {
+
 				Renderer& renderer = m_Engine.m_Renderer;
+
 				if (m_ColorImageResourcesFormat == VK_FORMAT_UNDEFINED) {
 					VkFormat colorImageResourcesFormatCandidates[2] = { VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_B8G8R8A8_SRGB };
 					m_ColorImageResourcesFormat = renderer.FindSupportedFormat(1, colorImageResourcesFormatCandidates, 
@@ -3798,6 +4223,9 @@ void main() {
 							"couldn't find suitable format for color image resources (function Renderer::FindSupportedFormat in function World::SwapchainCreateCallback)!");
 					}
 				}
+
+				static constexpr uint32_t descriptor_count = 3;
+
 				if (m_Pipelines.m_RenderPBRImagesDescriptorSetLayout == VK_NULL_HANDLE) {
 
 					VkDescriptorSetLayoutBinding imageSamplerDescriptorSetBinding {
@@ -3808,17 +4236,18 @@ void main() {
 						.pImmutableSamplers = nullptr,
 					};
 
-					VkDescriptorSetLayoutBinding pbrRenderPipelineDescriptorSetBindings[3] {
+					VkDescriptorSetLayoutBinding pbrRenderPipelineDescriptorSetBindings[descriptor_count] {
 						imageSamplerDescriptorSetBinding,
 						imageSamplerDescriptorSetBinding,
 						imageSamplerDescriptorSetBinding,
 					};
 
-					pbrRenderPipelineDescriptorSetBindings[1].binding = 1;
-					pbrRenderPipelineDescriptorSetBindings[2].binding = 2;
+					for (uint32_t i = 1; i < descriptor_count; i++) {
+						pbrRenderPipelineDescriptorSetBindings[i].binding = i;
+					}
 
 					m_Pipelines.m_RenderPBRImagesDescriptorSetLayout 
-						= renderer.CreateDescriptorSetLayout(nullptr, 3, pbrRenderPipelineDescriptorSetBindings);
+						= renderer.CreateDescriptorSetLayout(nullptr, descriptor_count, pbrRenderPipelineDescriptorSetBindings);
 
 					if (m_Pipelines.m_RenderPBRImagesDescriptorSetLayout == VK_NULL_HANDLE) {
 						CriticalError(ErrorOrigin::Renderer, 
@@ -3826,17 +4255,27 @@ void main() {
 					}
 				}
 
-				if (m_RenderPBRImagesSamplers.m_Size != imageCount) {
-					for (VkSampler sampler : m_RenderPBRImagesSamplers) {
-						renderer.DestroySampler(sampler);
+				if (m_RenderPBRImagesSampler == VK_NULL_HANDLE) {
+					m_RenderPBRImagesSampler = renderer.CreateSampler(renderer.GetDefaultSamplerInfo());
+					if (m_RenderPBRImagesSampler == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create pbr rendering pipeline image sampler for world (function Renderer::CreateSampler in function World::SwapchainCreateCallback)!");
 					}
-					m_RenderPBRImagesSamplers.Resize(imageCount);
-					for (VkSampler& sampler : m_RenderPBRImagesSamplers) {
-						sampler = renderer.CreateSampler(renderer.GetDefaultSamplerInfo());
-						if (sampler == VK_NULL_HANDLE) {
-							CriticalError(ErrorOrigin::Renderer, 
-								"failed to create pbr rendering pipeline image sampler for world (function Renderer::CreateSampler in function World::SwapchainCreateCallback)!");
-						}
+				}
+
+				if (m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout == VK_NULL_HANDLE) {
+					
+					static constexpr VkDescriptorSetLayoutBinding dir_light_shadow_map_descriptor_set_layout_bindings[2] {
+						Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT),
+						Renderer::GetDescriptorSetLayoutBinding(1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT),
+					};
+
+					m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout 
+						= renderer.CreateDescriptorSetLayout(nullptr, 2, dir_light_shadow_map_descriptor_set_layout_bindings);
+
+					if (m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create directional light descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Initialize)!");
 					}
 				}
 
@@ -3845,7 +4284,7 @@ void main() {
 					.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 					.descriptorCount = 1,
 				};
-				DynamicArray<VkDescriptorPoolSize> poolSizes(3 * imageCount);
+				DynamicArray<VkDescriptorPoolSize> poolSizes(descriptor_count * imageCount);
 				for (VkDescriptorPoolSize& size : poolSizes) {
 					size = poolSize;
 				}
@@ -3883,15 +4322,7 @@ void main() {
 				m_PositionAndMetallicImagesMemory.Resize(imageCount);
 				m_NormalAndRougnessImagesMemory.Resize(imageCount);
 				m_DepthImagesMemory.Resize(imageCount);
-				VkFormat depthFormat = renderer.m_DepthOnlyFormat;
-				VkExtent3D imageExtent {
-					.width = swapchainExtent.width,
-					.height = swapchainExtent.height,
-					.depth = 1,
-				};
-				uint32_t colorImageQueueFamilies[1] { renderer.m_GraphicsQueueFamilyIndex, };
-				uint32_t colorImageQueueFamilyCount = 1;
-				VkSharingMode colorImageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
 				LockGuard graphicsQueueLockGuard(renderer.m_EarlyGraphicsCommandBufferQueueMutex);
 				Renderer::CommandBuffer<Renderer::Queue::Graphics>* commandBuffer
 					= renderer.m_EarlyGraphicsCommandBufferQueue.New();
@@ -3909,14 +4340,25 @@ void main() {
 					CriticalError(ErrorOrigin::Renderer, 
 						"failed to begin command buffer (function Renderer::BeginCommandBuffer in function World::SwapchainCreateCallback)");
 				}
+
+				VkFormat depthFormat = renderer.m_DepthOnlyFormat;
+				VkExtent3D imageExtent {
+					.width = swapchainExtent.width,
+					.height = swapchainExtent.height,
+					.depth = 1,
+				};
+				uint32_t colorImageQueueFamilies[1] { renderer.m_GraphicsQueueFamilyIndex, };
+				uint32_t colorImageQueueFamilyCount = 1;
+				VkImageUsageFlags colorImageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; 
+				VkSharingMode colorImageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
 				for (uint32_t i = 0; i < imageCount; i++) {
 					{
 						VkImage& image = m_DiffuseImages[i];
 						VkDeviceMemory& imageMemory = m_DiffuseImagesMemory[i];
 						VkImageView& imageView = m_DiffuseImageViews[i];
 						image = renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
-							VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
-							VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+							VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, colorImageUsage, 
 							colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
 						if (image == VK_NULL_HANDLE) {
 							CriticalError(ErrorOrigin::Renderer, 
@@ -3938,8 +4380,7 @@ void main() {
 						VkDeviceMemory& imageMemory = m_PositionAndMetallicImagesMemory[i];
 						VkImageView& imageView = m_PositionAndMetallicImageViews[i];
 						image = renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
-							VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
-							VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+							VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, colorImageUsage, 
 							colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
 						if (image == VK_NULL_HANDLE) {
 							CriticalError(ErrorOrigin::Renderer, 
@@ -3961,9 +4402,8 @@ void main() {
 						VkDeviceMemory& imageMemory = m_NormalAndRougnessImagesMemory[i];
 						VkImageView& imageView = m_NormalAndRougnessImageViews[i];
 						image = renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
-							VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
-							VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, colorImageSharingMode, 
-							colorImageQueueFamilyCount, colorImageQueueFamilies);
+							VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, colorImageUsage, 
+							colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
 						if (image == VK_NULL_HANDLE) {
 							CriticalError(ErrorOrigin::Renderer, 
 								"failed to create normal/roughness image (function Renderer::CreateImage in function World::SwapchainCreateCallback)!");
@@ -4002,41 +4442,45 @@ void main() {
 						}
 					}
 
-					VkDescriptorImageInfo descriptorImageInfos[3] {
+					VkDescriptorImageInfo descriptorImageInfos[descriptor_count] {
 						{
-							.sampler = m_RenderPBRImagesSamplers[i],
+							.sampler = m_RenderPBRImagesSampler,
 							.imageView = m_DiffuseImageViews[i],
 							.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 						},
 						{
-							.sampler = m_RenderPBRImagesSamplers[i],
+							.sampler = m_RenderPBRImagesSampler,
 							.imageView = m_PositionAndMetallicImageViews[i],
 							.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 						},
 						{
-							.sampler = m_RenderPBRImagesSamplers[i],
+							.sampler = m_RenderPBRImagesSampler,
 							.imageView = m_NormalAndRougnessImageViews[i],
 							.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 						},
 					};
-					VkWriteDescriptorSet descriptorWrites[3] {};
-					for (uint32_t j = 0; j < 3; j++) {
+
+					VkWriteDescriptorSet descriptorWrites[descriptor_count];
+					for (uint32_t j = 0; j < descriptor_count; j++) {
 						descriptorWrites[j] 
 							= Renderer::GetDescriptorWrite(nullptr, j, m_RenderPBRImagesDescriptorSets[i], 
 								VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &descriptorImageInfos[j], nullptr);
 					}
-					renderer.UpdateDescriptorSets(3, descriptorWrites);
 
-					VkImage colorImages[3] {
+					renderer.UpdateDescriptorSets(descriptor_count, descriptorWrites);
+
+					static constexpr uint32_t image_count = descriptor_count;
+
+					VkImage colorImages[image_count] {
 						m_DiffuseImages[i],
 						m_PositionAndMetallicImages[i],
-						m_NormalAndRougnessImages[i],
-					};
+						m_NormalAndRougnessImages[i],	
+					};	
 
-					VkImageMemoryBarrier memoryBarriers[3];
+					VkImageMemoryBarrier memoryBarriers[image_count];
 
-					for (size_t i = 0; i < 3; i++) {
-						memoryBarriers[i] = {
+					for (size_t j = 0; j < image_count; j++) {
+						memoryBarriers[j] = {
 							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
 							.pNext = nullptr,
 							.srcAccessMask = 0,
@@ -4045,7 +4489,7 @@ void main() {
 							.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
 							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.image = colorImages[i],
+							.image = colorImages[j],
 							.subresourceRange {
 								.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
 								.baseMipLevel = 0,
@@ -4056,8 +4500,9 @@ void main() {
 						};
 					}
 					vkCmdPipelineBarrier(commandBuffer->m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-						VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 3, memoryBarriers);
+						VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, image_count, memoryBarriers);
 				}
+				m_DirectionalLight.SwapchainCreateCallback(imageCount, commandBuffer->m_CommandBuffer);
 				VkResult vkRes = vkEndCommandBuffer(commandBuffer->m_CommandBuffer);
 				if (vkRes != VK_SUCCESS) {
 					CriticalError(ErrorOrigin::Vulkan, 
@@ -4173,7 +4618,9 @@ void main() {
 
 			void RenderWorld(const Renderer::DrawData& drawData) const {
 				{
-					VkRenderingAttachmentInfo colorAttachments[3] {
+					static constexpr uint32_t color_attachment_count = 3;
+
+					VkRenderingAttachmentInfo colorAttachments[color_attachment_count] {
 						{
 							.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
 							.pNext = nullptr,
@@ -4224,7 +4671,7 @@ void main() {
 						.renderArea { .offset {}, .extent { m_Engine.m_Renderer.m_SwapchainExtent } },
 						.layerCount = 1,
 						.viewMask = 0,
-						.colorAttachmentCount = 3,
+						.colorAttachmentCount = color_attachment_count,
 						.pColorAttachments = colorAttachments,
 						.pDepthAttachment = &depthAttachment,
 					};
@@ -4236,7 +4683,7 @@ void main() {
 					for (const RenderData& data : m_RenderDatas) {
 						Mat4 matrices[2] {
 							data.m_Transform,
-							Transpose(Invert(data.m_Transform)),
+							Transpose(Inverse(data.m_Transform)),
 						};
 						vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DrawPipelineLayoutPBR,
 							VK_SHADER_STAGE_VERTEX_BIT, 0, 128, &matrices);
@@ -4247,6 +4694,9 @@ void main() {
 					}
 					vkCmdEndRendering(drawData.m_CommandBuffer);
 				}
+
+				m_DirectionalLight.Render(drawData);
+
 				{
 					VkRenderingAttachmentInfo colorAttachment {
 						.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -4271,15 +4721,17 @@ void main() {
 						.pDepthAttachment = nullptr,
 					};
 
-					VkImage images[3] {
+					static constexpr uint32_t image_count = 3;
+
+					VkImage images[image_count] {
 						m_DiffuseImages[drawData.m_CurrentFrame],
 						m_PositionAndMetallicImages[drawData.m_CurrentFrame],
 						m_NormalAndRougnessImages[drawData.m_CurrentFrame],
 					};
 
-					VkImageMemoryBarrier memoryBarriers[3]{};
+					VkImageMemoryBarrier memoryBarriers[image_count]{};
 
-					for (size_t i = 0; i < 3; i++) {
+					for (size_t i = 0; i < image_count; i++) {
 						memoryBarriers[i] = {
 							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
 							.pNext = nullptr,
@@ -4301,12 +4753,16 @@ void main() {
 					}
 
 					vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
-						0, 0, nullptr, 0, nullptr, 3, memoryBarriers);
+						0, 0, nullptr, 0, nullptr, image_count, memoryBarriers);
 
 					vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
 					vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_RenderPipelinePBR);
-					vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_RenderPipelineLayoutPBR, 0, 1, 
-						&m_RenderPBRImagesDescriptorSets[drawData.m_CurrentFrame], 0, nullptr);
+					VkDescriptorSet descriptorSets[2] {
+						m_RenderPBRImagesDescriptorSets[drawData.m_CurrentFrame],
+						m_DirectionalLight.m_ShadowMapDescriptorSets[drawData.m_CurrentFrame],
+					};
+					vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_RenderPipelineLayoutPBR, 0, 
+						2, descriptorSets, 0, nullptr);
 					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_RenderPipelineLayoutPBR, VK_SHADER_STAGE_VERTEX_BIT, 
 						0, 64, &m_RenderPBRQuadTransform);
 					vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 0, m_StaticQuadMeshDataPBR.m_VertexBufferCount, 
@@ -4315,7 +4771,7 @@ void main() {
 					vkCmdDrawIndexed(drawData.m_CommandBuffer, m_StaticQuadMeshDataPBR.m_IndexCount, 1, 0, 0, 0);
 					vkCmdEndRendering(drawData.m_CommandBuffer);
 
-					for (size_t i = 0; i < 3; i++) {
+					for (size_t i = 0; i < image_count; i++) {
 						memoryBarriers[i] = {
 							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
 							.pNext = nullptr,
@@ -4337,7 +4793,7 @@ void main() {
 					}
 
 					vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
-						0, 0, nullptr, 0, nullptr, 3, memoryBarriers);
+						0, 0, nullptr, 0, nullptr, image_count, memoryBarriers);
 				}
 			}
 
@@ -4505,25 +4961,25 @@ void main() {
 
 			static constexpr Vertex quad_vertices[quad_vertex_count] {
 				{
-					.m_Position { 1.0f, -1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, -1.0f },
-					.m_UV { 1.0f, 0.0f },
-				},	
+					.m_Position { -1.0f, 1.0f, 0.0f },
+					.m_Normal { 0.0f, 0.0f, 1.0f },
+					.m_UV { 0.0f, 1.0f },
+				},
 				{
 					.m_Position { 1.0f, 1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, -1.0f },
+					.m_Normal { 0.0f, 0.0f, 1.0f },
 					.m_UV { 1.0f, 1.0f },
 				},
 				{
 					.m_Position { -1.0f, -1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, -1.0f },
+					.m_Normal { 0.0f, 0.0f, 1.0f },
 					.m_UV { 0.0f, 0.0f },
 				},
 				{
-					.m_Position { -1.0f, 1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, -1.0f },
-					.m_UV { 0.0f, 1.0f },
-				},
+					.m_Position { 1.0f, -1.0f, 0.0f },
+					.m_Normal { 0.0f, 0.0f, 1.0f },
+					.m_UV { 1.0f, 0.0f },
+				},	
 			};
 
 			static constexpr uint32_t quad_index_count = 6;
