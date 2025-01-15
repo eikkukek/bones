@@ -26,12 +26,13 @@ public:
 		s_Instance->m_RenderData.m_Val->m_Transform[3] = Vec4(position, 1.0f);
 	}
 
-	static void CameraFollowCallback(const engine::Creature& creature, engine::Mat4& outViewMatrix) {
+	static void CameraFollowCallback(const engine::Creature& creature, engine::Vec3& outCameraPosition, engine::Vec3& outCameraLookAt) {
 		using namespace engine;
 		const engine::Vec3& creaturePos = creature.GetPosition();
 		static const Vec3 cameraOffset(20.0f, 20.0f, -20.0f);
 		static const Vec3 lookAtOffset(0.0f, 0.0f, 10.0f);
-		outViewMatrix = Mat4::LookAt(creaturePos + cameraOffset, Vec3(0.0f, 1.0f, 0.0f), creaturePos + lookAtOffset);
+		outCameraPosition = creaturePos + cameraOffset;
+		outCameraLookAt = creaturePos + lookAtOffset;
 	}
 
 	Player(engine::World& world, engine::StaticMesh& mesh) 
@@ -83,6 +84,11 @@ public:
 
 int main() {
 	using namespace engine;
+
+	Mat4 m0 = Mat4::LookAt(0.0f, Vec3::Up(), Vec3::Forward());
+	Mat4 m1 = Mat4::LookAt(Vec3(10.0f, 10.0f, 10.0f), Vec3::Up(), Vec3::Backward());
+	Vec4 v0 = Vec3(3.0f, 0.0f, 3.0f);
+
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
@@ -144,7 +150,7 @@ int main() {
 
 	MeshData groundMesh = engine.GetQuadMesh().GetMeshData();
 
-	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), pi / 2).AsMat4();
+	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), -pi / 2).AsMat4();
 	groundTransform[0] *= 10.0f;
 	groundTransform[1] *= 10.0f;
 	groundTransform[2] *= 10.0f;
