@@ -45,23 +45,25 @@ namespace engine {
 
 		enum class ErrorOrigin {
 			Uncategorized = 0,
-			Renderer = 1,
-			TextRenderer = 2,
-			UI = 3,
-			OutOfMemory = 4,
-			NullDereference = 5,
-			IndexOutOfBounds = 6,
-			Vulkan = 7,
-			Stb = 8,
-			DynamicArray = 9,
-			FileParsing = 10,
-			GameLogic = 11,
+			Engine = 1,
+			Renderer = 2,
+			TextRenderer = 3,
+			UI = 4,
+			OutOfMemory = 5,
+			NullDereference = 6,
+			IndexOutOfBounds = 7,
+			Vulkan = 8,
+			Stb = 9,
+			DynamicArray = 10,
+			FileParsing = 11,
+			GameLogic = 12,
 			MaxEnum,
 		};
 
 		static const char* ErrorOriginString(ErrorOrigin origin) {
 			const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
 				"Uncategorized",
+				"Engine",
 				"Renderer",
 				"TextRenderer",
 				"UI",
@@ -852,8 +854,14 @@ namespace engine {
 			bool Create(VkFormat format, Vec2_T<uint32_t> extent, const void* image) {
 				uint32_t pixelSize;
 				switch (format) {
-					case(VK_FORMAT_R8G8B8A8_SRGB):
+					case (VK_FORMAT_R8G8B8A8_SRGB):
 						pixelSize = 4;
+						break;
+					case (VK_FORMAT_R8_SRGB):
+						pixelSize = 1;
+						break;
+					case (VK_FORMAT_R8_UINT):
+						pixelSize = 1;
 						break;
 					default:
 						PrintError(ErrorOrigin::Renderer, 
@@ -1097,6 +1105,78 @@ namespace engine {
 				m_Image = VK_NULL_HANDLE;
 				vkFreeMemory(renderer.m_VulkanDevice, m_VulkanDeviceMemory, renderer.m_VulkanAllocationCallbacks);
 				m_VulkanDeviceMemory = VK_NULL_HANDLE;
+			}
+		};
+
+		class FontAtlas {
+
+			friend class Engine;
+
+		private:
+
+			static inline VkFormat s_AtlasFormat = VK_FORMAT_UNDEFINED;
+			static inline VkSampler s_Sampler = VK_NULL_HANDLE;
+
+			Engine& m_Engine;
+			GlyphAtlas* m_GlyphAtlas;
+			StaticTexture m_AtlasTexture;
+			VkImageView m_AtlasImageView = VK_NULL_HANDLE;
+
+		public:
+
+			FontAtlas(Engine& engine) 
+				: m_Engine(engine), m_AtlasTexture(engine),
+					m_GlyphAtlas((GlyphAtlas*)malloc(sizeof(GlyphAtlas))) {}
+
+			~FontAtlas() {
+				Terminate();
+				free(m_GlyphAtlas);
+				m_GlyphAtlas = nullptr;
+			}
+
+			void Terminate() {
+				if (m_GlyphAtlas) {
+					m_Engine.m_TextRenderer.DestroyGlyphAtlas(*m_GlyphAtlas);
+				}
+				m_AtlasTexture.Terminate();
+				m_Engine.m_Renderer.DestroyImageView(m_AtlasImageView);
+				m_AtlasImageView = VK_NULL_HANDLE;
+			}
+
+			bool LoadFont(const char* fileName, uint32_t pixelSize) {
+				assert(m_GlyphAtlas);
+				if (!m_AtlasTexture.IsNull()) {
+					PrintError(ErrorOrigin::Engine,
+						"attempting to load font atlas that's already loaded (in function FontAtlas::LoadFont)!");
+					return false;
+				}
+				if (!m_Engine.m_TextRenderer.CreateGlyphAtlas(fileName, pixelSize, *m_GlyphAtlas)) {
+					PrintError(ErrorOrigin::TextRenderer, 
+						"failed to create glyph atlas (function TextRenderer::CreateGlyphAtlas in function FontAtlas::LoadFont)!");
+					return false;
+				}
+				if (!m_AtlasTexture.Create(s_AtlasFormat, m_GlyphAtlas->m_Extent, m_GlyphAtlas->m_Atlas)) {
+					PrintError(ErrorOrigin::Engine, 
+						"failed to create font atlas texture (function TextRenderer::CreateGlyphAtlas in function FontAtlas::LoadFont)!");
+					Terminate();
+					return false;
+				}
+				m_AtlasImageView = m_AtlasTexture.CreateImageView();
+				if (m_AtlasImageView == VK_NULL_HANDLE) {
+					PrintError(ErrorOrigin::Engine, 
+						"failed to create font atlas image view (function StaticTexture::CreateImageView in function FontAtlas::LoadFont)!");
+					Terminate();
+					return false;
+				}
+				return true;
+			}
+
+			VkImageView GetImageView() const {
+				return m_AtlasImageView;
+			}
+
+			static VkSampler GetSampler() {
+				return s_Sampler;
 			}
 		};
 
@@ -1551,6 +1631,52 @@ void main() {
 }
 				)";
 
+				static constexpr const char* text_draw_vertex_shader = R"(
+#version 450
+
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec2 inUV;
+
+layout(location = 0) out vec2 outUV;
+
+layout(push_constant) uniform PushConstant {
+	layout(offset = 0)
+	mat4 c_Transform;
+} pc;
+
+void main() {
+	outUV = inUV;
+	gl_Position = pc.c_Transform * vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
+}
+				)";
+
+				static constexpr const char* text_draw_fragment_shader = R"(
+#version 450
+
+layout(location = 0) in vec2 inUV;
+
+layout(location = 0) out vec4 outColor;
+
+layout(set = 0, binding = 0) uniform sampler2D glyph_atlas; // unnormalized coordinates
+layout(set = 0, binding = 1) uniform sampler2D color_mask; // unnormalized coordinates
+
+layout(push_constant) uniform PushConstant1 {
+	layout(offset = 64)
+	uvec2 c_FrameExtent;
+	uvec2 c_Bearing;
+	uint c_AtlasOffsetX;
+	vec4 c_Color;
+	ivec2 c_ColorMaskOffset;
+} pc;
+
+void main() {
+	vec2 localUV = uvec2(inUV.x * pc.c_FrameExtent.x, inUV.y * pc.c_FrameExtent.y);
+	float val = textureLod(glyph_atlas, localUV + vec2(pc.c_AtlasOffsetX, 0.0f), 0).r;
+	outColor = pc.c_ColorMaskOffset.x != -1 ? textureLod(color_mask, localUV + pc.c_ColorMaskOffset, 0) : pc.c_Color;
+	outColor *= val;
+}
+				)";
+
 				static constexpr const char* render_vertex_shader = R"(
 #version 450
 
@@ -1593,11 +1719,15 @@ void main() {
 				VkPipeline m_DrawPipeline = VK_NULL_HANDLE;
 				VkPipelineLayout m_DrawPipelineLayout = VK_NULL_HANDLE;
 
+				VkPipeline m_TextDrawPipeline = VK_NULL_HANDLE;
+				VkPipelineLayout m_TextDrawPipelineLayout = VK_NULL_HANDLE;
+
 				VkPipeline m_RenderPipeline = VK_NULL_HANDLE;
 				VkPipelineLayout m_RenderPipelineLayout = VK_NULL_HANDLE;
 
-				VkDescriptorSetLayout m_DrawDescriptorSetLayout{};
-				VkDescriptorSetLayout m_RenderDescriptorSetLayout{};
+				VkDescriptorSetLayout m_DrawDescriptorSetLayout = VK_NULL_HANDLE;
+				VkDescriptorSetLayout m_TextDrawDescriptorSetLayout = VK_NULL_HANDLE;
+				VkDescriptorSetLayout m_RenderDescriptorSetLayout = VK_NULL_HANDLE;
 
 				Pipelines(UI& UI) : m_UI(UI) {}
 
@@ -1607,7 +1737,7 @@ void main() {
 
 					VkDescriptorBindingFlags textureArrayDescriptorBindingFlags = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
 
-					VkDescriptorSetLayoutBindingFlagsCreateInfo descriptorSetLayoutBindingFlagsInfo {
+					const VkDescriptorSetLayoutBindingFlagsCreateInfo descriptorSetLayoutBindingFlagsInfo {
 						.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
 						.pNext = nullptr,
 						.bindingCount = 1,
@@ -1627,16 +1757,8 @@ void main() {
 					}
 
 					const VkPushConstantRange drawPipelinePushConstantRanges[2] {
-						{
-							.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-							.offset = 0,
-							.size = 64,
-						},
-						{
-							.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-							.offset = 64,
-							.size = 16,
-						},
+						Renderer::GetPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, 0, 64),
+						Renderer::GetPushConstantRange(VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16),
 					};
 
 					m_DrawPipelineLayout = renderer.CreatePipelineLayout(1, &m_DrawDescriptorSetLayout, 2, drawPipelinePushConstantRanges);
@@ -1646,6 +1768,27 @@ void main() {
 							"failed to create draw pipeline layout for UI (function Renderer::CreatePipelineLayout in function UI::Pipelines::Initialize)!");
 					}
 
+					const VkDescriptorSetLayoutBinding textDrawDescriptorSetLayoutBindings[2] {
+						Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT),
+						Renderer::GetDescriptorSetLayoutBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT),
+					};
+
+					m_TextDrawDescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 2, textDrawDescriptorSetLayoutBindings);
+
+					if (m_TextDrawDescriptorSetLayout == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer,
+							"failed to create text draw descriptor set layout for UI (function Renderer::CreateDescriptorSetLayout in function UI::Initialize)!");
+					}
+
+					static constexpr uint32_t text_draw_push_constant_count = 2;
+
+					const VkPushConstantRange textDrawPipelinePushConstantRanges[text_draw_push_constant_count] {
+						Renderer::GetPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, 0, 64),
+						Renderer::GetPushConstantRange(VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(TextFragmentPushConstant)),
+					};
+
+					m_TextDrawPipelineLayout = renderer.CreatePipelineLayout(1, &m_TextDrawDescriptorSetLayout, text_draw_push_constant_count, textDrawPipelinePushConstantRanges);
+
 					m_RenderPipelineLayout = renderer.CreatePipelineLayout(1, &m_RenderDescriptorSetLayout, 0, nullptr);
 
 					if (m_RenderPipelineLayout == VK_NULL_HANDLE) {
@@ -1653,54 +1796,62 @@ void main() {
 							"failed to create render pipeline layout for UI (function Renderer::CreatePipelineLayout in function UI::Pipelines::Initialize)");
 					}
 
-					Renderer::Shader drawVertexShader(renderer);
-					Renderer::Shader drawFragmentShader(renderer);
+					Renderer::Shader drawShaders[2] {
+						{ renderer, VK_SHADER_STAGE_VERTEX_BIT, },
+						{ renderer, VK_SHADER_STAGE_FRAGMENT_BIT, },
+					};
 
-					if (!drawVertexShader.Compile(Shaders::draw_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+					if (!drawShaders[0].Compile(Shaders::draw_vertex_shader)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to compile draw vertex shader for UI (function Renderer::Shader::Compile in function UI::Pipelines::Initialize)!");
 					}
-					if (!drawFragmentShader.Compile(Shaders::draw_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+					if (!drawShaders[1].Compile(Shaders::draw_fragment_shader)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to compile draw vertex shader for UI (function Renderer::Shader::Compile in function UI::Pipelines::Initialize)!");
-					}
-
-					const VkShaderModule drawVertexShaderModule = drawVertexShader.CreateShaderModule();
-					const VkShaderModule drawFragmentShaderModule = drawFragmentShader.CreateShaderModule();
-
-					if (drawVertexShaderModule == VK_NULL_HANDLE || drawFragmentShaderModule == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create render shader modules for UI (function Renderer::Shader::CreateShaderModule in function UI::Pipelines::Initialize)!");
 					}
 
 					const VkPipelineShaderStageCreateInfo drawPipelineShaderStages[2] {
-						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(drawVertexShaderModule, VK_SHADER_STAGE_VERTEX_BIT),
-						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(drawFragmentShaderModule, VK_SHADER_STAGE_FRAGMENT_BIT),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(drawShaders[0]),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(drawShaders[1]),
 					};
 
-					Renderer::Shader renderVertexShader(renderer);
-					Renderer::Shader renderFragmentShader(renderer);
+					Renderer::Shader textDrawShaders[2] {
+						{ renderer, VK_SHADER_STAGE_VERTEX_BIT, },
+						{ renderer, VK_SHADER_STAGE_FRAGMENT_BIT, },
+					};
 
-					if (!renderVertexShader.Compile(Shaders::render_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+					if (!textDrawShaders[0].Compile(Shaders::text_draw_vertex_shader)) {
+						CriticalError(ErrorOrigin::Renderer,
+							"failed to compile text draw vertex shader for UI (function Renderer::Shader::Compile in function UI::Pipelines::Initialize)!");
+					}
+
+					if (!textDrawShaders[1].Compile(Shaders::text_draw_fragment_shader)) {
+						CriticalError(ErrorOrigin::Renderer,
+							"failed to compile text draw fragment shader for UI (function Renderer::Shader::Compile in function UI::Pipelines::Initialize)!");
+					}
+
+					const VkPipelineShaderStageCreateInfo textDrawPipelineShaderStages[2] {
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(textDrawShaders[0]),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(textDrawShaders[1]),
+					};
+
+					Renderer::Shader renderShaders[2] {
+						{ renderer, VK_SHADER_STAGE_VERTEX_BIT, },
+						{ renderer, VK_SHADER_STAGE_FRAGMENT_BIT, },
+					};
+
+					if (!renderShaders[0].Compile(Shaders::render_vertex_shader)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to compile render vertex shader for UI (function Renderer::Shader::Compile in function UI::Pipelines::Initialize)!");
 					}
-					if (!renderFragmentShader.Compile(Shaders::render_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+					if (!renderShaders[1].Compile(Shaders::render_fragment_shader)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to compile render vertex shader for UI (function Renderer::Shader::Compile in function UI::Pipelines::Initialize)!");
-					}
-
-					const VkShaderModule renderVertexShaderModule = renderVertexShader.CreateShaderModule();
-					const VkShaderModule renderFragmentShaderModule = renderFragmentShader.CreateShaderModule();
-
-					if (renderVertexShaderModule == VK_NULL_HANDLE || renderFragmentShaderModule == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create draw shader modules for UI (function Renderer::Shader::CreateShaderModule in function UI::Pipelines::Initialize)!");
-					}
+					}	
 
 					const VkPipelineShaderStageCreateInfo renderPipelineShaderStages[2] {
-						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(renderVertexShaderModule, VK_SHADER_STAGE_VERTEX_BIT),
-						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(renderFragmentShaderModule, VK_SHADER_STAGE_FRAGMENT_BIT),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(renderShaders[0]),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(renderShaders[1]),
 					};	
 
 					VkPipelineColorBlendStateCreateInfo colorBlendStateInfo 
@@ -1714,7 +1865,9 @@ void main() {
 					VkPipelineRenderingCreateInfo renderPipelineRenderingInfo
 						= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &m_UI.m_Engine.m_Renderer.m_SwapchainSurfaceFormat.format, VK_FORMAT_UNDEFINED);
 
-					VkGraphicsPipelineCreateInfo pipelineInfos[2] {
+					static constexpr uint32_t pipeline_count = 3;
+
+					VkGraphicsPipelineCreateInfo pipelineInfos[pipeline_count] {
 						{
 							.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
 							.pNext = &drawPipelineRenderingInfo,
@@ -1731,6 +1884,27 @@ void main() {
 							.pColorBlendState = &colorBlendStateInfo,
 							.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
 							.layout = m_DrawPipelineLayout,
+							.renderPass = VK_NULL_HANDLE,
+							.subpass = 0,
+							.basePipelineHandle = VK_NULL_HANDLE,
+							.basePipelineIndex = 0,
+						},
+						{
+							.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+							.pNext = &drawPipelineRenderingInfo,
+							.flags = 0,
+							.stageCount = 2,
+							.pStages = textDrawPipelineShaderStages,
+							.pVertexInputState = &Vertex2D::GetVertexInputState(),
+							.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
+							.pTessellationState = nullptr,
+							.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
+							.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
+							.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
+							.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state_no_depth_tests,
+							.pColorBlendState = &colorBlendStateInfo,
+							.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
+							.layout = m_TextDrawPipelineLayout,
 							.renderPass = VK_NULL_HANDLE,
 							.subpass = 0,
 							.basePipelineHandle = VK_NULL_HANDLE,
@@ -1758,18 +1932,14 @@ void main() {
 							.basePipelineIndex = 0,
 						},
 					};
-					VkPipeline pipelines[2];
-					if (!renderer.CreateGraphicsPipelines(2, pipelineInfos, pipelines)) {
+					VkPipeline pipelines[pipeline_count];
+					if (!renderer.CreateGraphicsPipelines(pipeline_count, pipelineInfos, pipelines)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to create UI pipelines (function Renderer::CreateGraphicsPipelines in function UI::Pipelines::Initialize)!");
 					}
 					m_DrawPipeline = pipelines[0];
-					m_RenderPipeline = pipelines[1];
-
-					renderer.DestroyShaderModule(drawVertexShaderModule);
-					renderer.DestroyShaderModule(drawFragmentShaderModule);
-					renderer.DestroyShaderModule(renderVertexShaderModule);
-					renderer.DestroyShaderModule(renderFragmentShaderModule);
+					m_TextDrawPipeline = pipelines[1];
+					m_RenderPipeline = pipelines[2];
 				}
 
 				void Terminate() {
@@ -1777,6 +1947,9 @@ void main() {
 					renderer.DestroyPipeline(m_DrawPipeline);
 					renderer.DestroyPipelineLayout(m_DrawPipelineLayout);
 					renderer.DestroyDescriptorSetLayout(m_DrawDescriptorSetLayout);
+					renderer.DestroyPipeline(m_TextDrawPipeline);
+					renderer.DestroyPipelineLayout(m_TextDrawPipelineLayout);
+					renderer.DestroyDescriptorSetLayout(m_TextDrawDescriptorSetLayout);
 					renderer.DestroyPipeline(m_RenderPipeline);
 					renderer.DestroyPipelineLayout(m_RenderPipelineLayout);
 					renderer.DestroyDescriptorSetLayout(m_RenderDescriptorSetLayout);
@@ -1810,25 +1983,216 @@ void main() {
 				}
 			};
 
-			struct RenderData {
+			class DynamicText {
 
 				friend class UI;
 
+				using TRCharacter = TextRenderer::Character;
+
 			public:
 
-				RenderData(uint32_t textureIndex, VkDescriptorSet descriptorSet, const Mat4& transform) 
-					: m_TextureIndex(textureIndex), m_DescriptorSet(descriptorSet), m_Transform(transform) {}
+				struct FragmentPushConstant {
 
-				RenderData() : m_TextureIndex(0), m_DescriptorSet(VK_NULL_HANDLE), m_Transform(0) {}
+					Vec2_T<uint32_t> c_FrameExtent;
+					Vec2_T<uint32_t> c_Bearing;
+					uint32_t c_AtlasOffsetX;
+					uint8_t pad0[12];
+					Vec4 c_Color;
+					IntVec2 c_ColorMaskOffset;
+				};
+
+				class Character {
+
+					friend class UI;
+
+				public:
+
+					IntVec2 m_Offset{};
+					Mat4 m_AdditionalTransform { 1 };
+
+				private:
+
+					uint32_t m_LocalPositionX;
+
+					FragmentPushConstant m_FragmentPushConstant;
+
+				public:
+
+					Character(const TRCharacter& trCharacter, uint32_t localPositionX, Vec4 color) 
+						: m_LocalPositionX(localPositionX) {
+						m_FragmentPushConstant = {
+							.c_FrameExtent = trCharacter.m_Size,
+							.c_Bearing = trCharacter.m_Bearing,
+							.c_AtlasOffsetX = trCharacter.m_Offset,
+							.c_Color = color,
+							.c_ColorMaskOffset = -1,
+						};
+					}
+
+					uint32_t GetLocalPositionX() {
+						return m_LocalPositionX;
+					}
+				};
+
+				typedef Character* Iterator;
+				typedef const Character* ConstIterator;
+
+				UI& m_UI;
+				FontAtlas& m_FontAtlas;
+				IntVec2 m_Position{};
 
 			private:
 
-				const uint32_t m_TextureIndex;
-				const VkDescriptorSet m_DescriptorSet;
-				const Mat4 m_Transform;
+				DynamicArray<TRCharacter*> m_TextRendererCharacters{};
+				DynamicArray<Character> m_RenderedCharacters{};
+
+				VkDescriptorSet m_DescriptorSet = VK_NULL_HANDLE;
+
+				VkImageView m_ColorMask = VK_NULL_HANDLE;
+
+				uint32_t m_TextLength = 0;
+
+				uint32_t m_StringLength = 0;
+				char m_SmallStringBuffer[16]{};
+				uint32_t m_HeapBufferCapacity = 0;
+				char* m_HeapStringBuffer = nullptr;
+
+				VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
+
+			public:
+
+				DynamicText(UI& UI, FontAtlas& fontAtlas) noexcept : m_UI(UI), m_FontAtlas(fontAtlas) {}
+
+				~DynamicText() {
+					Terminate();
+				}
+
+				bool Initialize(VkImageView colorMask) {
+
+					m_RenderedCharacters.Reserve(16);
+					m_TextRendererCharacters.Reserve(16);
+
+					Renderer& renderer = m_UI.m_Engine.m_Renderer;
+
+					VkDescriptorPoolSize poolSizes[2] {
+						{
+							.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+							.descriptorCount = 1,
+						},
+						{
+							.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+							.descriptorCount = 1,
+						},
+					};
+					
+					m_DescriptorPool = renderer.CreateDescriptorPool(0, 1, 2, poolSizes);
+
+					if (m_DescriptorPool == VK_NULL_HANDLE) {
+						PrintError(ErrorOrigin::Renderer, 
+							"failed to create descriptor pool for dynamic text (function Renderer::CreateDescriptorPool in function UI::DynamicText::Initialize)!");
+						Terminate();
+						return false;
+					}
+
+					if (!renderer.AllocateDescriptorSets(nullptr, m_DescriptorPool, 1, 
+							&m_UI.m_Pipelines.m_TextDrawDescriptorSetLayout, &m_DescriptorSet)) {
+						PrintError(ErrorOrigin::Renderer, 
+							"failed to allocate descriptor set for dynamic text (function Renderer::AllocateDescriptorSets in function UI::DynamicText::Initialize)!");
+						Terminate();
+						return false;
+					}
+
+					VkDescriptorImageInfo imageInfos[2] {
+						{
+							.sampler = FontAtlas::s_Sampler,
+							.imageView = m_FontAtlas.m_AtlasImageView,
+							.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+						},
+						{
+							.sampler = FontAtlas::s_Sampler,
+							.imageView = colorMask == VK_NULL_HANDLE ? m_FontAtlas.m_AtlasImageView : colorMask,
+							.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+						},
+					};
+
+					VkWriteDescriptorSet writes[2] {
+						Renderer::GetDescriptorWrite(nullptr, 0, m_DescriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfos[0], nullptr),
+						Renderer::GetDescriptorWrite(nullptr, 1, m_DescriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfos[1], nullptr),
+					};
+					renderer.UpdateDescriptorSets(2, writes);
+					return true;
+				}
+
+				void Terminate() {
+					Renderer& renderer = m_UI.m_Engine.m_Renderer;
+					renderer.DestroyDescriptorPool(m_DescriptorPool);
+					m_DescriptorPool = VK_NULL_HANDLE;
+					m_DescriptorSet = VK_NULL_HANDLE;
+					free(m_HeapStringBuffer);
+					m_HeapStringBuffer = nullptr;
+					m_TextRendererCharacters.Clear();
+					m_RenderedCharacters.Clear();
+					m_Position = 0;
+					m_StringLength = 0;
+					m_HeapBufferCapacity = 0;
+				}
+
+				DynamicText& PutChar(unsigned char c, Vec4 color = { 1.0f, 1.0f, 1.0f, 1.0f }) {
+					if (m_DescriptorPool == VK_NULL_HANDLE) {
+						PrintError(ErrorOrigin::UI, 
+							"attempting to push character to dynamic text that hasn't been initialized (in function UI::DynamicText::PushChar)!");
+					}
+					if (c >= 128) {
+						PrintError(ErrorOrigin::UI,
+							"attempting to push an invalid character to dynamic text object (in function UI::DynamicText::PushChar)!");
+						return *this;
+					}
+					TRCharacter& trCharacter = m_FontAtlas.m_GlyphAtlas->m_Characters[c];
+					if (trCharacter.m_Size != 0) {
+						Character& character 
+							= m_RenderedCharacters.EmplaceBack(m_FontAtlas.m_GlyphAtlas->m_Characters[c], m_TextLength, color);
+					}
+					if (m_StringLength < 16) {
+						m_SmallStringBuffer[m_StringLength++] = c;
+					}
+					else if (m_HeapStringBuffer) {
+						if (m_StringLength >= m_HeapBufferCapacity) {
+							char* temp = m_HeapStringBuffer;
+							m_HeapStringBuffer = (char*)malloc(m_HeapBufferCapacity * 2 * sizeof(char));
+							assert(m_HeapStringBuffer);
+							for (uint32_t i = 0; i < m_StringLength; i++) {
+								m_HeapStringBuffer[i] = temp[i];
+							}
+							free(temp);
+						}
+						m_HeapStringBuffer[m_StringLength++] = c;
+					}
+					else {
+						m_HeapBufferCapacity = 32;
+						m_HeapStringBuffer = (char*)malloc(m_HeapBufferCapacity);
+						assert(m_HeapStringBuffer);
+						for (uint32_t i = 0; i < m_StringLength; i++) {
+							m_HeapStringBuffer[i] = m_SmallStringBuffer[i];
+						}
+						m_HeapStringBuffer[m_StringLength++] = c;
+					}
+					m_TextRendererCharacters.PushBack(&trCharacter);
+					m_TextLength += trCharacter.m_Escapement.x;
+					return *this;
+				}
+
+				Iterator begin() {
+					return m_RenderedCharacters.begin();
+				}
+
+				ConstIterator end() {
+					return m_RenderedCharacters.end();
+				}
 			};
 
-			class Text {
+			typedef DynamicText::FragmentPushConstant TextFragmentPushConstant;
+
+			class StaticText {
 
 				friend class UI;
 
@@ -1850,12 +2214,12 @@ void main() {
 
 			public:
 
-				Text(UI& UI) : m_UI(UI), m_Texture(m_UI.m_Engine) {}
+				StaticText(UI& UI) : m_UI(UI), m_Texture(m_UI.m_Engine) {}
 
-				Text(const Text&) = delete;
-				Text(Text&&) = delete;
+				StaticText(const StaticText&) = delete;
+				StaticText(StaticText&&) = delete;
 
-				~Text() { Terminate(); }
+				~StaticText() { Terminate(); }
 
 				bool Initialize(const char* text, const GlyphAtlas& atlas, const Vec4& color, Vec2_T<uint32_t> frameExtent, TextAlignment alignment) {
 					Terminate();
@@ -2078,7 +2442,7 @@ void main() {
 					}
 				}
 
-				IntVec2 GetPosition() {
+				IntVec2 GetPosition() const {
 					return m_Rect.m_Min;
 				}
 
@@ -2120,6 +2484,31 @@ void main() {
 				virtual void UILoop(UI& UI) = 0;
 			};
 
+			struct RenderData {
+
+				RenderData(uint32_t textureIndex, VkDescriptorSet descriptorSet, const Mat4& transform) 
+					: m_TextureIndex(textureIndex), m_DescriptorSet(descriptorSet), m_Transform(transform) {}
+
+				RenderData() : m_TextureIndex(0), m_DescriptorSet(VK_NULL_HANDLE), m_Transform(0) {}
+
+				const uint32_t m_TextureIndex;
+				const VkDescriptorSet m_DescriptorSet;
+				const Mat4 m_Transform;
+			};
+
+			struct TextRenderData {
+
+				const VkDescriptorSet m_DescriptorSet;
+				const Mat4 m_Transform;
+				TextFragmentPushConstant m_FragmentPushConstant;
+
+				TextRenderData(VkDescriptorSet descriptorSet, const Mat4& transform, const TextFragmentPushConstant& fragPushConstant)
+					: m_DescriptorSet(descriptorSet), m_Transform(transform), m_FragmentPushConstant(fragPushConstant) {}
+
+				TextRenderData()
+					: m_DescriptorSet(VK_NULL_HANDLE), m_Transform(0), m_FragmentPushConstant() {}
+			};
+
 		private:
 
 			static inline DynamicArray<GLFWwindow*> s_GLFWwindows{};
@@ -2145,6 +2534,8 @@ void main() {
 
 			DynamicArray<RenderData> m_RenderDatas{};
 
+			DynamicArray<TextRenderData> m_TextRenderDatas{};
+
 			Pipelines m_Pipelines;
 			DynamicArray<VkDescriptorSet> m_RenderColorImageDescriptorSets{};
 
@@ -2165,6 +2556,7 @@ void main() {
 				s_UIs.Reserve(4);
 				s_GLFWwindows.Reserve(4);
 				m_RenderDatas.Reserve(250);
+				m_TextRenderDatas.Reserve(500);
 				m_Entities.Reserve(250);
 			}
 
@@ -2216,7 +2608,7 @@ void main() {
 
 		public:
 
-			IntVec2 GetCursorPosition() {
+			IntVec2 GetCursorPosition() const {
 				return m_CursorPosition;
 			}
 
@@ -2249,16 +2641,42 @@ void main() {
 				return false;
 			}
 
-			bool AddRenderData(const Text& text) {
+			bool AddRenderData(const DynamicText& text) {
 				if (text.m_DescriptorSet == VK_NULL_HANDLE) {
 					PrintError(ErrorOrigin::UI, 
-						"attempting to add render data with text that's null (in function Window::AddRenderData)!");
+						"attempting to add render data with uninitialized dynamic text that's null (in function Window::AddRenderData)!");
 					return false;
 				}
-				IntVec2 frameHalf(text.m_FrameExtent.x / 2, text.m_FrameExtent.y / 2);
+				uint32_t nextRenderedCharIndex = 0;
+				IntVec2 textPos = text.m_Position;
+				for (const DynamicText::TRCharacter* trCharacter : text.m_TextRendererCharacters) {
+					if (trCharacter->m_Size != 0) {
+						assert(nextRenderedCharIndex < text.m_RenderedCharacters.m_Size);
+						const DynamicText::Character& character = text.m_RenderedCharacters[nextRenderedCharIndex++];
+						IntVec2 charPos = textPos - IntVec2(0, trCharacter->m_Bearing.y) + character.m_Offset;
+						Rect rect {
+							.m_Min = charPos,
+							.m_Max = charPos + trCharacter->m_Size,
+						};
+						Mat4 transform;
+						rect.CalcTransform(m_Engine.GetSwapchainResolution(), transform);
+						TextFragmentPushConstant fragPushConst = character.m_FragmentPushConstant;
+						m_TextRenderDatas.EmplaceBack(text.m_DescriptorSet, transform, character.m_FragmentPushConstant);
+					}
+					textPos.x += trCharacter->m_Escapement.x;
+				}
+				return true;
+			}
+
+			bool AddRenderData(const StaticText& text) {
+				if (text.m_DescriptorSet == VK_NULL_HANDLE) {
+					PrintError(ErrorOrigin::UI, 
+						"attempting to add render data with uninitialized static text that's null (in function Window::AddRenderData)!");
+					return false;
+				}
 				Rect rect {
-					.m_Min = { text.m_Position.x - frameHalf.x, text.m_Position.y - frameHalf.y },
-					.m_Max = { text.m_Position.x + frameHalf.x, text.m_Position.y + frameHalf.y },
+					.m_Min = text.m_Position,
+					.m_Max = text.m_Position + text.m_FrameExtent,
 				};
 				Mat4 transform;
 				rect.CalcTransform(m_Engine.GetSwapchainResolution(), transform);
@@ -2319,6 +2737,17 @@ void main() {
 						DrawIndexed(drawData.m_CommandBuffer, m_StaticQuadMesh2DData);
 					}
 					m_RenderDatas.Resize(0);
+					vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TextDrawPipeline);
+					for (TextRenderData& renderData : m_TextRenderDatas) {
+						vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TextDrawPipelineLayout,
+							0, 1, &renderData.m_DescriptorSet, 0, nullptr);
+						vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_TextDrawPipelineLayout,
+							VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &renderData.m_Transform);
+						vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_TextDrawPipelineLayout,
+							VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(TextFragmentPushConstant), &renderData.m_FragmentPushConstant);
+						DrawIndexed(drawData.m_CommandBuffer, m_StaticQuadMesh2DData);
+					}
+					m_TextRenderDatas.Resize(0);
 					vkCmdEndRendering(drawData.m_CommandBuffer);
 				}
 				{
@@ -3822,16 +4251,8 @@ void main() {
 					}
 
 					const VkPushConstantRange debugPushConstantRanges[2] {
-						{
-							.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-							.offset = 0,
-							.size = 64,
-						},
-						{
-							.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-							.offset = 64,
-							.size = 16,
-						},
+						Renderer::GetPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, 0, 64),
+						Renderer::GetPushConstantRange(VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16),
 					};
 
 					m_DebugPipelineLayout = renderer.CreatePipelineLayout(1, &m_CameraDescriptorSetLayout, 2, debugPushConstantRanges);
@@ -3841,105 +4262,74 @@ void main() {
 							"failed to create debug pipeline layout for world (function Renderer::CreatePipelineLayout in function World::Pipelines::initialize)");
 					}
 
-					Renderer::Shader pbrDrawVertexShader(renderer);
-					Renderer::Shader pbrDrawFragmentShader(renderer);
+					Renderer::Shader pbrDrawShaders[2] {
+						{ renderer, VK_SHADER_STAGE_VERTEX_BIT, },
+						{ renderer, VK_SHADER_STAGE_FRAGMENT_BIT, },
+					};
 
-					if (!pbrDrawVertexShader.Compile(Shaders::pbr_draw_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+					if (!pbrDrawShaders[0].Compile(Shaders::pbr_draw_pipeline_vertex_shader)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to compile pbr draw vertex shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
 					}
 
-					if (!pbrDrawFragmentShader.Compile(Shaders::pbr_draw_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+					if (!pbrDrawShaders[1].Compile(Shaders::pbr_draw_pipeline_fragment_shader)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to compile pbr draw fragment shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
 					}
 
-					Renderer::Shader udDrawVertexShader(renderer);
+					const VkPipelineShaderStageCreateInfo pbrDrawPipelineShaderStageInfos[2] {
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaders[0]),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaders[1]),
+					};
 
-					if (!udDrawVertexShader.Compile(Shaders::ud_draw_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+					Renderer::Shader udDrawVertexShader(renderer, VK_SHADER_STAGE_VERTEX_BIT);
+
+					if (!udDrawVertexShader.Compile(Shaders::ud_draw_vertex_shader)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to compile unidirectional light draw vertex shader (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
-					}	
-
-					VkShaderModule udDrawShaderModule = udDrawVertexShader.CreateShaderModule();
-
-					if (udDrawShaderModule == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create unidirectional light draw vertex shader module (function Renderer::Shader::CreateShaderModule in function World::Pipelines::Initialize)!");
 					}
 
 					const VkPipelineShaderStageCreateInfo udDrawPipelineShaderStageInfo 
-						= Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(udDrawShaderModule, VK_SHADER_STAGE_VERTEX_BIT);
+						= Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(udDrawVertexShader);
 
-					const VkShaderModule pbrDrawShaderModules[2] {
-						pbrDrawVertexShader.CreateShaderModule(),
-						pbrDrawFragmentShader.CreateShaderModule(),
+					Renderer::Shader pbrRenderShaders[2] {
+						{ renderer, VK_SHADER_STAGE_VERTEX_BIT, },
+						{ renderer, VK_SHADER_STAGE_FRAGMENT_BIT, },
 					};
 
-					if (pbrDrawShaderModules[0] == VK_NULL_HANDLE || pbrDrawShaderModules[1] == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer,
-							"failed to create shader modules for pbr draw pipeline (function Renderer::Shader::CreateShaderModule in function World::Pipelines::Initialize)!");
-					}
-
-					const VkPipelineShaderStageCreateInfo pbrDrawPipelineShaderStageInfos[2] {
-						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
-						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
-					};
-
-					Renderer::Shader pbrRenderVertexShader(renderer);
-					Renderer::Shader pbrRenderFragmentShader(renderer);
-
-					if (!pbrRenderVertexShader.Compile(Shaders::pbr_render_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+					if (!pbrRenderShaders[0].Compile(Shaders::pbr_render_pipeline_vertex_shader)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to compile pbr render vertex shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
 					}
 
-					if (!pbrRenderFragmentShader.Compile(Shaders::pbr_render_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+					if (!pbrRenderShaders[1].Compile(Shaders::pbr_render_pipeline_fragment_shader)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to compile pbr render fragment shader code (function Renderer::Shader::Compile in function World::Pipeliens:.Initialize)");
 					}
 
-					const VkShaderModule pbrRenderShaderModules[2] {
-						pbrRenderVertexShader.CreateShaderModule(),
-						pbrRenderFragmentShader.CreateShaderModule(),
-					};
-
-					if (pbrRenderShaderModules[0] == VK_NULL_HANDLE || pbrRenderShaderModules[1] == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create shader modules for world pipeline (function Renderer::Shader::CreateShaderModule in function World::Pipelines::Initialize)!");
-					}
-
 					const VkPipelineShaderStageCreateInfo pbrRenderPipelineShaderStageInfos[2] {
-						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
-						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaders[0]),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaders[1]),
 					};
 
-					Renderer::Shader debugPipelineVertexShader(renderer);
-					Renderer::Shader debugPipelineFragmentShader(renderer);
+					Renderer::Shader debugShaders[2] {
+						{ renderer, VK_SHADER_STAGE_VERTEX_BIT, },
+						{ renderer, VK_SHADER_STAGE_FRAGMENT_BIT, },
+					};
 
-					if (!debugPipelineVertexShader.Compile(Shaders::debug_pipeline_vertex_shader, VK_SHADER_STAGE_VERTEX_BIT)) {
+					if (!debugShaders[0].Compile(Shaders::debug_pipeline_vertex_shader)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to compile vertex shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
 					}
 
-					if (!debugPipelineFragmentShader.Compile(Shaders::debug_pipeline_fragment_shader, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+					if (!debugShaders[1].Compile(Shaders::debug_pipeline_fragment_shader)) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to compile fragment shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
 					}
 
-					VkShaderModule debugPipelineShaderModules[2] {
-						debugPipelineVertexShader.CreateShaderModule(),
-						debugPipelineFragmentShader.CreateShaderModule(),
-					};
-
-					if (debugPipelineShaderModules[0] == VK_NULL_HANDLE || debugPipelineShaderModules[1] == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer,
-							"failed to create shader modules for world pipeline (function Renderer::Shader::CreateShaderModule in function World::Pipelines::Initialize)!");
-					}
-
 					const VkPipelineShaderStageCreateInfo debugPipelineShaderStageInfos[2] {
-						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugPipelineShaderModules[0], VK_SHADER_STAGE_VERTEX_BIT),
-						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugPipelineShaderModules[1], VK_SHADER_STAGE_FRAGMENT_BIT),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugShaders[0]),
+						Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugShaders[1]),
 					};
 
 					static constexpr uint32_t pbr_draw_color_attachment_count = 3;
@@ -4080,14 +4470,6 @@ void main() {
 					m_DrawPipelineUD = pipelines[1];
 					m_RenderPipelinePBR = pipelines[2];
 					m_DebugPipeline = pipelines[3];
-
-					renderer.DestroyShaderModule(pbrDrawShaderModules[0]);
-					renderer.DestroyShaderModule(pbrDrawShaderModules[1]);
-					renderer.DestroyShaderModule(udDrawShaderModule);
-					renderer.DestroyShaderModule(pbrRenderShaderModules[0]);
-					renderer.DestroyShaderModule(pbrRenderShaderModules[1]);
-					renderer.DestroyShaderModule(debugPipelineShaderModules[0]);
-					renderer.DestroyShaderModule(debugPipelineShaderModules[1]);
 				}
 
 				void Terminate(Renderer& renderer) {
@@ -5711,8 +6093,34 @@ void main() {
 				},
 			};
 
-			m_StaticQuadMesh.CreateBuffers(quad_vertex_count, quad_vertices, quad_index_count, quad_indices);
-			m_StaticQuadMesh2D.CreateBuffers(quad_vertex_count, quad_vertices_2D, quad_index_count, quad_indices);
+			if (!m_StaticQuadMesh.CreateBuffers(quad_vertex_count, quad_vertices, quad_index_count, quad_indices)) {
+				CriticalError(ErrorOrigin::Engine, 
+					"failed to create static 3D quad mesh (function StaticMesh::CreateBuffers in Engine constructor)!");
+			}
+			if (!m_StaticQuadMesh2D.CreateBuffers(quad_vertex_count, quad_vertices_2D, quad_index_count, quad_indices)) {
+				CriticalError(ErrorOrigin::Engine, 
+					"failed to create static 2D quad mesh (function StaticMesh::CreateBuffers in Engine constructor)!");
+			}
+
+			const VkFormat fontAtlasFormatCandidates[1] { VK_FORMAT_R8_SRGB, };
+			FontAtlas::s_AtlasFormat = m_Renderer.FindSupportedFormat(1, fontAtlasFormatCandidates,
+				VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+			if (FontAtlas::s_AtlasFormat == VK_FORMAT_UNDEFINED) {
+				CriticalError(ErrorOrigin::Renderer, 
+					"failed to find suitable format for font atlas (function Renderer::FindSupportedFormat in Engine constructor)!");
+			}
+
+			VkSamplerCreateInfo fontAtlasSamplerInfo = Renderer::GetDefaultSamplerInfo();
+			fontAtlasSamplerInfo.unnormalizedCoordinates = VK_TRUE;
+			fontAtlasSamplerInfo.minLod = 0.0f;
+			fontAtlasSamplerInfo.maxLod = 0.0f;
+
+			FontAtlas::s_Sampler = m_Renderer.CreateSampler(fontAtlasSamplerInfo);
+
+			if (FontAtlas::s_Sampler == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer, 
+					"failed to create sampler for font atlas (function Renderer::CreateSampler in Engine constructor)!");
+			}
 
 			m_World.Initialize();
 			m_UI.Initialize();
@@ -5726,6 +6134,7 @@ void main() {
 			m_StaticQuadMesh.Terminate();
 			m_StaticQuadMesh2D.Terminate();
 			m_UI.Terminate();
+			m_Renderer.DestroySampler(FontAtlas::s_Sampler);
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
 		}	
@@ -5848,6 +6257,7 @@ void main() {
 	typedef Engine::UI UI;
 	typedef Engine::StaticMesh StaticMesh;
 	typedef Engine::StaticTexture StaticTexture;
+	typedef Engine::FontAtlas FontAtlas;
 	typedef Engine::MeshData MeshData;
 	typedef Engine::Collider Collider;
 	typedef Engine::Creature Creature;
