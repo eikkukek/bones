@@ -87,7 +87,7 @@ class UIElement : public engine::UI::Entity {
 public:
 
 	engine::UI& m_UI;
-	engine::UI::Text m_Text;
+	engine::UI::StaticText m_Text;
 
 	engine::Vec2 m_Position;
 	float rotation = 0.0f;
@@ -134,32 +134,59 @@ public:
 class InputText : public engine::UI::Entity {
 public:
 
-	using Text = engine::UI::Text;
+	using StaticText = engine::UI::StaticText;
+	using DynamicText = engine::UI::DynamicText;
 	using Character = engine::TextRenderer::Character;
 
 	engine::UI& m_UI;
 	char m_Buffer[64] {};
 	const engine::GlyphAtlas& m_GlyphAtlas;
-	Text* m_Texts;
+	StaticText* m_Texts;
 	size_t m_CharacterCount = 0;
+	engine::FontAtlas& m_FontAtlas;
+	DynamicText m_DynText;
 
-	InputText(engine::UI& UI, const engine::GlyphAtlas& atlas)
-		: m_UI(UI), m_Texts((Text*)(malloc(64 * sizeof(Text)))), m_GlyphAtlas(atlas) {}
+	uint32_t m_TextLength = 0;
 
-	bool PutChar(unsigned char c) {
+	size_t m_CurrentOffsetIndex = 0;
+	engine::Vec2 m_CurrentOffset = 0;
+	float m_Timer = 0.0f;
+
+	float sinNum = 0.0f;
+
+	InputText(engine::UI& UI, const engine::GlyphAtlas& atlas, engine::FontAtlas& fontAtlas)
+		: m_UI(UI), m_Texts((StaticText*)(malloc(64 * sizeof(StaticText)))), 
+			m_GlyphAtlas(atlas), m_FontAtlas(fontAtlas), m_DynText(m_UI, m_FontAtlas) {
+		m_DynText.Initialize(VK_NULL_HANDLE);
+		m_DynText
+			.PutChar('H')
+			.PutChar('e')
+			.PutChar('l')
+			.PutChar('l')
+			.PutChar('o');
+	}
+
+	void PutChar(unsigned char c) {
 		using namespace engine;
-		assert(c < 128);
-		if (m_CharacterCount >= 64) {
+		m_DynText.PutChar(c);
+	}
+
+	bool PopChar() {
+		using namespace engine;
+		if (m_CharacterCount == 0) {
 			return false;
 		}
-		UI::Text* text = new(&m_Texts[m_CharacterCount]) UI::Text(m_UI);
-		text->Initialize(c, m_GlyphAtlas, Vec4(1.0f, 1.0f, 1.0f, 1.0f));
-		m_Buffer[m_CharacterCount] = c;
-		++m_CharacterCount;
+		m_Texts[m_CharacterCount - 1].~StaticText();
+		m_Buffer[m_CharacterCount] = '\0';
+		--m_CharacterCount;
 	}
 
 	void UILoop(engine::UI& UI) {
 		using namespace engine;
+		sinNum = fmod(sinNum + 10.0f * Time::DeltaTime(), 2 * pi);
+		for (DynamicText::Character& character : m_DynText) {
+			character.m_Offset = IntVec2(0, 10 * (sin((float)character.GetLocalPositionX() / 10 + sinNum - pi / 2) + 1));
+		}
 		for (unsigned int c : Input::GetTextInput()) {
 			if (c >= 128) {
 				continue;
@@ -168,21 +195,45 @@ public:
 				PutChar(c);
 			}
 		}
+		m_DynText.m_Position = UI.GetCursorPosition();
+		UI.AddRenderData(m_DynText);
+		return;
 		IntVec2 pos = UI.GetCursorPosition() - IntVec2(50, 50);
+		int startPosX = pos.x;
 		for (size_t i = 0; i < m_CharacterCount; i++) {
-			Text& text = m_Texts[i];
+			StaticText& text = m_Texts[i];
 			const Character& character = m_GlyphAtlas.m_Characters[m_Buffer[i]];
 			if (character.m_Size.x == 0) {
 				pos.x += character.m_Escapement.x;
 				continue;
 			}
 			pos.x += character.m_Size.x / 2;
-			text.m_Position = pos - IntVec2(0, character.m_Bearing.y);
+			IntVec2 offset(0.0f, 10 * (sin((float)(pos.x - startPosX) / 10 + sinNum - pi / 2) + 1));
+			/*
+			if (m_CurrentOffsetIndex == i) {
+				offset = m_CurrentOffset;
+			}
+			*/
+			text.m_Position = pos + IntVec2(0, character.m_Size.y / 2) + IntVec2(character.m_Bearing.x, -character.m_Bearing.y) - offset;
 			if (!text.IsNull()) {
 				UI.AddRenderData(text);
 			}
 			pos.x += character.m_Escapement.x / 2;
 		}
+		m_Timer += Time::DeltaTime();
+		/*
+		if (m_Timer < 0.5f) {
+			m_CurrentOffset.y += 10.0f * Time::DeltaTime();
+		}
+		else if (m_Timer < 1.0f) {
+			m_CurrentOffset.y -= 10.0f * Time::DeltaTime();
+		}
+		else if (m_CharacterCount) {
+			m_Timer = 0;
+			m_CurrentOffsetIndex = (m_CurrentOffsetIndex + 1) % m_CharacterCount;
+		}
+		m_CurrentOffset.y = Clamp(m_CurrentOffset.y, 0.0f, 5.0f);
+		*/
 	}
 
 	void Terminate() {
@@ -191,6 +242,7 @@ public:
 			iter->Terminate();
 		}
 		free(m_Texts);
+		m_DynText.Terminate();
 	}
 };
 
@@ -207,7 +259,7 @@ int main() {
 	TextRenderer& textRenderer = engine.GetTextRenderer();
 
 	GlyphAtlas atlas{};
-	textRenderer.CreateGlyphAtlas("resources\\fonts\\arial_mt.ttf", 30.0f, atlas);
+	textRenderer.CreateGlyphAtlas("resources\\fonts\\arial_mt.ttf", 40, atlas);
 	const char* text = "Hello, how\nis it going? AVAVAVA";
 	TextRenderer::RenderTextInfo renderInfo {
 		.m_GlyphAtlas = atlas,
@@ -215,6 +267,10 @@ int main() {
 		.m_TextColor = PackColorRBGA({ 1.0f, 1.0f, 1.0f, 0.8f }),
 		.m_BackGroundColor = PackColorRBGA({ 0.0f, 0.0f, 0.0f, 0.0f }),
 	};
+
+	FontAtlas fontAtlas(engine);
+
+	assert(fontAtlas.LoadFont("resources\\fonts\\arial_mt.ttf", 40));
 
 	TextImage textImage 
 			= textRenderer.RenderText<TextAlignment::Middle>(text, renderInfo, { 540, 540 });
@@ -235,7 +291,15 @@ int main() {
 	};
 
 	UIElement element(UI, atlas);
-	InputText inputText(UI, atlas);
+	InputText inputText(UI, atlas, fontAtlas);
+	/*
+	inputText.PutChar('H');
+	inputText.PutChar('e');
+	inputText.PutChar('l');
+	inputText.PutChar('l');
+	inputText.PutChar('o');
+	inputText.PutChar('!');
+	*/
 
 	UI.AddEntity(&element);
 	UI.AddEntity(&inputText);
@@ -326,8 +390,10 @@ int main() {
 	player.m_Mesh.Terminate();
 	renderer.DestroyDescriptorPool(testUIDescriptorPool);
 	glfwTerminate();
-	free(atlas.m_Atlas);
+	fontAtlas.Terminate();
+	textRenderer.DestroyGlyphAtlas(atlas);
 	textRenderer.DestroyTextImage(textImage);
 	texture.Terminate();
 	renderer.DestroyImageView(textureImageView);
+	return 0;
 }
