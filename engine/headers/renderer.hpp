@@ -251,11 +251,18 @@ namespace engine {
 			const Renderer& m_Renderer;
 			glslang_shader_t* m_GlslangShader;
 			glslang_program_t* m_GlslangProgram;
+			const VkShaderStageFlagBits m_VulkanShaderStage;
+			VkShaderModule m_VulkanShaderModule;
 
-			Shader(Renderer& renderer) noexcept 
-				: m_Renderer(renderer), m_GlslangShader(nullptr), m_GlslangProgram(nullptr) {}
+			Shader(Renderer& renderer, VkShaderStageFlagBits shaderStage) noexcept 
+				: m_Renderer(renderer), m_GlslangShader(nullptr), m_GlslangProgram(nullptr),
+					m_VulkanShaderStage(shaderStage), m_VulkanShaderModule(VK_NULL_HANDLE) {}
 
 			~Shader() {
+				Terminate();
+			}
+
+			void Terminate() {
 				if (m_GlslangShader) {
 					glslang_shader_delete(m_GlslangShader);
 					m_GlslangShader = nullptr;
@@ -264,6 +271,8 @@ namespace engine {
 					glslang_program_delete(m_GlslangProgram);
 					m_GlslangProgram = nullptr;
 				}
+				m_Renderer.DestroyShaderModule(m_VulkanShaderModule);
+				m_VulkanShaderModule = VK_NULL_HANDLE;
 			}
 
 			static void PrintShaderMessage(const char* log, const char* dLog) {
@@ -271,10 +280,10 @@ namespace engine {
 			}
 
 			bool NotCompiled() const {
-				return !m_GlslangShader || !m_GlslangProgram;
+				return !m_GlslangShader || !m_GlslangProgram || m_VulkanShaderModule == VK_NULL_HANDLE;
 			}
 
-			bool Compile(const char* shaderCode, VkShaderStageFlagBits shaderStage) {
+			bool Compile(const char* shaderCode) {
 
 				const glslang_resource_t resource {
 					.max_draw_buffers = (int)m_Renderer.m_MaxFragmentOutPutAttachments,
@@ -290,7 +299,7 @@ namespace engine {
 
 				const glslang_input_t input = {
 					.language = GLSLANG_SOURCE_GLSL,
-					.stage = GetGlslangStage(shaderStage),
+					.stage = GetGlslangStage(m_VulkanShaderStage),
 					.client = GLSLANG_CLIENT_VULKAN,
 					.client_version = GLSLANG_TARGET_VULKAN_1_3,
 					.target_language = GLSLANG_TARGET_SPV,
@@ -348,29 +357,7 @@ namespace engine {
 				if (glslang_program_SPIRV_get_messages(m_GlslangProgram)) {
 					PrintMessage(glslang_program_SPIRV_get_messages(m_GlslangProgram));
 				}
-				return true;
-			}
 
-			uint32_t GetCodeSize() const noexcept {
-				if (NotCompiled()) {
-					return 0;
-				}
-				return (uint32_t)glslang_program_SPIRV_get_size(m_GlslangProgram) * sizeof(uint32_t);
-			}
-
-			const unsigned int* GetBinary() const noexcept {
-				if (NotCompiled()) {
-					return nullptr;
-				}
-				return glslang_program_SPIRV_get_ptr(m_GlslangProgram);
-			}
-
-			VkShaderModule CreateShaderModule() {
-				if (NotCompiled()) {
-					PrintError(ErrorOrigin::Shader, 
-						"attempting to create shader module with a shader (in function CreateShaderModule) with a shader that hasn't been compiled");
-					return VK_NULL_HANDLE;
-				}
 				VkShaderModuleCreateInfo createInfo {
 					.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
 					.pNext = nullptr,
@@ -378,12 +365,28 @@ namespace engine {
 					.codeSize = GetCodeSize(),
 					.pCode = GetBinary(),
 				};
-				VkShaderModule res;	
-				if (!m_Renderer.VkCheck(vkCreateShaderModule(m_Renderer.m_VulkanDevice, &createInfo, m_Renderer.m_VulkanAllocationCallbacks, &res), 
-					"failed to create shader module (function vkCreateShaderModule in function Shader::CreateShaderModule)!")) {
-					return VK_NULL_HANDLE;
+
+				if (!m_Renderer.VkCheck(vkCreateShaderModule(m_Renderer.m_VulkanDevice, &createInfo, m_Renderer.m_VulkanAllocationCallbacks, &m_VulkanShaderModule),
+						"failed to create shader module (function vkCreateShaderModule in function Shader::Compile)!")) {
+					m_VulkanShaderModule = VK_NULL_HANDLE;
+					return false;
 				}
-				return res;
+
+				return true;
+			}
+
+			uint32_t GetCodeSize() const noexcept {
+				if (!m_GlslangProgram) {
+					return 0;
+				}
+				return (uint32_t)glslang_program_SPIRV_get_size(m_GlslangProgram) * sizeof(uint32_t);
+			}
+
+			const unsigned int* GetBinary() const noexcept {
+				if (!m_GlslangProgram) {
+					return nullptr;
+				}
+				return glslang_program_SPIRV_get_ptr(m_GlslangProgram);
 			}
 		};
 
@@ -860,13 +863,13 @@ namespace engine {
 				return res;
 			}
 
-			static constexpr VkPipelineShaderStageCreateInfo GetShaderStageInfo(VkShaderModule shadermodule, VkShaderStageFlagBits shaderStage) {
+			static constexpr VkPipelineShaderStageCreateInfo GetShaderStageInfo(const Shader& shader) {
 				VkPipelineShaderStageCreateInfo res {
 					.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
 					.pNext = nullptr,
 					.flags = 0,
-					.stage = shaderStage,
-					.module = shadermodule,
+					.stage = shader.m_VulkanShaderStage,
+					.module = shader.m_VulkanShaderModule,
 					.pName = "main",
 					.pSpecializationInfo = nullptr,
 				};
@@ -2105,6 +2108,14 @@ namespace engine {
 			};
 		}
 
+		static constexpr VkPushConstantRange GetPushConstantRange(VkShaderStageFlags stages, uint32_t offset, uint32_t size) {
+			return {
+				.stageFlags = stages,
+				.offset = offset,
+				.size = size,
+			};
+		}
+
 		VkDescriptorSetLayout CreateDescriptorSetLayout(const void* pNext, uint32_t bindingCount, const VkDescriptorSetLayoutBinding* pBindings) const {
 			VkDescriptorSetLayoutCreateInfo createInfo {
 				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -2233,7 +2244,7 @@ namespace engine {
 			vkDestroyPipeline(m_VulkanDevice, pipeline, m_VulkanAllocationCallbacks);
 		}
 
-		void DestroyShaderModule(VkShaderModule module) {
+		void DestroyShaderModule(VkShaderModule module) const {
 			vkDestroyShaderModule(m_VulkanDevice, module, m_VulkanAllocationCallbacks);
 		}
 
