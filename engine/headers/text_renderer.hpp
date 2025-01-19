@@ -60,11 +60,21 @@ namespace engine {
 			uint32_t m_FontSize{};
 			const char* m_FileName{};
 			int m_MaxHoriBearingY{};
+
+			Vec2_T<uint32_t> GetCharacterSize(unsigned char c) const {
+				assert(c < 128);
+				return m_Characters[c].m_Size;
+			}
 		};
 
-		struct TextImage {
+		struct TextImage {	
+
 			Vec2_T<uint32_t> m_Extent;
 			uint32_t* m_Image;
+
+			bool IsNull() {
+				return !m_Image;
+			}
 		};
 
 		Renderer& m_Renderer;
@@ -234,7 +244,22 @@ namespace engine {
 			return true;
 		}
 
-		uint32_t CalcWordWidth(const char* text, size_t pos, uint32_t frameWidth, const GlyphAtlas& atlas, size_t& outEndPos) {
+		static Vec2_T<uint32_t> CalcTextSize(const char* text, const GlyphAtlas& atlas, Vec2_T<uint32_t> spacing) {
+			Vec2_T<uint32_t> result { spacing.x + spacing.x, atlas.m_MaxHoriBearingY + spacing.y + spacing.y };
+			char c = text[0];
+			uint32_t xPos = spacing.x;
+			for (size_t i = 0; c; c = text[i], i++) {
+				if (c < 0) {
+					continue;
+				}
+				const Character& character = atlas.m_Characters[c];
+				result.x += character.m_Escapement.x;
+			}
+			result = Vec2_T<uint32_t>(Clamp(result.x, 1U, UINT32_MAX), Clamp(result.y, 1U, UINT32_MAX));
+			return result;
+		}
+
+		static uint32_t CalcWordWidth(const char* text, size_t pos, uint32_t frameWidth, const GlyphAtlas& atlas, size_t& outEndPos) {
 			uint32_t res = 0;
 			char c = text[pos];
 			size_t i = pos;
@@ -252,7 +277,7 @@ namespace engine {
 			return res;
 		}
 
-		uint32_t CalcLineWidth(const char* text, size_t pos, uint32_t frameWidth, const GlyphAtlas& atlas, size_t& outEndPos, bool& wordCut) {
+		static uint32_t CalcLineWidth(const char* text, size_t pos, uint32_t frameWidth, const GlyphAtlas& atlas, size_t& outEndPos, bool& wordCut) {
 			uint32_t res = 0;
 			char c = text[pos];
 			size_t i = pos;
@@ -316,6 +341,55 @@ namespace engine {
 				+ (ClampComponent(bgA + tA) << 24);
 		}
 
+		static TextImage RenderCharacter(char c, const GlyphAtlas& atlas, uint32_t color) {
+			assert(c < 128);
+			const Character& character = atlas.m_Characters[c];
+			TextImage res{};
+			res.m_Extent = character.m_Size;
+			size_t resPixelCount = res.m_Extent.x * res.m_Extent.y;
+			size_t allocationSize = resPixelCount * 4;
+			if (allocationSize == 0) {
+				return {};
+			}
+			res.m_Image = (uint32_t*)malloc(allocationSize);
+			if (res.m_Image) {
+				memset(res.m_Image, 0, allocationSize);
+			}
+			else {
+				PrintError(ErrorOrigin::Uncategorized,
+					"failed to allocate memory (function malloc in function RenderCharacter)!");
+				return {};
+			}
+			size_t atlasPixelCount = atlas.m_Extent.x * atlas.m_Extent.y;
+			uint32_t charWidth = character.m_Size.x;
+			uint32_t charHeight = character.m_Size.y;
+			Vec2_T<uint32_t> pen { 0, 0 };
+			for (size_t y = 0; y < charHeight; y++) {
+				assert(pen.y < res.m_Extent.y);
+				for (size_t x = 0; x < charWidth; x++) {
+					size_t atlasIndex = y * atlas.m_Extent.x + character.m_Offset + x;
+					size_t resImageIndex = pen.y * character.m_Size.x + pen.x;
+					assert(atlasIndex < atlasPixelCount && resImageIndex < resPixelCount);
+					float val = (float)atlas.m_Atlas[atlasIndex] / 255;
+					if (val != 0.0f) {
+						const uint8_t* pColor = (uint8_t*)&color;
+						uint8_t trueColor[4] {
+							(uint8_t)(val * pColor[0]),
+							(uint8_t)(val * pColor[1]),
+							(uint8_t)(val * pColor[2]),
+							(uint8_t)(val * pColor[3]),
+						};
+						uint32_t& bgCol = res.m_Image[resImageIndex];
+						bgCol = BlendTextColorRGBA(*(uint32_t*)trueColor, bgCol);
+					}
+					++pen.x;
+				}
+				++pen.y;
+				pen.x = 0;
+			}
+			return res;
+		}
+
 		struct RenderTextInfo {
 			const GlyphAtlas& m_GlyphAtlas;
 			Vec2_T<uint32_t> m_Spacing;
@@ -324,7 +398,7 @@ namespace engine {
 		};
 
 		template<TextAlignment text_alignment_T = TextAlignment::Left>
-		TextImage RenderText(const char* text, const RenderTextInfo& renderInfo, Vec2_T<uint32_t> frameExtent, uint32_t* bgImage = nullptr) {
+		static TextImage RenderText(const char* text, const RenderTextInfo& renderInfo, Vec2_T<uint32_t> frameExtent, uint32_t* bgImage = nullptr) {
 			static_assert(sizeof(uint32_t) == 4, "size of uint32_t was not 4!");
 			static_assert(sizeof(uint8_t) == 1, "size of uin8_t was not 1!");
 			static_assert(sizeof(uint8_t) == sizeof(unsigned char), "size of unsigned char was not size of uint8_t!");
@@ -485,7 +559,7 @@ namespace engine {
 			return res;
 		}
 
-		void DestroyTextImage(TextImage& image) {
+		static void DestroyTextImage(TextImage& image) {
 			free(image.m_Image);
 			image.m_Image = nullptr;
 			image.m_Extent = {};
