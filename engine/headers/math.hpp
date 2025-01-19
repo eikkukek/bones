@@ -13,6 +13,16 @@ namespace engine {
 
 	constexpr auto pi = 3.14159265358979323846;
 
+	constexpr inline float Lerp(float a, float b, float t) {
+		return a * (1 - t) + b * t;
+	}
+
+	template<typename T>
+	struct Vec3_T;
+
+	template<typename T>
+	struct Vec4_T;
+
 	/*! @brief Two element vector
 	*/
 	template<typename T>
@@ -20,12 +30,22 @@ namespace engine {
 
 		static constexpr inline size_t size = 2;
 
+		static constexpr Vec2_T Up() {
+			return Vec2_T(0.0f, 1.0f);
+		}
+
 		T x, y;
 
 		constexpr inline Vec2_T(T x = Cast(0), T y = Cast(0)) noexcept : x(x), y(y) {}
 
-		template<typename Vec>
-		constexpr inline Vec2_T(const Vec& other) noexcept : x(Cast(other.x)), y(Cast(other.y)) {}
+		template<typename U>
+		constexpr inline Vec2_T(const Vec2_T<U>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)) {}
+
+		template<typename U>
+		constexpr inline Vec2_T(const Vec3_T<U>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)) {}
+
+		template<typename U>
+		constexpr inline Vec2_T(const Vec4_T<U>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)) {}
 
 		static constexpr inline T Dot(const Vec2_T& a, const Vec2_T& b) noexcept { return a.x * b.x + a.y * b.y; }
 
@@ -40,6 +60,19 @@ namespace engine {
 			}
 			mag = sqrt(mag);
 			return Vec2_T(x / mag, y / mag);
+		}
+
+		constexpr inline Vec2_T Rotated(float rads) const {
+			float c = cos(rads);
+			float s = sin(rads);
+			return {
+				x * c - y * s,
+				x * s - y * c,
+			};
+		}
+
+		static constexpr Vec2_T Lerp(Vec2_T a, Vec2_T b, float t) {
+			return a * (1 - t) + b * t;
 		}
 
 		constexpr inline Vec2_T operator*(T scalar) const noexcept { return Vec2_T(x * scalar, y * scalar); }
@@ -60,7 +93,7 @@ namespace engine {
 			return a;
 		}
 		return b;
-	}
+	}	
 
 	typedef Vec2_T<float> Vec2;
 	typedef Vec2_T<int> IntVec2;
