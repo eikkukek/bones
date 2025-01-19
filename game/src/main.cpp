@@ -1,4 +1,5 @@
 #include "engine.hpp"
+#include "random.hpp"
 #include <chrono>
 
 class Player {
@@ -82,12 +83,119 @@ public:
 
 */
 
+class UIElement : public engine::UI::Entity {
+public:
+
+	engine::UI& m_UI;
+	engine::UI::Text m_Text;
+
+	engine::Vec2 m_Position;
+	float rotation = 0.0f;
+	float rotationSpeed = engine::pi / 2;
+	float yOffset = 0.0f;
+	float targetYOffset = 40.0f;
+	int addSign = 1;
+	float timer = 0.0f;
+
+	UIElement(engine::UI& UI, const engine::GlyphAtlas& atlas) : m_UI(UI), m_Text(m_UI) {
+		using namespace engine;
+		m_Text.Initialize("Hello how's it going", atlas, { 1.0f, 1.0f, 1.0f, 1.0f }, 
+			TextRenderer::CalcTextSize("Hello how's it going", atlas, { 5, 5 }), engine::TextAlignment::Middle);
+	}
+
+	void UILoop(engine::UI& UI) {
+		using namespace engine;
+		float tempYOffset = Lerp(yOffset, targetYOffset, 0.25f * Time::DeltaTime());
+		float deltaYOffset = tempYOffset - yOffset;
+		int yOffsetSign = deltaYOffset > 0.0f ? 1 : -1;
+		deltaYOffset = Clamp(abs(deltaYOffset), 0.0f, 20.0f * Time::DeltaTime());
+		yOffset += deltaYOffset * yOffsetSign;
+		if (abs(targetYOffset - yOffset) < 10) {
+			targetYOffset *= -1;
+		}
+		m_Position = Vec2::Lerp(m_Position, m_UI.GetCursorPosition(), 5.0f * Time::DeltaTime());
+		m_Text.m_Position = m_Position + (Vec2::Up() * yOffset).Rotated(rotation);
+		UI.AddRenderData(m_Text);
+		rotation += rotationSpeed * Time::DeltaTime();
+		float rand = RandomFloat(0.0f, pi / 8);
+		if (timer > 2.0f) {
+			timer = 0.0f;
+			addSign *= -1;
+		}
+		rotationSpeed += rand * addSign * Time::DeltaTime();
+		timer += Time::DeltaTime();
+	}
+
+	void Terminate() {
+		m_Text.Terminate();
+	}
+};
+
+class InputText : public engine::UI::Entity {
+public:
+
+	using Text = engine::UI::Text;
+	using Character = engine::TextRenderer::Character;
+
+	engine::UI& m_UI;
+	char m_Buffer[64] {};
+	const engine::GlyphAtlas& m_GlyphAtlas;
+	Text* m_Texts;
+	size_t m_CharacterCount = 0;
+
+	InputText(engine::UI& UI, const engine::GlyphAtlas& atlas)
+		: m_UI(UI), m_Texts((Text*)(malloc(64 * sizeof(Text)))), m_GlyphAtlas(atlas) {}
+
+	bool PutChar(unsigned char c) {
+		using namespace engine;
+		assert(c < 128);
+		if (m_CharacterCount >= 64) {
+			return false;
+		}
+		UI::Text* text = new(&m_Texts[m_CharacterCount]) UI::Text(m_UI);
+		text->Initialize(c, m_GlyphAtlas, Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+		m_Buffer[m_CharacterCount] = c;
+		++m_CharacterCount;
+	}
+
+	void UILoop(engine::UI& UI) {
+		using namespace engine;
+		for (unsigned int c : Input::GetTextInput()) {
+			if (c >= 128) {
+				continue;
+			}
+			else {
+				PutChar(c);
+			}
+		}
+		IntVec2 pos = UI.GetCursorPosition() - IntVec2(50, 50);
+		for (size_t i = 0; i < m_CharacterCount; i++) {
+			Text& text = m_Texts[i];
+			const Character& character = m_GlyphAtlas.m_Characters[m_Buffer[i]];
+			if (character.m_Size.x == 0) {
+				pos.x += character.m_Escapement.x;
+				continue;
+			}
+			pos.x += character.m_Size.x / 2;
+			text.m_Position = pos - IntVec2(0, character.m_Bearing.y);
+			if (!text.IsNull()) {
+				UI.AddRenderData(text);
+			}
+			pos.x += character.m_Escapement.x / 2;
+		}
+	}
+
+	void Terminate() {
+		auto end = m_Texts + m_CharacterCount;
+		for (auto iter = m_Texts; iter != end; iter++) {
+			iter->Terminate();
+		}
+		free(m_Texts);
+	}
+};
+
 int main() {
 	using namespace engine;
-
-	Mat4 m0 = Mat4::LookAt(0.0f, Vec3::Up(), Vec3::Forward());
-	Mat4 m1 = Mat4::LookAt(Vec3(10.0f, 10.0f, 10.0f), Vec3::Up(), Vec3::Backward());
-	Vec4 v0 = Vec3(3.0f, 0.0f, 3.0f);
 
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -105,24 +213,32 @@ int main() {
 		.m_GlyphAtlas = atlas,
 		.m_Spacing = { 2, 2 },
 		.m_TextColor = PackColorRBGA({ 1.0f, 1.0f, 1.0f, 0.8f }),
-		.m_BackGroundColor = PackColorRBGA({ 0.0f, 0.0f, 1.0f, 0.5f }),
+		.m_BackGroundColor = PackColorRBGA({ 0.0f, 0.0f, 0.0f, 0.0f }),
 	};
+
 	TextImage textImage 
 			= textRenderer.RenderText<TextAlignment::Middle>(text, renderInfo, { 540, 540 });
 	StaticTexture texture(engine);
 
-	texture.Create(VK_FORMAT_R8G8B8A8_SRGB, 4, textImage.m_Extent, textImage.m_Image);
+	texture.Create(VK_FORMAT_R8G8B8A8_SRGB, textImage.m_Extent, textImage.m_Image);
+
 	VkImageView textureImageView = texture.CreateImageView();
 	UI& UI = engine.GetUI();
 	static VkDescriptorSet testUIDescriptorSet;
 	VkDescriptorPool testUIDescriptorPool;
 	UI.CreateTexture2DArray<1>(&textureImageView, testUIDescriptorSet, testUIDescriptorPool);
-	UI::Window* uiWindow = UI.AddWindow("Moi", UI::WindowState::Focused, { 0, 0 }, { 270, 270 });
+	UI::Window* uiWindow = UI.AddWindow("Moi", UI::WindowState::Focused, { 0, 0 }, { 540, 540 });
 	uiWindow->m_Pipeline2DRenderCallback = [](const UI::Window& window, VkDescriptorSet& outDescriptorSet, uint32_t& outTextureIndex) -> bool {
 		outDescriptorSet = testUIDescriptorSet;
 		outTextureIndex = 0;
 		return true;
 	};
+
+	UIElement element(UI, atlas);
+	InputText inputText(UI, atlas);
+
+	UI.AddEntity(&element);
+	UI.AddEntity(&inputText);
 
 	Engine::GroundInfo groundInfo {
 		.m_TopViewBoundingRect {
@@ -146,6 +262,15 @@ int main() {
 
 	World& world = engine.LoadWorld({ 128, 128 }, { 8, 8 }, 1, &groundInfo, 1, &obstacleInfo);
 
+	uint8_t* brickWallImage;
+	Vec2_T<uint32_t> brickWallExtent;
+	assert(engine.LoadImage("resources\\textures\\brick_wall\\albedo.png", 4, brickWallImage, brickWallExtent));
+	StaticTexture brickWallTexture(engine);
+	assert(brickWallTexture.Create(VK_FORMAT_R8G8B8A8_SRGB, brickWallExtent, brickWallImage));
+	engine.DestroyImage(brickWallImage);
+	World::TextureMap textureMap{};
+	assert(world.CreateTextureMap(brickWallTexture, textureMap));
+
 	const Engine::DynamicArray<Engine::Ground>& grounds = world.GetGrounds();
 
 	MeshData groundMesh = engine.GetQuadMesh().GetMeshData();
@@ -156,7 +281,8 @@ int main() {
 	groundTransform[2] *= 10.0f;
 	groundTransform[3] = { 0.0f, 1.0f, 0.0f, 1.0f };
 
-	world.AddRenderData(grounds[0], groundTransform, groundMesh);
+	auto groundRenderData = world.AddRenderData(grounds[0], groundTransform, groundMesh);
+	(*groundRenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 
 	Engine::Obj cubeObj{};
 	FILE* fileStream = fopen("resources\\meshes\\cube.obj", "r");
@@ -179,19 +305,24 @@ int main() {
 		obstacleTransform[i] *= 2;
 	}
 
-	world.AddRenderData(obstacles[0], obstacleTransform, cubeMesh.GetMeshData());
-	world.AddDebugRenderData(obstacles[0], obstacleTransform, Vec4(0.0f, 0.8f, 0.3f, 1.0f), cubeMesh.GetMeshData());
+	auto obstacleRenderData = world.AddRenderData(obstacles[0], obstacleTransform, cubeMesh.GetMeshData());
+	(*obstacleRenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
+	//world.AddDebugRenderData(obstacles[0], obstacleTransform, Vec4(0.0f, 0.8f, 0.3f, 1.0f), cubeMesh.GetMeshData());
 
 	Player player(world, cubeMesh);
+	(*player.m_RenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 	//NPC npc(world, playerMesh);
 
 	while (engine.Loop()) {
 		float deltaTime = Time::DeltaTime();
-		uiWindow->SetPosition(UI.m_CursorPosition);
+		//uiWindow->SetPosition(UI.GetCursorPosition());
 	}
-
 	Renderer& renderer = engine.GetRenderer();
 	vkDeviceWaitIdle(renderer.m_VulkanDevice);	
+	element.Terminate();
+	inputText.Terminate();
+	world.DestroyTextureMap(textureMap);
+	brickWallTexture.Terminate();
 	player.m_Mesh.Terminate();
 	renderer.DestroyDescriptorPool(testUIDescriptorPool);
 	glfwTerminate();
