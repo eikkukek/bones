@@ -2125,7 +2125,7 @@ namespace engine {
 			vkDestroyDescriptorSetLayout(m_VulkanDevice, layout, m_VulkanAllocationCallbacks);
 		}
 
-		VkDescriptorPool CreateDescriptorPool(VkDescriptorPoolCreateFlags flags, uint32_t maxSets, uint32_t poolSizeCount, VkDescriptorPoolSize poolSizes[]) const {
+		VkDescriptorPool CreateDescriptorPool(VkDescriptorPoolCreateFlags flags, uint32_t maxSets, uint32_t poolSizeCount, const VkDescriptorPoolSize poolSizes[]) const {
 			VkDescriptorPoolCreateInfo poolInfo {
 				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
 				.pNext = nullptr,
@@ -2147,7 +2147,7 @@ namespace engine {
 		}
 
 		bool AllocateDescriptorSets(const void* pNext, VkDescriptorPool descriptorPool, uint32_t setCount,
-				VkDescriptorSetLayout* pLayouts, VkDescriptorSet outSets[]) const {
+				const VkDescriptorSetLayout* pLayouts, VkDescriptorSet outSets[]) const {
 			if (descriptorPool == VK_NULL_HANDLE) {
 				PrintError(ErrorOrigin::Vulkan, 
 					"attempting to allocate descriptor sets with a descriptor pool that's null (in function AllocateDescriptorSets)!");
@@ -2179,7 +2179,7 @@ namespace engine {
 		};
 
 		static VkWriteDescriptorSet GetDescriptorWrite(const void* pNext, uint32_t binding, VkDescriptorSet set, VkDescriptorType type,
-				VkDescriptorImageInfo* pImageInfo, VkDescriptorBufferInfo* pBufferInfo, uint32_t dstArrayElement = 0, uint32_t descriptorCount = 1) {
+				const VkDescriptorImageInfo* pImageInfo, const VkDescriptorBufferInfo* pBufferInfo, uint32_t dstArrayElement = 0, uint32_t descriptorCount = 1) {
 			return {
 				.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 				.pNext = pNext,
@@ -2257,6 +2257,7 @@ namespace engine {
 			VkCommandBuffer m_CommandBuffer;
 			VkImageView m_SwapchainImageView;
 			uint32_t m_CurrentFrame;
+			VkExtent2D m_SwapchainExtent;
 		};
 
 		bool BeginFrame(DrawData& outDrawData) {
@@ -2321,6 +2322,8 @@ namespace engine {
 			m_ThreadsMutex.unlock();
 
 
+			m_TransferCommandBufferQueueMutex.lock();
+
 			m_EarlyGraphicsCommandBufferQueueMutex.lock();
 
 			if (m_EarlyGraphicsCommandBufferQueue.m_Count) {
@@ -2328,21 +2331,21 @@ namespace engine {
 				Stack::Array<VkCommandBuffer> commandBuffers
 				 	= m_SingleThreadStack.Allocate<VkCommandBuffer>(m_EarlyGraphicsCommandBufferQueue.m_Count);
 
-				 if (!commandBuffers.m_Data) {
-					 m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory,
-					 	"single thread stack was out of memory (function Stack::Allocate in function BeginFrame)!",
+				if (!commandBuffers.m_Data) {
+					m_CriticalErrorCallback(this, ErrorOrigin::OutOfMemory,
+						"single thread stack was out of memory (function Stack::Allocate in function BeginFrame)!",
 						VK_SUCCESS);
-				 }
+				}
 
-				 for (size_t i = 0; i < m_EarlyGraphicsCommandBufferQueue.m_Count; i++) {
-					 CommandBuffer<Queue::Graphics> commandBuffer = m_EarlyGraphicsCommandBufferQueue.m_Data[i];
-					 commandBuffers[i] = commandBuffer.m_CommandBuffer;
-					 if (commandBuffer.m_Flags & CommandBufferFlag_SubmitCallback) {
-						 Assert(m_CommandBufferSubmitCallbacks[m_CurrentFrame].New(commandBuffer.m_SubmitCallback), 
-						 	ErrorOrigin::OutOfMemory, 
+				for (size_t i = 0; i < m_EarlyGraphicsCommandBufferQueue.m_Count; i++) {
+					CommandBuffer<Queue::Graphics> commandBuffer = m_EarlyGraphicsCommandBufferQueue.m_Data[i];
+					commandBuffers[i] = commandBuffer.m_CommandBuffer;
+					if (commandBuffer.m_Flags & CommandBufferFlag_SubmitCallback) {
+						Assert(m_CommandBufferSubmitCallbacks[m_CurrentFrame].New(commandBuffer.m_SubmitCallback), 
+							ErrorOrigin::OutOfMemory, 
 							"command buffer submit callbacks was out of memory (function OneTypeStack::New in function BeginFrame)!");
-					 }
-					 if (commandBuffer.m_Flags & CommandBufferFlag_FreeAfterSubmit) {
+					}
+					if (commandBuffer.m_Flags & CommandBufferFlag_FreeAfterSubmit) {
 						if (commandBuffer.m_ThreadID == m_MainThreadID) {
 							m_GraphicsCommandBufferFreeList.Push(commandBuffer.m_CommandBuffer, m_CurrentFrame);
 						}
@@ -2360,15 +2363,15 @@ namespace engine {
 									"failed to find transfer command buffer thread (in function BeginFrame)!");
 							}
 						}
-					 }
-				 }
+					}
+				}
 
 				VkSubmitInfo submitInfo {
 					.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
 					.pNext = nullptr,
 					.commandBufferCount = (uint32_t)commandBuffers.m_Size,
 					.pCommandBuffers = commandBuffers.m_Data,
-					.signalSemaphoreCount = 1,
+					.signalSemaphoreCount = m_TransferCommandBufferQueue.m_Count ? 1U : 0,
 					.pSignalSemaphores = &m_EarlyGraphicsSignalSemaphores[m_CurrentFrame],
 				};
 
@@ -2382,8 +2385,6 @@ namespace engine {
 			}
 
 			m_EarlyGraphicsCommandBufferQueueMutex.unlock();
-
-			m_TransferCommandBufferQueueMutex.lock();
 
 			if (m_TransferCommandBufferQueue.m_Count) {
 
@@ -2468,6 +2469,7 @@ namespace engine {
 			outDrawData.m_SwapchainImageView = m_SwapchainImageViews[m_CurrentFrame];
 			outDrawData.m_CommandBuffer = m_RenderCommandBuffers[m_CurrentFrame];
 			outDrawData.m_CurrentFrame = m_CurrentFrame;
+			outDrawData.m_SwapchainExtent = m_SwapchainExtent;
 			vkResetCommandBuffer(outDrawData.m_CommandBuffer, 0);
 			VkCommandBufferBeginInfo commandBufferBeginInfo {
 				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
