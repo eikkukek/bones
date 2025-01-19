@@ -60,11 +60,6 @@ namespace engine {
 			uint32_t m_FontSize{};
 			const char* m_FileName{};
 			int m_MaxHoriBearingY{};
-
-			Vec2_T<uint32_t> GetCharacterSize(unsigned char c) const {
-				assert(c < 128);
-				return m_Characters[c].m_Size;
-			}
 		};
 
 		struct TextImage {	
@@ -72,7 +67,7 @@ namespace engine {
 			Vec2_T<uint32_t> m_Extent;
 			uint32_t* m_Image;
 
-			bool IsNull() {
+			bool IsNull() const {
 				return !m_Image;
 			}
 		};
@@ -157,10 +152,12 @@ namespace engine {
 				if (ftRes == FT_Err_Unknown_File_Format) {
 					PrintError(ErrorOrigin::FreeType, 
 						"failed to load font due to unknown file format (function FT_New_Face in function CreateGlyphAtlas)", ftRes);
+					return false;
 				}
 				else {
 					PrintError(ErrorOrigin::FreeType, 
 						"failed to open font file (function FT_New_Face in function CreateGlyphAtlas)!", ftRes);
+					return true;
 				}
 				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "failed to load font {}\n", fontFileName);
 				return {};
@@ -211,7 +208,11 @@ namespace engine {
 				memset(out.m_Atlas, 0, atlasAllocSize);
 			}
 			else {
-				PrintError(ErrorOrigin::Uncategorized, "failed to allocate glyph atlas image (function malloc in function CreateGlyphAtlas)!");
+				PrintError(ErrorOrigin::Uncategorized, 
+					"failed to allocate glyph atlas image (function malloc in function CreateGlyphAtlas)!");
+				for (unsigned char c = 0; c < 128; c++) {
+					free(bitmaps[c]);
+				}
 				return false;
 			}
 			out.m_FontSize = fontPixelSize;
@@ -242,6 +243,12 @@ namespace engine {
 				free(bitmap);
 			}
 			return true;
+		}
+
+		void DestroyGlyphAtlas(GlyphAtlas& atlas) {
+			free(atlas.m_Atlas);
+			atlas.m_Atlas = nullptr;
+			atlas.~GlyphAtlas();
 		}
 
 		static Vec2_T<uint32_t> CalcTextSize(const char* text, const GlyphAtlas& atlas, Vec2_T<uint32_t> spacing) {
@@ -341,7 +348,7 @@ namespace engine {
 				+ (ClampComponent(bgA + tA) << 24);
 		}
 
-		static TextImage RenderCharacter(char c, const GlyphAtlas& atlas, uint32_t color) {
+		static TextImage RenderCharacter(unsigned char c, const GlyphAtlas& atlas, uint32_t color) {
 			assert(c < 128);
 			const Character& character = atlas.m_Characters[c];
 			TextImage res{};
