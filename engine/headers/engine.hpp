@@ -1348,6 +1348,9 @@ namespace engine {
 			static inline Vec2_T<double> s_DeltaCursorPosition{};
 
 			static void KeyCallback(GLFWwindow*, int key, int scancode, int action, int mods) {
+				if (key < 0) {
+					return;
+				}
 				size_t index = key;
 				assert(index < key_count);
 				s_PressedKeys[index] = action == GLFW_PRESS;
@@ -1360,6 +1363,9 @@ namespace engine {
 			}
 
 			static void MouseButtonCallback(GLFWwindow*, int button, int action, int mods) {
+				if (button < 0) {
+					return;
+				}
 				size_t index = button;
 				assert(index < mouse_button_count);
 				s_PressedMouseButtons[index] = action == GLFW_PRESS;
@@ -2158,7 +2164,7 @@ void main() {
 					else if (m_HeapStringBuffer) {
 						if (m_StringLength >= m_HeapBufferCapacity) {
 							char* temp = m_HeapStringBuffer;
-							m_HeapStringBuffer = (char*)malloc(m_HeapBufferCapacity * 2 * sizeof(char));
+							m_HeapStringBuffer = (char*)malloc(m_HeapBufferCapacity *= 2 * sizeof(char));
 							assert(m_HeapStringBuffer);
 							for (uint32_t i = 0; i < m_StringLength; i++) {
 								m_HeapStringBuffer[i] = temp[i];
@@ -3554,7 +3560,8 @@ void main() {
 						float diffSqrMag = diff.SqrMagnitude();
 						if (diffSqrMag < aPole.m_Radius * aPole.m_Radius) {
 							float diffMag = sqrt(diffSqrMag);
-							outAPushBack = Vec3(diff.x / diffMag, 0.0f, diff.y / diffMag) * (aPole.m_Radius - diffMag);
+							Mat3 invRot = Quaternion::AxisRotation(Vec3(0.0f, 0.0f, 1.0f), -bFence.m_YRotation).AsMat4();
+							outAPushBack = Vec3(diff.x / diffMag, 0.0f, diff.y / diffMag) * invRot * (aPole.m_Radius - diffMag);
 							return true;
 						}
 					}
@@ -6229,7 +6236,7 @@ void main() {
 
 			if (m_Mode & EngineMode_Play) {
 				m_World.LogicUpdate();
-				m_UI.UILoop();
+				//m_UI.UILoop();
 			}
 
 			if (m_Mode & EngineMode_Editor) {
@@ -6238,7 +6245,7 @@ void main() {
 			Renderer::DrawData drawData;
 			if (m_Renderer.BeginFrame(drawData)) {
 				m_World.RenderWorld(drawData);
-				m_UI.RenderUI(drawData);
+				//m_UI.RenderUI(drawData);
 				m_Renderer.EndFrame(0, nullptr);
 			}
 
