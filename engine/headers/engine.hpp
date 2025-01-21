@@ -6236,7 +6236,7 @@ void main() {
 
 			if (m_Mode & EngineMode_Play) {
 				m_World.LogicUpdate();
-				//m_UI.UILoop();
+				m_UI.UILoop();
 			}
 
 			if (m_Mode & EngineMode_Editor) {
@@ -6245,7 +6245,7 @@ void main() {
 			Renderer::DrawData drawData;
 			if (m_Renderer.BeginFrame(drawData)) {
 				m_World.RenderWorld(drawData);
-				//m_UI.RenderUI(drawData);
+				m_UI.RenderUI(drawData);
 				m_Renderer.EndFrame(0, nullptr);
 			}
 
