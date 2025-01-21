@@ -283,12 +283,14 @@ int main() {
 	static VkDescriptorSet testUIDescriptorSet;
 	VkDescriptorPool testUIDescriptorPool;
 	UI.CreateTexture2DArray<1>(&textureImageView, testUIDescriptorSet, testUIDescriptorPool);
+	/*
 	UI::Window* uiWindow = UI.AddWindow("Moi", UI::WindowState::Focused, { 0, 0 }, { 540, 540 });
 	uiWindow->m_Pipeline2DRenderCallback = [](const UI::Window& window, VkDescriptorSet& outDescriptorSet, uint32_t& outTextureIndex) -> bool {
 		outDescriptorSet = testUIDescriptorSet;
 		outTextureIndex = 0;
 		return true;
 	};
+	*/
 
 	UIElement element(UI, atlas);
 	InputText inputText(UI, atlas, fontAtlas);
