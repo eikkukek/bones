@@ -85,6 +85,10 @@ namespace engine {
 		constexpr inline Vec2_T& operator-=(Vec2_T other) noexcept { x -= other.x; y -= other.y; return *this; }
 
 		constexpr inline bool operator==(const Vec2_T& other) const noexcept = default;
+
+		constexpr inline const T& operator[](size_t index) const {
+			return index == 0 ? x : y;
+		}
 	};
 
 	template<typename T>
@@ -243,9 +247,13 @@ namespace engine {
 		constexpr inline Mat2_T() noexcept : columns() {}
 		constexpr inline Mat2_T(T num) noexcept : columns { { num, Cast(0) }, { Cast(0), num } } {}
 		constexpr inline Mat2_T(T num0, T num1, T num2, T num3) noexcept : columns { { num0, num1 }, { num2, num3 } } {}
-		static constexpr inline T Determinant(const Mat2_T& a) noexcept { return a[0][0] * a[1][1] - a[0][1] * a[1][0]; }
-		constexpr inline Vec2_T<T>& operator[](size_t index) { if (index >= size) { printf("index out of bounds (Mat2_T opertator[])"); return Vec2_T<T>(); }; return columns[index]; }
+
+		constexpr inline Vec2_T<T>& operator[](size_t index) { assert(index < size); return columns[index]; }
+		constexpr inline const Vec2_T<T>& operator[](size_t index) const { assert(index < size); return columns[index]; }
 	};
+
+	template<typename T>
+	constexpr inline T Determinant(const Mat2_T<T>& a) noexcept { return a[0][0] * a[1][1] - a[0][1] * a[1][0]; }
 
 	typedef Mat2_T<float> Mat2;
 
@@ -259,9 +267,14 @@ namespace engine {
 
 		Vec3_T<T> columns[3];
 
-		constexpr inline Mat3_T() noexcept : columns{ {  } } {}
+		constexpr inline Mat3_T(T num = Cast(0)) noexcept 
+			: columns { { num, Cast(0), Cast(0) }, { Cast(0), num, Cast(0) }, { Cast(0), Cast(0), num} } {}
+
 		constexpr inline Mat3_T(T n0, T n1, T n2, T n3, T n4, T n5, T n6, T n7, T n8) noexcept
 			: columns { { n0, n1, n2 }, { n3, n4, n5 }, { n6, n7, n8 } } {}
+
+		constexpr inline Mat3_T(const Vec3_T<T>& col1, const Vec3_T<T>& col2, const Vec3_T<T>& col3) 
+			: columns { col1, col2, col3 } {}
 
 		constexpr inline Mat3_T(const Mat4_T<T>& other) : columns { other[0], other[1], other[2] } {}
 
@@ -273,35 +286,40 @@ namespace engine {
 			);
 		}
 
-		static constexpr inline Mat3_T& Transpose(Mat3_T& a) noexcept {
-			Swap(a[0][2], a[2][0]);
-			Swap(a[0][1], a[1][0]);
-			Swap(a[1][2], a[2][1]);
-			return a;
-		}
-		static constexpr inline Mat3_T& Inverse(Mat3_T& a) noexcept {
-			Vec3_T<T> minors0 = Vec3_T<T>(
-				Mat2_T<T>::Determinant(Mat2_T<T>(a[1][1], a[1][2], a[2][1], a[2][2])),
-				Mat2_T<T>::Determinant(Mat2_T<T>(a[1][2], a[1][0], a[2][2], a[2][0])),
-				Mat2_T<T>::Determinant(Mat2_T<T>(a[1][0], a[1][1], a[2][0], a[2][1]))
-			);
-			Vec3_T minors1 = Vec3_T<T>(
-				Mat2_T<T>::Determinant(Mat2_T<T>(a[2].y, a[2].z, a[0].y, a[0].z)),
-				Mat2_T<T>::Determinant(Mat2_T<T>(a[2].z, a[2].x, a[0].z, a[0].x)),
-				Mat2_T<T>::Determinant(Mat2_T<T>(a[2].x, a[2].y, a[0].x, a[0].y))
-			);
-			Vec3_T minors2 = Vec3_T(
-				Mat2_T<T>::Determinant(Mat2_T<T>(a[0].y, a[0].z, a[1].y, a[1].z)),
-				Mat2_T<T>::Determinant(Mat2_T<T>(a[0].z, a[0].x, a[1].z, a[1].x)),
-				Mat2_T<T>::Determinant(Mat2_T<T>(a[0].x, a[0].y, a[1].x, a[1].y))
-			);
-			a = { minors0, minors1, minors2 };
-			return Transpose(a);
-		}
-
 		constexpr inline const Vec3_T<T>& operator[](size_t index) const { return columns[index]; }
 		constexpr inline Vec3_T<T>& operator[](size_t index) { return columns[index]; }
 	};
+
+	template<typename T>
+	static constexpr inline Mat3_T<T> Transpose(const Mat3_T<T>& a) noexcept {
+		Mat3_T<T> result = a;
+		Swap(result[0][2], result[2][0]);
+		Swap(result[0][1], result[1][0]);
+		Swap(result[1][2], result[2][1]);
+		return result;
+	}
+
+	template<typename T>
+	static constexpr inline Mat3_T<T> Inverse(const Mat3_T<T>& a) noexcept {
+		Vec3_T<T> minors0 = Vec3_T<T>(
+			Determinant(Mat2_T<T>(a[1][1], a[1][2], a[2][1], a[2][2])),
+			Determinant(Mat2_T<T>(a[1][2], a[1][0], a[2][2], a[2][0])),
+			Determinant(Mat2_T<T>(a[1][0], a[1][1], a[2][0], a[2][1]))
+		);
+		Vec3_T<T> minors1 = Vec3_T<T>(
+			Determinant(Mat2_T<T>(a[2][1], a[2][2], a[0][1], a[0][2])),
+			Determinant(Mat2_T<T>(a[2][2], a[2][0], a[0][2], a[0][0])),
+			Determinant(Mat2_T<T>(a[2][0], a[2][1], a[0][0], a[0][1]))
+		);
+		Vec3_T<T> minors2 = Vec3_T<T>(
+			Determinant(Mat2_T<T>(a[0][1], a[0][2], a[1][1], a[1][2])),
+			Determinant(Mat2_T<T>(a[0][2], a[0][0], a[1][2], a[1][0])),
+			Determinant(Mat2_T<T>(a[0][0], a[0][1], a[1][0], a[1][1]))
+		);
+		Mat3_T<T> result(minors0, minors1, minors2);
+		return Transpose(result);
+	}
+
 
 	typedef Mat3_T<float> Mat3;
 
