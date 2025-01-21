@@ -3560,8 +3560,9 @@ void main() {
 						float diffSqrMag = diff.SqrMagnitude();
 						if (diffSqrMag < aPole.m_Radius * aPole.m_Radius) {
 							float diffMag = sqrt(diffSqrMag);
-							Mat3 invRot = Quaternion::AxisRotation(Vec3(0.0f, 0.0f, 1.0f), -bFence.m_YRotation).AsMat4();
-							outAPushBack = Vec3(diff.x / diffMag, 0.0f, diff.y / diffMag) * invRot * (aPole.m_Radius - diffMag);
+							Mat3 invRot = Inverse(bFence.m_RotationMatrix);
+							diff = Vec3(diff) * invRot;
+							outAPushBack = Vec3(diff.x / diffMag, 0.0f, diff.y / diffMag) * (aPole.m_Radius - diffMag);
 							return true;
 						}
 					}
