@@ -60,29 +60,6 @@ public:
 	}	
 };
 
-/*
-
-class NPC {
-public:
-
-	static inline NPC* s_Instance = nullptr;
-
-	engine::World& m_World;
-	engine::StaticMesh& m_Mesh;
-	engine::Engine::Reference<engine::Creature> m_Creature;
-
-	NPC(engine::World& world, engine::StaticMesh& mesh)
-		: m_World(world), m_Creature(world.AddCreature(engine::Vec3(0.0f, 0.0f, 0.0f))), m_Mesh(mesh) {
-		using namespace engine;
-		s_Instance = this;
-		World::RenderData& renderData = *m_World.AddRenderData(*m_Creature, engine::Mat4(1), m_Mesh.GetMeshData());
-		renderData.m_MeshData = m_Mesh.GetMeshData();
-		renderData.m_Transform = Mat4(1);
-	}
-};
-
-*/
-
 class UIElement : public engine::UI::Entity {
 public:
 
@@ -134,14 +111,11 @@ public:
 class InputText : public engine::UI::Entity {
 public:
 
-	using StaticText = engine::UI::StaticText;
 	using DynamicText = engine::UI::DynamicText;
 	using Character = engine::TextRenderer::Character;
 
 	engine::UI& m_UI;
 	char m_Buffer[64] {};
-	const engine::GlyphAtlas& m_GlyphAtlas;
-	StaticText* m_Texts;
 	size_t m_CharacterCount = 0;
 	engine::FontAtlas& m_FontAtlas;
 	DynamicText m_DynText;
@@ -155,8 +129,7 @@ public:
 	float sinNum = 0.0f;
 
 	InputText(engine::UI& UI, const engine::GlyphAtlas& atlas, engine::FontAtlas& fontAtlas)
-		: m_UI(UI), m_Texts((StaticText*)(malloc(64 * sizeof(StaticText)))), 
-			m_GlyphAtlas(atlas), m_FontAtlas(fontAtlas), m_DynText(m_UI, m_FontAtlas) {
+		: m_UI(UI), m_FontAtlas(fontAtlas), m_DynText(m_UI, m_FontAtlas) {
 		m_DynText.Initialize(VK_NULL_HANDLE);
 		m_DynText
 			.PutChar('H')
@@ -166,82 +139,27 @@ public:
 			.PutChar('o');
 	}
 
-	void PutChar(unsigned char c) {
-		using namespace engine;
-		m_DynText.PutChar(c);
-	}
-
-	bool PopChar() {
-		using namespace engine;
-		if (m_CharacterCount == 0) {
-			return false;
-		}
-		m_Texts[m_CharacterCount - 1].~StaticText();
-		m_Buffer[m_CharacterCount] = '\0';
-		--m_CharacterCount;
-	}
-
 	void UILoop(engine::UI& UI) {
 		using namespace engine;
 		sinNum = fmod(sinNum + 10.0f * Time::DeltaTime(), 2 * pi);
 		for (DynamicText::Character& character : m_DynText) {
 			character.m_Offset = IntVec2(0, 10 * (sin((float)character.GetLocalPositionX() / 10 + sinNum - pi / 2) + 1));
 		}
+		/*
 		for (unsigned int c : Input::GetTextInput()) {
 			if (c >= 128) {
 				continue;
 			}
 			else {
-				PutChar(c);
+				m_DynText.PutChar(c);
 			}
 		}
+		*/
 		m_DynText.m_Position = UI.GetCursorPosition();
 		UI.AddRenderData(m_DynText);
-		return;
-		IntVec2 pos = UI.GetCursorPosition() - IntVec2(50, 50);
-		int startPosX = pos.x;
-		for (size_t i = 0; i < m_CharacterCount; i++) {
-			StaticText& text = m_Texts[i];
-			const Character& character = m_GlyphAtlas.m_Characters[m_Buffer[i]];
-			if (character.m_Size.x == 0) {
-				pos.x += character.m_Escapement.x;
-				continue;
-			}
-			pos.x += character.m_Size.x / 2;
-			IntVec2 offset(0.0f, 10 * (sin((float)(pos.x - startPosX) / 10 + sinNum - pi / 2) + 1));
-			/*
-			if (m_CurrentOffsetIndex == i) {
-				offset = m_CurrentOffset;
-			}
-			*/
-			text.m_Position = pos + IntVec2(0, character.m_Size.y / 2) + IntVec2(character.m_Bearing.x, -character.m_Bearing.y) - offset;
-			if (!text.IsNull()) {
-				UI.AddRenderData(text);
-			}
-			pos.x += character.m_Escapement.x / 2;
-		}
-		m_Timer += Time::DeltaTime();
-		/*
-		if (m_Timer < 0.5f) {
-			m_CurrentOffset.y += 10.0f * Time::DeltaTime();
-		}
-		else if (m_Timer < 1.0f) {
-			m_CurrentOffset.y -= 10.0f * Time::DeltaTime();
-		}
-		else if (m_CharacterCount) {
-			m_Timer = 0;
-			m_CurrentOffsetIndex = (m_CurrentOffsetIndex + 1) % m_CharacterCount;
-		}
-		m_CurrentOffset.y = Clamp(m_CurrentOffset.y, 0.0f, 5.0f);
-		*/
 	}
 
 	void Terminate() {
-		auto end = m_Texts + m_CharacterCount;
-		for (auto iter = m_Texts; iter != end; iter++) {
-			iter->Terminate();
-		}
-		free(m_Texts);
 		m_DynText.Terminate();
 	}
 };
@@ -251,7 +169,7 @@ int main() {
 
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
 
 	engine::Engine engine(engine::EngineMode_Play, "Test", pWindow, 1000);
@@ -260,48 +178,14 @@ int main() {
 
 	GlyphAtlas atlas{};
 	textRenderer.CreateGlyphAtlas("resources\\fonts\\arial_mt.ttf", 40, atlas);
-	const char* text = "Hello, how\nis it going? AVAVAVA";
-	TextRenderer::RenderTextInfo renderInfo {
-		.m_GlyphAtlas = atlas,
-		.m_Spacing = { 2, 2 },
-		.m_TextColor = PackColorRBGA({ 1.0f, 1.0f, 1.0f, 0.8f }),
-		.m_BackGroundColor = PackColorRBGA({ 0.0f, 0.0f, 0.0f, 0.0f }),
-	};
 
 	FontAtlas fontAtlas(engine);
-
 	assert(fontAtlas.LoadFont("resources\\fonts\\arial_mt.ttf", 40));
 
-	TextImage textImage 
-			= textRenderer.RenderText<TextAlignment::Middle>(text, renderInfo, { 540, 540 });
-	StaticTexture texture(engine);
-
-	texture.Create(VK_FORMAT_R8G8B8A8_SRGB, textImage.m_Extent, textImage.m_Image);
-
-	VkImageView textureImageView = texture.CreateImageView();
 	UI& UI = engine.GetUI();
-	static VkDescriptorSet testUIDescriptorSet;
-	VkDescriptorPool testUIDescriptorPool;
-	UI.CreateTexture2DArray<1>(&textureImageView, testUIDescriptorSet, testUIDescriptorPool);
-	/*
-	UI::Window* uiWindow = UI.AddWindow("Moi", UI::WindowState::Focused, { 0, 0 }, { 540, 540 });
-	uiWindow->m_Pipeline2DRenderCallback = [](const UI::Window& window, VkDescriptorSet& outDescriptorSet, uint32_t& outTextureIndex) -> bool {
-		outDescriptorSet = testUIDescriptorSet;
-		outTextureIndex = 0;
-		return true;
-	};
-	*/
 
 	UIElement element(UI, atlas);
 	InputText inputText(UI, atlas, fontAtlas);
-	/*
-	inputText.PutChar('H');
-	inputText.PutChar('e');
-	inputText.PutChar('l');
-	inputText.PutChar('l');
-	inputText.PutChar('o');
-	inputText.PutChar('!');
-	*/
 
 	UI.AddEntity(&element);
 	UI.AddEntity(&inputText);
@@ -390,12 +274,8 @@ int main() {
 	world.DestroyTextureMap(textureMap);
 	brickWallTexture.Terminate();
 	player.m_Mesh.Terminate();
-	renderer.DestroyDescriptorPool(testUIDescriptorPool);
 	glfwTerminate();
 	fontAtlas.Terminate();
 	textRenderer.DestroyGlyphAtlas(atlas);
-	textRenderer.DestroyTextImage(textImage);
-	texture.Terminate();
-	renderer.DestroyImageView(textureImageView);
 	return 0;
 }
