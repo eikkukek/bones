@@ -2271,6 +2271,23 @@ namespace engine {
 			VkExtent2D m_SwapchainExtent;
 		};
 
+		void SetViewportToSwapchainExtent(const DrawData& drawData) {
+			const VkRect2D scissor {
+				.offset { 0, 0 },
+				.extent { drawData.m_SwapchainExtent },
+			};
+			vkCmdSetScissor(drawData.m_CommandBuffer, 0, 1, &scissor);
+			const VkViewport viewport {
+				.x = 0,
+				.y = 0,
+				.width = (float)drawData.m_SwapchainExtent.width,
+				.height = (float)drawData.m_SwapchainExtent.height,
+				.minDepth = 0.0f,
+				.maxDepth = 1.0f,
+			};
+			vkCmdSetViewport(drawData.m_CommandBuffer, 0, 1, &viewport);
+		}	
+
 		bool BeginFrame(DrawData& outDrawData) {
 
 			static constexpr uint64_t frame_timeout = 2000000000;
@@ -2495,6 +2512,21 @@ namespace engine {
 			return true;
 		}
 
+		struct MeshData {
+			uint32_t m_VertexBufferCount;
+			uint32_t m_IndexCount;
+			const VkBuffer* m_VertexBuffers;
+			const VkDeviceSize* m_VertexBufferOffsets;
+			VkBuffer m_IndexBuffer;
+		};
+
+		static void DrawIndexed(VkCommandBuffer commandBuffer, const MeshData& meshData) {
+			vkCmdBindVertexBuffers(commandBuffer, 0, meshData.m_VertexBufferCount, 
+				meshData.m_VertexBuffers, meshData.m_VertexBufferOffsets);
+			vkCmdBindIndexBuffer(commandBuffer, meshData.m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+			vkCmdDrawIndexed(commandBuffer, meshData.m_IndexCount, 1, 0, 0, 0);
+		}
+
 		void EndFrame(uint32_t renderWaitComputeCommandBufferCount, CommandBuffer<Queue::Compute>* renderWaitComputeCommandBuffers) {
 
 			vkEndCommandBuffer(m_RenderCommandBuffers[m_CurrentFrame]);
@@ -2644,6 +2676,6 @@ namespace engine {
 			else {
 				VkCheck(vkRes, "failed to present image (function vkQueuePresentKHR in function EndFrame)!");
 			}
-		}	
+		}
 	};
 }
