@@ -16,12 +16,12 @@
 
 namespace engine {
 
+	class Engine;
+	class UI;
+
 	typedef uint64_t UID;
 	typedef std::lock_guard<std::mutex> LockGuard;
 	typedef Renderer::MeshData MeshData;
-
-	class Engine;
-	class UI;
 
 	template<typename T, typename U>
 	struct IsSame {
@@ -1788,7 +1788,8 @@ namespace engine {
 
 				for (size_t i = 0; i < 4; i++) {
 					Vec2 thisRelX, thisRelY;
-					const Vec2 signedDistances(get_signed_distance(aPos2D, aLines[0], bCorners[i], thisRelX), get_signed_distance(aPos2D, aLines[1], bCorners[i], thisRelY));
+					const Vec2 signedDistances(get_signed_distance(aPos2D, aLines[0], bCorners[i], thisRelX), 
+						get_signed_distance(aPos2D, aLines[1], bCorners[i], thisRelY));
 					minSignedDistances.x = Min(signedDistances.x, minSignedDistances.x);
 					minSignedDistances.y = Min(signedDistances.y, minSignedDistances.y);
 					maxSignedDistances.x = Max(signedDistances.x, maxSignedDistances.x);
@@ -1816,7 +1817,8 @@ namespace engine {
 
 				for (size_t i = 0; i < 4; i++) {
 					Vec2 thisRelX, thisRelY;
-					const Vec2 signedDistances(get_signed_distance(bPos2D, bLines[0], aCorners[i], thisRelX), get_signed_distance(bPos2D, bLines[1], aCorners[i], thisRelY));
+					const Vec2 signedDistances(get_signed_distance(bPos2D, bLines[0], aCorners[i], thisRelX), 
+						get_signed_distance(bPos2D, bLines[1], aCorners[i], thisRelY));
 					minSignedDistances.x = Min(signedDistances.x, minSignedDistances.x);
 					minSignedDistances.y = Min(signedDistances.y, minSignedDistances.y);
 					maxSignedDistances.x = Max(signedDistances.x, maxSignedDistances.x);
@@ -1885,6 +1887,92 @@ namespace engine {
 				}
 			}
 			return false;
+		}
+	};
+
+	struct Ray {
+		Vec3 m_Origin;
+		Vec3 m_Direction;
+		float m_Length;
+	};
+
+	struct RayHitInfo {
+		Vec3 m_HitPosition;
+		float m_Distance;
+	};
+
+	class LogicMesh {
+	public:
+
+		typedef Vec3 Face[3];
+
+	private:
+
+		DynamicArray<Face> m_Faces;
+		DynamicArray<Vec3> m_Vertices;
+
+	public:
+
+		LogicMesh() : m_Faces(), m_Vertices() {}
+
+		bool Load(const DynamicArray<Vertex>& vertices, const DynamicArray<uint32_t> indices) {
+			if (indices.Size() % 3) {
+				PrintError(ErrorOrigin::Engine, 
+					"indices size must be multiple of 3 when loading mesh (in function LogicMesh::Load)!");
+				return false;
+			}
+			m_Faces.Clear();
+			m_Vertices.Clear();
+			for (uint32_t index : indices) {
+				if (index >= vertices.Size()) {
+					PrintError(ErrorOrigin::Engine, 
+						"found invalid index when loading mesh (in function LogicMesh::Load)!");
+					return false;
+				}
+				m_Vertices.PushBack(vertices[index].m_Position);
+			}
+			uint32_t vertexCount = m_Vertices.Size();
+			assert(vertexCount % 3);
+			m_Faces.Reserve(vertexCount / 3);
+			for (uint32_t i = 0; i < vertexCount; i += 3) {
+				Face& face = m_Faces.EmplaceBack();
+				face.m_Vertices[0] = m_Vertices[i];
+				face.m_Vertices[1] = m_Vertices[i + 1];
+				face.m_Vertices[2] = m_Vertices[i + 2];
+				face.CalcNormal();
+			}
+			return true;
+		}
+
+		bool IsRayHit(const Ray& ray, const Face& face, Vec3& outHitPosition, float& outDistance) {
+			Vec3 edge1 = m_Vertices[1] - m_Vertices[0];
+			Vec3 edge2 = m_Vertices[2] - m_Vertices[0];
+			Vec3 normal = Cross(edge1, edge2).Normalized();
+		}
+
+		bool CastRay(const Ray& ray, const Mat4& transform, const Mat4& normalMatrix, RayHitInfo& outInfo) {
+			outInfo = {
+				{},
+				float_max,
+			};
+			for (const Face& face : m_Faces) {
+				Face transformedFace;
+				for (uint32_t i = 0; i < 3; i++) {
+					transformedFace.m_Vertices[i] = transform * Vec4(face.m_Vertices[i], 1.0f);
+				}
+				transformedFace.m_Normal = normalMatrix * Vec4(face.m_Normal, 1.0f);
+				Vec3 hitPosition;
+				float distance = float_max;
+				if (IsRayHit(ray, transformedFace, hitPosition, distance)) {
+					if (distance < outInfo.m_Distance) {
+						outInfo = {
+							hitPosition,
+							distance,
+						};
+					}
+				}
+			}
+			return outInfo.m_Distance <= ray.m_Length;
 		}
 	};
 
