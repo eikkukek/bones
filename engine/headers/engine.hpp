@@ -6,8 +6,6 @@
 #include "fmt/printf.h"
 #include "fmt/color.h"
 #include "vulkan/vulkan_core.h"
-#define STB_IMAGE_IMPLEMENTATION
-#include "third_party/stb_image.h"
 #include "imgui.h"
 #include <assert.h>
 #include <cstdio>
@@ -94,9 +92,13 @@ namespace engine {
 		typedef T* Iterator;
 		typedef const T* ConstIterator;
 
+	private:
+
 		T* m_Data;
 		size_t m_Size;
 		size_t m_Capacity;
+
+	public:
 
 		DynamicArray() : m_Data(nullptr), m_Size(0), m_Capacity(0) {}
 
@@ -127,6 +129,14 @@ namespace engine {
 
 		size_t Size() const noexcept {
 			return m_Size;
+		}
+
+		T* Data() noexcept {
+			return m_Data;
+		}
+ 
+		const T* Data() const noexcept {
+			return m_Data;
 		}
 
 		DynamicArray& Reserve(size_t capacity) {
@@ -231,6 +241,80 @@ namespace engine {
 		}
 	};
 
+	template<typename T>
+	class DynamicMatrix {
+
+	private:
+
+		Vec2_T<uint32_t> m_Extent;
+		T* m_Data;
+
+	public:
+
+		DynamicMatrix() noexcept : m_Extent(), m_Data(nullptr) {}	
+
+		DynamicMatrix(Vec2_T<uint32_t> extent) noexcept
+			: m_Extent(extent), m_Data(nullptr) {
+			if (m_Extent.x == 0 || m_Extent.y == 0) {
+				PrintError(ErrorOrigin::Engine, 
+					"attempting to initialize dynamic matrix with extent that's zero (in DynamicMatrix constructor)!");
+				m_Extent = 0;
+				return;
+			}
+			m_Data = new T[m_Extent.x * m_Extent.y]{};
+			if (!m_Data) {
+				PrintError(ErrorOrigin::Engine, 
+					"failed to allocate memory for dynamic matrix (operator new in DynamicMatrix constructor)!");
+				m_Extent = 0;
+			}
+		}
+
+		~DynamicMatrix() {
+			Clear();
+		}
+
+		void Clear() {
+			delete[] m_Data;
+			m_Data = nullptr;
+			m_Extent = 0;
+		}
+
+		uint32_t Size() const {
+			return m_Extent.x * m_Extent.y;
+		}
+
+		Vec2_T<uint32_t> Extent() const {
+			return m_Extent;
+		}
+		
+		uint32_t Rows() const {
+			return m_Extent.x;
+		}
+
+		uint32_t Columns() const {
+			return m_Extent.y;
+		}
+
+		T* operator[](uint32_t row) {
+			if (row >= m_Extent.x) {
+				CriticalError(ErrorOrigin::IndexOutOfBounds, 
+					"attempting to access row that's outside the bounds of dynamic matrix!");
+			}
+			uint32_t index = row * m_Extent.x;
+			assert(index < Size());
+			return m_Data + index;
+		}
+
+		const T* operator[](uint32_t row) const {
+			if (row >= m_Extent.x) {
+				CriticalError(ErrorOrigin::IndexOutOfBounds, 
+					"attempting to access row that's outside the bounds of dynamic matrix!");
+			}
+			uint32_t index = row * m_Extent.x;
+			assert(index < Size());
+			return m_Data + index;
+		}
+	};
 
 	template<typename T, typename Hash = T, typename Compare = T, size_t BucketCapacity = 4>
 	class Set {
@@ -474,7 +558,7 @@ namespace engine {
 			if ((float)m_BucketIndices.Size() / m_Capacity >= 0.8) {
 				Reserve(m_Capacity * 2);
 			}
-			T value(std::forward(args)...);www.linkedin.com/in/einari-mäkiranta-a13445203
+			T value(std::forward(args)...);
 			uint64_t hash;
 			if constexpr (IsSame<T, Hash>::value) {
 				hash = value();
@@ -626,6 +710,14 @@ namespace engine {
 			Clear();
 		}
 
+		uint32_t Length() const {
+			return m_Length;
+		}
+
+		const char* CString() const {
+			return m_Data;
+		}
+
 		String& Reserve(uint32_t capacity) {
 			if (capacity < m_Capacity) {
 				return *this;
@@ -666,10 +758,6 @@ namespace engine {
 			return *this;
 		}
 
-		const char* CString() {
-			return m_Data;
-		}
-
 		String& operator=(const char* other) {
 			Clear();
 			uint32_t len = strlen(other);
@@ -685,6 +773,27 @@ namespace engine {
 			m_Length = len;
 			m_Data[m_Length] = '\0';
 			return *this;
+		}
+
+		char& operator[](uint32_t index) {
+			if (index >= m_Length) {
+				CriticalError(ErrorOrigin::IndexOutOfBounds, 
+					"string index was out of bounds (in String::operator[])!");
+			}
+			return m_Data[index];
+		}
+
+		char operator[](uint32_t index) const {
+			if (index >= m_Length) {
+				PrintError(ErrorOrigin::IndexOutOfBounds, 
+					"string index was out of bounds (in String::operator[])!");
+				return 0;
+			}
+			return m_Data[index];
+		}
+
+		String& operator +=(char c) {
+			return Push(c);
 		}
 
 		uint64_t operator()() {
@@ -731,6 +840,12 @@ namespace engine {
 		};
 	};
 
+	template<typename T, typename U>
+	struct Tuple {
+		T first;
+		U second;
+	};
+
 	template<typename T>
 	class Dictionary {
 	public:
@@ -741,6 +856,97 @@ namespace engine {
 		typedef T ValueType;
 		typedef KeyType KeyBucket[max_bucket_size];
 		typedef ValueType ValueBucket[max_bucket_size];
+
+	private:
+
+		class IteratorBase {
+
+			friend class Dictionary<T>;
+
+		private:
+
+			const Dictionary& m_Dictionary;
+			uint32_t m_Index;
+			uint32_t m_BucketIndex;
+
+		public:
+
+			IteratorBase(const Dictionary& dictionary, uint32_t index, uint32_t bucketIndex)
+				: m_Dictionary(dictionary), m_Index(index), m_BucketIndex(bucketIndex) {
+				if (!m_Dictionary.m_BucketSizes[m_Index]) {
+					++*this;
+				}
+			}
+
+			IteratorBase& operator++() {
+				if (m_Index < m_Dictionary.m_Capacity) {
+					++m_BucketIndex;
+					if (m_BucketIndex < m_Dictionary.m_BucketSizes[m_Index]) {
+						return *this;
+					}
+					m_BucketIndex = 0;
+					++m_Index;
+					while (m_Index < m_Dictionary.m_Capacity && !m_Dictionary.m_BucketSizes[m_Index]) {
+						++m_Index;
+					}
+				}
+				return *this;
+			}
+
+			bool operator==(const IteratorBase& other) const {
+				return m_Index == other.m_Index && m_BucketIndex == other.m_BucketIndex;
+			}
+		};
+
+	public:
+
+		class Iterator : public Dictionary<T>::IteratorBase {
+
+			friend class Dictionary<T>;
+
+		private:
+
+			Iterator(const Dictionary& dictionary, uint32_t index, uint32_t bucketIndex) 
+				: IteratorBase(dictionary, index, bucketIndex) {
+				if (!IteratorBase::m_Dictionary.m_BucketSizes[IteratorBase::m_Index]) {
+					++*this;
+				}
+			}
+
+		public:
+
+			Tuple<const KeyType&, T&> operator*() {
+				assert(IteratorBase::m_Index < IteratorBase::m_Dictionary.m_Capacity);
+				return { 
+					IteratorBase::m_Dictionary.m_KeyBuckets[IteratorBase::m_Index][IteratorBase::m_BucketIndex],
+					IteratorBase::m_Dictionary.m_ValueBuckets[IteratorBase::m_Index][IteratorBase::m_BucketIndex],
+				};
+			}
+		};
+
+		class ConstIterator : public IteratorBase {
+
+			friend class Dictionary<T>;
+
+		private:
+
+			ConstIterator(const Dictionary& dictionary, uint32_t index, uint32_t bucketIndex)
+				: IteratorBase(dictionary, index, bucketIndex) {
+				if (!IteratorBase::m_Dictionary.m_BucketSizes[IteratorBase::m_Index]) {
+					++*this;
+				}
+			}
+
+		public:
+
+			Tuple<const KeyType&, const T&> operator*() const {
+				assert(IteratorBase::m_Index < IteratorBase::m_Dictionary.m_Capacity);
+				return {
+					IteratorBase::m_Dictionary.m_KeyBuckets[IteratorBase::m_Index][IteratorBase::m_BucketIndex],
+					IteratorBase::m_Dictionary.m_ValueBuckets[IteratorBase::m_Index][IteratorBase::m_BucketIndex],
+				};
+			}
+		};
 
 	private:
 
@@ -889,7 +1095,45 @@ namespace engine {
 			keyBucket[bucketSize] = key;
 			return &(valueBucket[bucketSize++] = value);
 		}
+
+		Iterator begin() {
+			return Iterator(*this, 0, 0);
+		}
+
+		ConstIterator begin() const {
+			return Iterator(*this, 0, 0);
+		};
+
+		ConstIterator end() const {
+			return ConstIterator(*this, m_Capacity, 0);
+		}
 	};
+
+	enum class MeshFileType {
+		Unrecognized = 0,
+		Obj = 1,
+	};
+
+	inline MeshFileType GetMeshFileType(const String& string) {
+		uint32_t length = string.Length();
+		uint32_t i = length - 1;
+		for (; i > 0; i--) {
+			if (string[i] == '.') {
+				break;
+			}
+		}
+		if (string[i] != '.') {
+			return MeshFileType::Unrecognized;
+		}
+		String extension{};
+		for (uint32_t j = i + 1; j < length; j++) {
+			extension += string[i];
+		}
+		if (extension == "obj") {
+			return MeshFileType::Obj;
+		}
+		return MeshFileType::Unrecognized;
+	}
 
 	class FileHandler {
 	public:
@@ -1090,17 +1334,13 @@ namespace engine {
 				}
 				for (char c = fgetc(fileStream); c != '\n' && c != EOF; c = fgetc(fileStream)) {}
 			}
-			if (!((!m_VtIndices.m_Size || m_VIndices.m_Size == m_VtIndices.m_Size) &&
-				(!m_VnIndices.m_Size || m_VIndices.m_Size == m_VnIndices.m_Size) && !(m_VtIndices.m_Size % 3) &&
-				maxVIndex < m_Vs.m_Size && (!m_VtIndices.m_Size || maxVtIndex < m_Vts.m_Size) && (!m_VnIndices.m_Size || maxVnIndex < m_Vns.m_Size))) {
+			if (!((!m_VtIndices.Size() || m_VIndices.Size() == m_VtIndices.Size()) &&
+				(!m_VnIndices.Size() || m_VIndices.Size() == m_VnIndices.Size()) && !(m_VtIndices.Size() % 3) &&
+				maxVIndex < m_Vs.Size()&& (!m_VtIndices.Size()|| maxVtIndex < m_Vts.Size()) && (!m_VnIndices.Size()|| maxVnIndex < m_Vns.Size()))) {
 				m_LinesParsed = 0;
 				return false;
 			}
 			return true;
-		}
-
-		const DynamicArray<uint32_t>& GetIndices() const {
-			return m_VIndices;
 		}
 
 		template<typename VertexType>
@@ -1111,29 +1351,29 @@ namespace engine {
 					"attempting to get vertices from Engine::Obj which failed to parse (in function Obj::GetVertices)!");
 				return false;
 			}
-			if (!setPos || !setUV || !setNormal && m_VnIndices.m_Size) {
+			if (!setPos || !setUV || !setNormal && m_VnIndices.Size()) {
 				PrintError(ErrorOrigin::FileParsing, 
 					"attempting to get vertices from an obj when a set function is null!");
 				return false;
 			}
-			outVertices.Reserve(m_Vs.m_Size);
-			outIndices.Reserve(m_VIndices.m_Size);
-			for (uint32_t i = 0; i < m_VIndices.m_Size; i++) {
+			outVertices.Reserve(m_Vs.Size());
+			outIndices.Reserve(m_VIndices.Size());
+			for (uint32_t i = 0; i < m_VIndices.Size(); i++) {
 				VertexType newVertex{};
 				setPos(newVertex, m_Vs[m_VIndices[i]]);
-				if (m_VtIndices.m_Size) {
+				if (m_VtIndices.Size()) {
 					setUV(newVertex, m_Vts[m_VtIndices[i]]);
 				}
-				if (m_VnIndices.m_Size) {
+				if (m_VnIndices.Size()) {
 					setNormal(newVertex, m_Vns[m_VnIndices[i]]);
 				}
 				size_t j = 0;
-				for (; j < outVertices.m_Size; j++) {
+				for (; j < outVertices.Size(); j++) {
 					if (outVertices[j] == newVertex) {
 						break;
 					}
 				}
-				if (j == outVertices.m_Size) {
+				if (j == outVertices.Size()) {
 					outVertices.PushBack(newVertex);
 				}
 				outIndices.PushBack(j);
@@ -1143,19 +1383,9 @@ namespace engine {
 	};
 
 
-	inline bool LoadImage(const char* fileName, uint32_t components, uint8_t*& outImage, Vec2_T<uint32_t>& outExtent) {
-		int x, y, texChannels;
-		outImage = stbi_load(fileName, &x, &y, &texChannels, components);
-		if (!outImage) {
-			PrintError(ErrorOrigin::Stb, 
-				"failed to load image (function stbi_load in function LoadImage)!");
-			return false;
-		}
-		outExtent = { (uint32_t)x, (uint32_t)y };
-		return true;
-	}
+	bool LoadImage(const char* fileName, uint32_t components, uint8_t*& outImage, Vec2_T<uint32_t>& outExtent);
 
-	inline void DestroyImage(uint8_t* image) {
+	inline void FreeImage(uint8_t* image) {
 		free(image);
 	}
 
@@ -1233,12 +1463,10 @@ namespace engine {
 			void Create(const CreateInfo& info) {
 				m_HalfDimensions = info.m_Dimensions / 2;
 				m_YRotation = info.m_YRotation;
-				m_RotationMatrix = Quaternion::AxisRotation(Vec3::Forward(), m_YRotation).AsMat4();
 			}
 
 			Vec3 m_HalfDimensions{};
 			float m_YRotation{};
-			Mat3 m_RotationMatrix{};
 		};
 
 		struct Pole {
@@ -1295,7 +1523,7 @@ namespace engine {
 
 			static bool FromFile(FILE* fileStream, CreateInfo& outInfo) {
 				int res = fscanf(fileStream, "{%f%f%f\n",
-					&outInfo.m_LocalPosition.x, outInfo.m_LocalPosition.y, outInfo.m_LocalPosition.z);
+					&outInfo.m_LocalPosition.x, &outInfo.m_LocalPosition.y, &outInfo.m_LocalPosition.z);
 				if (res != 3) {
 					return false;
 				}
@@ -1410,7 +1638,8 @@ namespace engine {
 						bFence.m_HalfDimensions.y,
 					},
 				};
-				Vec3 aPosRelRotated = (Vec3)aPosRel * bFence.m_RotationMatrix;
+				Mat3 rotationMatrix = Quaternion::AxisRotation(Vec3::Forward(), bFence.m_YRotation + b.m_BodyYRotation).AsMat3();
+				Vec3 aPosRelRotated = (Vec3)aPosRel * rotationMatrix;
 				if (boundingRect.IsPointInside(aPosRel)) {
 					float val = aPosRelRotated.y - boundingRect.m_Min.y;
 					float min = val;
@@ -1429,7 +1658,7 @@ namespace engine {
 						min = val;
 						xClosest = true;
 					}
-					Mat3 invRot = Quaternion::AxisRotation(Vec3(0.0f, 0.0f, 1.0f), -bFence.m_YRotation).AsMat4();
+					Mat3 invRot = Quaternion::AxisRotation(Vec3(0.0f, 0.0f, 1.0f), - (bFence.m_YRotation + b.m_BodyYRotation)).AsMat3();
 					if (xClosest) {
 						int sign = min < 0.0f ? -1 : 1;
 						Vec2 pushBack2D = Vec3(sign * (abs(min) + aPole.m_Radius), 0.0f, 0.0f) * invRot;
@@ -1450,7 +1679,7 @@ namespace engine {
 					float diffSqrMag = diff.SqrMagnitude();
 					if (diffSqrMag < aPole.m_Radius * aPole.m_Radius) {
 						float diffMag = sqrt(diffSqrMag);
-						Mat3 invRot = Inverse(bFence.m_RotationMatrix);
+						Mat3 invRot = Quaternion::AxisRotation(Vec3::Forward(), - (bFence.m_YRotation + b.m_BodyYRotation)).AsMat3();
 						diff = Vec3(diff) * invRot;
 						outAPushBack = Vec3(diff.x / diffMag, 0.0f, diff.y / diffMag) * (aPole.m_Radius - diffMag);
 						return true;
@@ -1487,9 +1716,11 @@ namespace engine {
 					Vec2 m_Direction;
 				};
 
+				Mat3 rotationMatrix = Quaternion::AxisRotation(Vec3::Forward(), bFence.m_YRotation + b.m_BodyYRotation).AsMat3();
+
 				const Line aLines[2] { 
-					{ aPos2D , (Vec3::Right() * aFence.m_RotationMatrix).Normalized() }, 
-					{ aPos2D, (Vec3::Up() * aFence.m_RotationMatrix).Normalized() },
+					{ aPos2D , (Vec3::Right() * rotationMatrix).Normalized() }, 
+					{ aPos2D, (Vec3::Up() * rotationMatrix).Normalized() },
 				};
 
 				const Vec2 aSides[4] {
@@ -1507,8 +1738,8 @@ namespace engine {
 				};
 
 				const Line bLines[2] { 
-					{ bPos2D, (Vec3::Right() * bFence.m_RotationMatrix).Normalized() },
-					{ bPos2D, (Vec3::Up() * bFence.m_RotationMatrix).Normalized() },
+					{ bPos2D, (Vec3::Right() * rotationMatrix).Normalized() },
+					{ bPos2D, (Vec3::Up() * rotationMatrix).Normalized() },
 				};
 
 				const Vec2 bSides[4] {
@@ -1658,11 +1889,14 @@ namespace engine {
 	};
 
 	class StaticMesh {
-	public:
+
+	private:
 
 		uint32_t m_IndexCount;
 		Renderer::Buffer m_VertexBuffer;
 		Renderer::Buffer m_IndexBuffer;
+
+	public:
 
 		StaticMesh(Renderer& renderer) noexcept : m_VertexBuffer(renderer), 
 			m_IndexBuffer(renderer), m_IndexCount(0) {}
@@ -2411,6 +2645,14 @@ namespace engine {
 		}
 		
 		T& operator*() {
+			if (!m_Val) {
+				CriticalError(ErrorOrigin::NullDereference,
+					"attempting to deference null reference (in PersistentReference::operator*)");
+			}
+			return *m_Val;
+		}
+
+		const T& operator*() const {
 			if (!m_Val) {
 				CriticalError(ErrorOrigin::NullDereference,
 					"attempting to deference null reference (in PersistentReference::operator*)");
@@ -3406,7 +3648,7 @@ outColor = texture(image, inUV);
 		static inline DynamicArray<UI*> s_UIs{};
 
 		static UI* FindUI(const GLFWwindow* pGlfwWindow) {
-			size_t count = s_GLFWwindows.m_Size;
+			size_t count = s_GLFWwindows.Size();
 			for (size_t i = 0; i < count; i++) {
 				if (s_GLFWwindows[i] == pGlfwWindow) {
 					return s_UIs[i];
@@ -3490,7 +3732,7 @@ outColor = texture(image, inUV);
 
 		void Terminate() {
 			m_Renderer.DestroyDescriptorPool(m_RenderColorImagesDescriptorPool);
-			for (uint32_t i = 0; i < m_RenderColorImages.m_Size; i++) {
+			for (uint32_t i = 0; i < m_RenderColorImages.Size(); i++) {
 				m_Renderer.DestroyImageView(m_RenderColorImageViews[i]);
 				m_Renderer.DestroyImage(m_RenderColorImages[i]);
 				m_Renderer.FreeVulkanDeviceMemory(m_RenderColorImagesMemory[i]);
@@ -3565,7 +3807,7 @@ outColor = texture(image, inUV);
 			IntVec2 textPos = text.m_Position;
 			for (const DynamicText::TRCharacter* trCharacter : text.m_TextRendererCharacters) {
 				if (trCharacter->m_Size != 0) {
-					assert(nextRenderedCharIndex < text.m_RenderedCharacters.m_Size);
+					assert(nextRenderedCharIndex < text.m_RenderedCharacters.Size());
 					const DynamicText::Character& character = text.m_RenderedCharacters[nextRenderedCharIndex++];
 					IntVec2 charPos = textPos - IntVec2(0, trCharacter->m_Bearing.y) + character.m_Offset;
 					Rect rect {
@@ -3852,7 +4094,7 @@ outColor = texture(image, inUV);
 					"failed to create sampler for UI (function Renderer::CreateSampler in function UI::SwapchainCreateCallback)!");
 				}
 			}
-			for (uint32_t i = 0; i < m_RenderColorImages.m_Size; i++) {
+			for (uint32_t i = 0; i < m_RenderColorImages.Size(); i++) {
 				m_Renderer.DestroyImageView(m_RenderColorImageViews[i]);
 				m_Renderer.DestroyImage(m_RenderColorImages[i]);
 				m_Renderer.FreeVulkanDeviceMemory(m_RenderColorImagesMemory[i]);
@@ -3868,7 +4110,7 @@ outColor = texture(image, inUV);
 				poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 				poolSize.descriptorCount = 1;
 			}
-			m_RenderColorImagesDescriptorPool = m_Renderer.CreateDescriptorPool(0, imageCount, imageCount, poolSizes.m_Data);
+			m_RenderColorImagesDescriptorPool = m_Renderer.CreateDescriptorPool(0, imageCount, imageCount, poolSizes.Data());
 			if (m_RenderColorImagesDescriptorPool == VK_NULL_HANDLE) {
 				CriticalError(ErrorOrigin::Renderer, 
 					"failed to create descriptor pool for UI (function Renderer::CreateDescriptorPool in function UI::SwapchainCreateCallback)!");
@@ -3879,7 +4121,7 @@ outColor = texture(image, inUV);
 				layout = m_Pipelines.m_RenderDescriptorSetLayout;
 			}
 			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_RenderColorImagesDescriptorPool, imageCount, 
-				descriptorSetLayouts.m_Data, m_RenderColorImageDescriptorSets.m_Data)) {
+				descriptorSetLayouts.Data(), m_RenderColorImageDescriptorSets.Data())) {
 				CriticalError(ErrorOrigin::Renderer, 
 					"failed to allocate descriptor sets for UI (function Renderer::AllocateDescriptorSets in function UI::SwapchainCreateCallback)!");
 			}
@@ -4492,43 +4734,53 @@ outColor = pc.c_Color;
 			}
 		};
 
-		struct Ground : PersistentReferenceHolder<Ground> {
+		class Ground : public PersistentReferenceHolder<Ground> {
+
+			friend class World;
+			friend class DynamicArray<Ground>;
+
+		public:
+			
+			struct CreateInfo {
+			};
+
+		private:
 
 			const uint64_t m_ObjectID;
 			Rect<float> m_TopViewBoundingRect;
 			Vec3 m_Scale;
 			Vec3 m_CenterPosition;
-			Vec2_T<uint32_t> m_HeightMapExtent;
+			DynamicMatrix<uint32_t> m_HeightMap;
 			uint32_t m_HeightMapMin;
 			uint32_t m_HeightMapMax;
-			uint32_t* m_HeightMap;
 
-			Ground(uint64_t objectID) : PersistentReferenceHolder<Ground>() ,
+			Ground(uint64_t objectID, const CreateInfo& createInfo) : PersistentReferenceHolder<Ground>() ,
 				m_ObjectID(objectID) {}
 			
 			Ground(const Ground &) = delete;
-			Ground(Ground&&) = delete;
+			Ground(Ground&&) = default;
 
 			float GetHeightAtPosition(const Vec3& position) const {
+				return 0.0f;
 				Vec2 pos2D(position.x, position.z);
 				if (!m_TopViewBoundingRect.IsPointInside(pos2D)) {
 					return std::numeric_limits<float>::max();
 				}
-				return 0.0f;
 				Vec3 relative = pos2D - m_TopViewBoundingRect.m_Min;
 				Vec2 dimensions = m_TopViewBoundingRect.Dimensions();
-				Vec2_T<uint32_t> heightMapCoords(relative.x / dimensions.x * m_HeightMapExtent.x,
-					relative.y / dimensions.y * m_HeightMapExtent.y);
-				size_t index = heightMapCoords.x * m_HeightMapExtent.y + heightMapCoords.y;
-				size_t heightMapSize = m_HeightMapExtent.x * m_HeightMapExtent.y;
-				assert(index < heightMapSize);
-				return (float)m_HeightMap[index] / UINT32_MAX * m_Scale.y + m_CenterPosition.y;
+				Vec2_T<uint32_t> heightMapCoords(relative.x / dimensions.x * m_HeightMap.Rows(),
+					relative.y / dimensions.y * m_HeightMap.Columns());
+				size_t heightMapSize = m_HeightMap.Size();
+				return (float)m_HeightMap[heightMapCoords.y][heightMapCoords.x] / UINT32_MAX * m_Scale.y + m_CenterPosition.y;
 			}
 		};
 
-		struct Obstacle : PersistentReferenceHolder<Obstacle> {
+		class Obstacle : public PersistentReferenceHolder<Obstacle> {
 
 			friend class World;
+			friend class DynamicArray<Obstacle>;
+
+		public:
 
 			struct CreateInfo {
 				Vec3 m_Position{};
@@ -4542,8 +4794,6 @@ outColor = pc.c_Color;
 			Vec3 m_Position;
 			float m_YRotation;
 			Collider m_Collider;
-
-		public:
 
 			Obstacle(uint64_t objectID, const CreateInfo& info) noexcept 
 				: PersistentReferenceHolder<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position),
@@ -4563,6 +4813,7 @@ outColor = pc.c_Color;
 		class Chunk {
 
 			friend class World;
+			friend class DynamicArray<Chunk>;
 
 			const Rect<float> m_BoundingRect;
 			const Vec2_T<uint32_t> m_ChunkMatrixCoords;
@@ -4597,9 +4848,10 @@ outColor = pc.c_Color;
 			}
 		};
 
-		class Creature : PersistentReferenceHolder<Creature> {
+		class Creature : public PersistentReferenceHolder<Creature> {
 
 			friend class World;
+			friend class DynamicArray<Creature>;
 
 		public:
 
@@ -4626,7 +4878,9 @@ outColor = pc.c_Color;
 
 			Creature(const Creature&) = delete;
 
-			Creature(Creature&& other) noexcept = default;
+			Creature(Creature&& other) noexcept 
+				: m_Chunk(other.m_Chunk), m_Position(other.m_Position), m_YRotation(other.m_YRotation),
+					m_ObjectID(other.m_ObjectID), m_Collider(m_Position, m_YRotation, std::move(other.m_Collider)) {}
 
 		public:
 
@@ -4650,7 +4904,9 @@ outColor = pc.c_Color;
 			void Move(const Vec3& position) {
 				assert(m_Chunk);
 				Vec3 deltaPos = position - m_Position;
-				Vec2_T<bool> axisBlocked;
+				Vec2_T<bool> axisBlocked{};
+				m_Position += deltaPos;
+				/*
 				const Ground* ground = m_Chunk->FindGround(m_Position, deltaPos, axisBlocked);
 				if (ground) {
 					m_Position.x = !axisBlocked.x ? position.x : m_Position.x;
@@ -4659,6 +4915,7 @@ outColor = pc.c_Color;
 					assert(height != std::numeric_limits<float>::max());
 					m_Position.y = height;
 				}
+				*/
 				for (const PersistentReference<Obstacle>& obstacle : m_Chunk->m_Obstacles) {
 					assert(obstacle.m_Val);
 					Vec3 pushBack;
@@ -4693,8 +4950,6 @@ outColor = pc.c_Color;
 			Mat4 m_Transform{};
 			MeshData m_MeshData{};
 
-		private:
-
 			RenderData(uint64_t objectID, const Mat4& transform, const MeshData& meshData) noexcept 
 				: PersistentReferenceHolder<RenderData>(), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
 
@@ -4710,14 +4965,6 @@ outColor = pc.c_Color;
 
 		private:
 
-			DebugRenderData(uint64_t objectID, const Mat4& transform, const Vec4& wireColor, const MeshData& meshData) noexcept 
-				: PersistentReferenceHolder<DebugRenderData>(), 
-					m_ObjectID(objectID), m_Transform(transform), m_WireColor(wireColor), m_MeshData(meshData) {}
-
-			DebugRenderData(const DebugRenderData&) = delete;
-
-			DebugRenderData(DebugRenderData&& other) noexcept = default;
-
 			const uint64_t m_ObjectID;
 
 		public:
@@ -4725,6 +4972,14 @@ outColor = pc.c_Color;
 			Mat4 m_Transform;
 			Vec4 m_WireColor;
 			MeshData m_MeshData;
+
+			DebugRenderData(uint64_t objectID, const Mat4& transform, const Vec4& wireColor, const MeshData& meshData) noexcept 
+				: PersistentReferenceHolder<DebugRenderData>(), 
+					m_ObjectID(objectID), m_Transform(transform), m_WireColor(wireColor), m_MeshData(meshData) {}
+
+			DebugRenderData(const DebugRenderData&) = delete;
+
+			DebugRenderData(DebugRenderData&& other) noexcept = default;
 		};
 
 		struct TextureMap {
@@ -4819,7 +5074,7 @@ outColor = pc.c_Color;
 
 				uint32_t framesInFlight = renderer.m_FramesInFlight;	
 
-				if (m_DepthImages.m_Size != framesInFlight) {
+				if (m_DepthImages.Size() != framesInFlight) {
 					LockGuard graphicsQueueLockGuard(renderer.m_EarlyGraphicsCommandBufferQueueMutex);
 					Renderer::CommandBuffer<Renderer::Queue::Graphics>* commandBuffer
 						= renderer.m_EarlyGraphicsCommandBufferQueue.New();
@@ -4859,7 +5114,7 @@ outColor = pc.c_Color;
 
 			void Terminate() {
 				Renderer& renderer = m_World.m_Renderer;
-				for (uint32_t i = 0; i < m_DepthImages.m_Size; i++) {
+				for (uint32_t i = 0; i < m_DepthImages.Size(); i++) {
 					renderer.DestroyImageView(m_DepthImageViews[i]);
 					renderer.DestroyImage(m_DepthImages[i]);
 					renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
@@ -5002,10 +5257,10 @@ outColor = pc.c_Color;
 					}
 				}
 
-				if (m_DepthImageViews.m_Size != imageCount) {
-					if (m_DepthImages.m_Size < imageCount) {
+				if (m_DepthImageViews.Size() != imageCount) {
+					if (m_DepthImages.Size() < imageCount) {
 
-						size_t oldImageCount = m_DepthImages.m_Size;
+						size_t oldImageCount = m_DepthImages.Size();
 
 						m_DepthImages.Resize(imageCount);
 						m_DepthImagesMemory.Resize(imageCount);
@@ -5060,7 +5315,7 @@ outColor = pc.c_Color;
 						}	
 					}
 					else {
-						for (size_t i = imageCount; i < m_DepthImages.m_Size; i++) {
+						for (size_t i = imageCount; i < m_DepthImages.Size(); i++) {
 							renderer.DestroyImageView(m_DepthImageViews[i]);
 							renderer.DestroyImage(m_DepthImages[i]);
 							renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
@@ -5080,7 +5335,7 @@ outColor = pc.c_Color;
 						renderer.DestroyDescriptorPool(m_ShadowMapDescriptorPool);
 					}
 					DynamicArray<VkDescriptorPoolSize> poolSizes(2 * imageCount);
-					for (uint32_t i = 0; i < poolSizes.m_Size;) {
+					for (uint32_t i = 0; i < poolSizes.Size();) {
 						poolSizes[i++] = {
 							.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 							.descriptorCount = 1,
@@ -5090,7 +5345,7 @@ outColor = pc.c_Color;
 							.descriptorCount = 1,
 						};
 					}
-					m_ShadowMapDescriptorPool = renderer.CreateDescriptorPool(0, imageCount, poolSizes.m_Size, poolSizes.m_Data);
+					m_ShadowMapDescriptorPool = renderer.CreateDescriptorPool(0, imageCount, poolSizes.Size(), poolSizes.Data());
 					if (m_ShadowMapDescriptorPool == VK_NULL_HANDLE) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to create descriptor pool for directional light (function Renderer::CreateDescriptorPool in function World::DirectionalLight::SwapchainCreateCallback)!");
@@ -5100,7 +5355,7 @@ outColor = pc.c_Color;
 					for (VkDescriptorSetLayout& layout : setLayouts) {
 						layout = m_World.m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout;
 					}
-					if (!renderer.AllocateDescriptorSets(nullptr, m_ShadowMapDescriptorPool, imageCount, setLayouts.m_Data, m_ShadowMapDescriptorSets.m_Data)) {
+					if (!renderer.AllocateDescriptorSets(nullptr, m_ShadowMapDescriptorPool, imageCount, setLayouts.Data(), m_ShadowMapDescriptorSets.Data())) {
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to allocate descriptor sets for directional light (function Renderer::AllocateDescriptorSets in function World::DirectionalLight::SwapchainCreateCallback)!");
 					}
@@ -5133,8 +5388,8 @@ outColor = pc.c_Color;
 
 			StaticMesh m_Mesh;
 
-			DynamicArray<PersistentReference<Ground>> m_Grounds{};
-			DynamicArray<PersistentReference<Obstacle>> m_Obstacles{};
+			DynamicArray<Tuple<PersistentReference<Ground>, Mat4>> m_Grounds{};
+			DynamicArray<Tuple<PersistentReference<Obstacle>, Mat4>> m_Obstacles{};
 
 			StaticMeshFile(Renderer& renderer) : m_Mesh(renderer) {}
 		};
@@ -5342,7 +5597,7 @@ outColor = pc.c_Color;
 		}
 
 		void DestroyImageResources() {
-			for (size_t i = 0; i < m_DepthImages.m_Size; i++) {
+			for (size_t i = 0; i < m_DepthImages.Size(); i++) {
 				m_Renderer.DestroyImageView(m_DepthImageViews[i]);
 				m_Renderer.DestroyImageView(m_DiffuseImageViews[i]);
 				m_Renderer.DestroyImageView(m_PositionAndMetallicImageViews[i]);
@@ -5359,14 +5614,14 @@ outColor = pc.c_Color;
 		}
 
 		void Load(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, 
-				uint32_t groundCount, GroundInfo groundInfos[], uint32_t obstacleCount, ObstacleInfo obstacleInfos[]) {
+				uint32_t groundCount, Ground::CreateInfo groundInfos[], uint32_t obstacleCount, Obstacle::CreateInfo obstacleInfos[]) {
 			m_Grounds.Reserve(groundCount);
 			for (uint32_t i = 0; i < groundCount; i++) {
-				m_Grounds.EmplaceBack(groundInfos[i], m_NextObjectID++);
+				m_Grounds.EmplaceBack(m_NextObjectID++, groundInfos[i]);
 			}
 			m_Obstacles.Reserve(obstacleCount);
 			for (uint32_t i = 0; i < obstacleCount; i++) {
-				m_Obstacles.EmplaceBack(obstacleInfos[i], m_NextObjectID++);
+				m_Obstacles.EmplaceBack(m_NextObjectID++, obstacleInfos[i]);
 			}
 			m_ChunkDimensions = { 
 				(float)worldDimensions.x / chunkMatrixSize.x, 
@@ -5394,19 +5649,27 @@ outColor = pc.c_Color;
 			}
 		}
 
-		int ParseStaticMeshFile(FILE* fileStream, StaticMeshFile** out) {
-			assert(out);
+		int ParseStaticMeshFile(FILE* fileStream, StaticMeshFile** outFile, Mat4& outTransform) {
+			assert(outFile);
 			char delimiters[2] { '\n', ' ' };
 			if (FileHandler::Skip(fileStream, 2, delimiters) == EOF) {
-				PrintError(ErrorOrigin::FileParsing, 
-					"missing '}' when parsing obstacle (function World::LoadObstacle)!");
 				return EOF;
 			}
 			String string{};
 			FileHandler::GetLine(fileStream, string);
-			*out = m_StaticMeshFiles.Find(string.CString());
-			if (!out) {
-				*out = m_StaticMeshFiles.Emplace(string.CString(), m_Renderer);
+			*outFile = m_StaticMeshFiles.Find(string.CString());
+			if (!outFile) {
+				*outFile = m_StaticMeshFiles.Emplace(string.CString(), m_Renderer);
+			}
+			if (fscanf(fileStream, "%f%f%f%f %f%f%f%f %f%f%f%f %f%f%f%f",
+					&outTransform[0][0], &outTransform[0][1], &outTransform[0][2], &outTransform[0][3],
+					&outTransform[1][0], &outTransform[1][1], &outTransform[1][2], &outTransform[1][3],
+					&outTransform[2][0], &outTransform[2][1], &outTransform[2][2], &outTransform[2][3],
+					&outTransform[3][0], &outTransform[3][1], &outTransform[3][2], &outTransform[3][3])
+				!= 16) {
+				PrintError(ErrorOrigin::FileParsing, 
+					"failed to parse static mesh transform (function fscanf in function World::ParseStaticMeshFile)!");
+				return 1;
 			}
 			return 0;
 		}
@@ -5457,13 +5720,20 @@ outColor = pc.c_Color;
 						buf[2] = '\0';
 						if (!strcmp(buf, "SM")) {
 							StaticMeshFile* sm;
-							if (ParseStaticMeshFile(fileStream, &sm) == EOF) {
+							Mat4 transform;
+							res = ParseStaticMeshFile(fileStream, &sm, transform);
+							if (res == EOF) {
 								PrintError(ErrorOrigin::FileParsing, 
 									"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
 								return false;
 							}
+							else if (res) {
+								PrintError(ErrorOrigin::FileParsing, 
+									"failed to parse static mesh file (in function World::LoadObstacle)!");
+								return false;
+							}
 							assert(sm);
-							sm->m_Obstacles.PushBack(obstacle);
+							sm->m_Obstacles.PushBack({ obstacle, transform });
 						}
 					}	
 				}
@@ -5511,6 +5781,49 @@ outColor = pc.c_Color;
 						continue;
 				}
 			}
+			for (auto tuple : m_StaticMeshFiles) {
+				MeshFileType fileType = GetMeshFileType(tuple.first);
+				StaticMeshFile& meshFile = tuple.second;
+				switch (fileType) {
+					case MeshFileType::Unrecognized:
+						PrintError(ErrorOrigin::FileParsing, 
+							"found unrecognized mesh file type when parsing world file (function GetMeshFileType in function World::Load)!");
+						break;
+					case MeshFileType::Obj:
+						FILE* fileStream = fopen(tuple.first.CString(), "r");
+						if (!fileStream) {
+							PrintError(ErrorOrigin::FileParsing, 
+								"failed to open mesh file when parsing world file (function GetQuadMesh in function World::Load)!");
+							continue;
+						}
+						Obj obj{};
+						if (!obj.Load(fileStream)) {
+							fclose(fileStream);
+							PrintError(ErrorOrigin::FileParsing, 
+								"failed to load obj file (function Obj::Load in function World::Load)!");
+							continue;
+						}
+						fclose(fileStream);
+						DynamicArray<Vertex> vertices{};
+						DynamicArray<uint32_t> indices{};
+						if (!obj.GetMesh(Vertex::SetPosition, Vertex::SetUV, Vertex::SetNormal, vertices, indices)) {
+							PrintError(ErrorOrigin::Engine, 
+								"failed to construct mesh from obj file (function Obj::GetMesh in function World::Load)!");
+						}
+						if (!meshFile.m_Mesh.CreateBuffers(vertices.Size(), vertices.Data(), indices.Size(), indices.Data())) {
+							PrintError(ErrorOrigin::Engine, 
+								"failed to create mesh (function StaticMesh::CreateBuffers in function World::Load)!");
+						}
+						MeshData meshData = meshFile.m_Mesh.GetMeshData();
+						for (const auto& tuple : meshFile.m_Obstacles) {
+							AddRenderData(*tuple.first, tuple.second, meshData);
+						}
+						for (const auto& tuple : meshFile.m_Grounds) {
+							AddRenderData(*tuple.first, tuple.second, meshData);
+						}
+						break;
+				}
+			}
 			return true;
 		}
 
@@ -5532,7 +5845,7 @@ outColor = pc.c_Color;
 		}
 
 		Creature& AddCreature(const Vec3& position, const Collider::CreateInfo& colliderInfo) {
-			if (!m_ChunkMatrix.m_Size) {
+			if (!m_ChunkMatrix.Size()) {
 				CriticalError(ErrorOrigin::GameLogic,
 					"attempting to add a creature to an empty world (in function World::AddCreature)!");
 			}
@@ -5714,7 +6027,7 @@ outColor = pc.c_Color;
 			for (VkDescriptorPoolSize& size : poolSizes) {
 				size = poolSize;
 			}
-			m_RenderPBRImagesDescriptorPool = m_Renderer.CreateDescriptorPool(0, imageCount, poolSizes.m_Size, poolSizes.m_Data);
+			m_RenderPBRImagesDescriptorPool = m_Renderer.CreateDescriptorPool(0, imageCount, poolSizes.Size(), poolSizes.Data());
 
 			if (m_RenderPBRImagesDescriptorPool == VK_NULL_HANDLE) {
 				CriticalError(ErrorOrigin::Renderer,
@@ -5730,7 +6043,7 @@ outColor = pc.c_Color;
 			}
 
 			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_RenderPBRImagesDescriptorPool, imageCount, 
-					setLayouts.m_Data, m_RenderPBRImagesDescriptorSets.m_Data)) {
+					setLayouts.Data(), m_RenderPBRImagesDescriptorSets.Data())) {
 				CriticalError(ErrorOrigin::Renderer, 
 					"failed to allocate pbr rendering pipeline image descriptor sets (function Renderer::AllocateDescriptorSets in function World::SwapchainCreateCallback)!");
 			}
@@ -6245,7 +6558,7 @@ outColor = pc.c_Color;
 
 		Chunk* GetChunk(Vec2_T<uint32_t> chunkMatrixCoords) {
 			uint32_t index = chunkMatrixCoords.x * m_ChunkMatrixSize.y + chunkMatrixCoords.y;
-			if (index >= m_ChunkMatrix.m_Size) {
+			if (index >= m_ChunkMatrix.Size()) {
 				return nullptr;
 			}
 			return &m_ChunkMatrix[index];
@@ -6418,7 +6731,7 @@ outColor = pc.c_Color;
 		}
 
 		World& LoadWorld(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, 
-				uint32_t groundCount, GroundInfo groundInfos[], uint32_t obstacleCount, World::Obstacle::CreateInfo obstacleInfos[]) {
+				uint32_t groundCount, World::Ground::CreateInfo groundInfos[], uint32_t obstacleCount, World::Obstacle::CreateInfo obstacleInfos[]) {
 			m_World.Unload();
 			m_World.Load(worldDimensions, chunkMatrixSize, groundCount, groundInfos, obstacleCount, obstacleInfos);
 			return m_World;
