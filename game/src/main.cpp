@@ -10,8 +10,8 @@ public:
 	engine::World& m_World;
 	engine::StaticMesh& m_Mesh;
 	engine::Quaternion m_Rotation;
-	engine::Engine::PersistentReference<engine::Creature> m_Creature;
-	engine::Engine::PersistentReference<engine::World::RenderData> m_RenderData;
+	engine::PersistentReference<engine::Creature> m_Creature;
+	engine::PersistentReference<engine::World::RenderData> m_RenderData;
 
 	static engine::Vec3 MovementVectorUpdate(const engine::Creature& creature) {
 		using namespace engine;
@@ -172,14 +172,14 @@ int main() {
 
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
 
-	engine::Engine engine(engine::EngineMode_Play, "Test", pWindow, 1000);
-
-	TextRenderer& textRenderer = engine.GetTextRenderer();
+	Engine engine(engine::EngineMode_Play, "Test", pWindow, 1000);	
+	Renderer& renderer = engine.GetRenderer();
+	TextRenderer textRenderer = engine.GetTextRenderer();
 
 	GlyphAtlas atlas{};
 	textRenderer.CreateGlyphAtlas("resources\\fonts\\arial_mt.ttf", 40, atlas);
 
-	FontAtlas fontAtlas(engine);
+	FontAtlas fontAtlas(renderer, textRenderer);
 	assert(fontAtlas.LoadFont("resources\\fonts\\arial_mt.ttf", 40));
 
 	UI& UI = engine.GetUI();
@@ -190,22 +190,16 @@ int main() {
 	UI.AddEntity(&element);
 	UI.AddEntity(&inputText);
 
-	Engine::GroundInfo groundInfo {
-		.m_TopViewBoundingRect {
-			.m_Min { -8.0f, -8.0f },
-			.m_Max { 8.0f, 8.0f },
-		}
-	};
+	World::Ground::CreateInfo groundInfo {};
 
-	Engine::ObstacleInfo obstacleInfo {
+	World::Obstacle::CreateInfo obstacleInfo {
 		.m_Position = {},
-		.m_Rotation = Quaternion::AxisRotation(Vec3(0.0f, 1.0f, 0.0), pi / 4),
-		.m_Dimensions = { 2.0f, 2.0f, 2.0f },
+		.m_YRotation = pi / 4,
 		.m_ColliderInfo {
 			.m_LocalPosition = {},
 			.m_Type = Collider::Type::Fence,
 			.u_TypeInfo {
-				.m_FenceInfo { .m_Dimensions { 4, 4, 4 }, .m_YRotation = pi / 4 },
+				.m_FenceInfo { .m_Dimensions { 4, 4, 4 }, .m_YRotation = 0 },
 			}
 		},
 	};
@@ -214,14 +208,14 @@ int main() {
 
 	uint8_t* brickWallImage;
 	Vec2_T<uint32_t> brickWallExtent;
-	assert(engine.LoadImage("resources\\textures\\brick_wall\\albedo.png", 4, brickWallImage, brickWallExtent));
-	StaticTexture brickWallTexture(engine);
+	assert(LoadImage("resources\\textures\\brick_wall\\albedo.png", 4, brickWallImage, brickWallExtent));
+	StaticTexture brickWallTexture(renderer);
 	assert(brickWallTexture.Create(VK_FORMAT_R8G8B8A8_SRGB, brickWallExtent, brickWallImage));
-	engine.DestroyImage(brickWallImage);
+	FreeImage(brickWallImage);
 	World::TextureMap textureMap{};
 	assert(world.CreateTextureMap(brickWallTexture, textureMap));
 
-	const Engine::DynamicArray<Engine::Ground>& grounds = world.GetGrounds();
+	const DynamicArray<World::Ground>& grounds = world.GetGrounds();
 
 	MeshData groundMesh = engine.GetQuadMesh().GetMeshData();
 
@@ -231,26 +225,26 @@ int main() {
 	groundTransform[2] *= 10.0f;
 	groundTransform[3] = { 0.0f, 1.0f, 0.0f, 1.0f };
 
-	auto groundRenderData = world.AddRenderData(grounds[0], groundTransform, groundMesh);
-	(*groundRenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
+	//auto groundRenderData = world.AddRenderData(grounds[0], groundTransform, groundMesh);
+	//(*groundRenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 
-	Engine::Obj cubeObj{};
+	Obj cubeObj{};
 	FILE* fileStream = fopen("resources\\meshes\\cube.obj", "r");
 	assert(cubeObj.Load(fileStream));
 	fclose(fileStream);
 
-	Engine::DynamicArray<uint32_t> cubeIndices{};
-	Engine::DynamicArray<Engine::Vertex> cubeVertices{};
+	DynamicArray<uint32_t> cubeIndices{};
+	DynamicArray<Vertex> cubeVertices{};
 
-	assert(cubeObj.GetMesh(Engine::Vertex::SetPosition, Engine::Vertex::SetUV, 
-		Engine::Vertex::SetNormal, cubeVertices, cubeIndices));	
+	assert(cubeObj.GetMesh(Vertex::SetPosition, Vertex::SetUV, 
+		Vertex::SetNormal, cubeVertices, cubeIndices));	
 
-	StaticMesh cubeMesh(engine);
-	cubeMesh.CreateBuffers(cubeVertices.m_Size, cubeVertices.m_Data, cubeIndices.m_Size, cubeIndices.m_Data);
+	StaticMesh cubeMesh(renderer);
+	cubeMesh.CreateBuffers(cubeVertices.Size(), cubeVertices.Data(), cubeIndices.Size(), cubeIndices.Data());
 
-	const Engine::DynamicArray<Engine::Obstacle>& obstacles = world.GetObstacles();
+	const DynamicArray<World::Obstacle>& obstacles = world.GetObstacles();
 
-	Mat4 obstacleTransform = obstacleInfo.m_Rotation.AsMat4();
+	Mat4 obstacleTransform = Quaternion::AxisRotation(Vec3::Up(), obstacleInfo.m_YRotation).AsMat4();
 	for (size_t i = 0; i < 3; i++) {
 		obstacleTransform[i] *= 2;
 	}
@@ -258,6 +252,9 @@ int main() {
 	auto obstacleRenderData = world.AddRenderData(obstacles[0], obstacleTransform, cubeMesh.GetMeshData());
 	(*obstacleRenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 	//world.AddDebugRenderData(obstacles[0], obstacleTransform, Vec4(0.0f, 0.8f, 0.3f, 1.0f), cubeMesh.GetMeshData());
+
+	auto obstacleRenderData2 = world.AddRenderData(obstacles[0], groundTransform, engine.GetQuadMesh().GetMeshData());
+	(*obstacleRenderData2).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 
 	Player player(world, cubeMesh);
 	(*player.m_RenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
@@ -267,7 +264,6 @@ int main() {
 		float deltaTime = Time::DeltaTime();
 		//uiWindow->SetPosition(UI.GetCursorPosition());
 	}
-	Renderer& renderer = engine.GetRenderer();
 	vkDeviceWaitIdle(renderer.m_VulkanDevice);	
 	element.Terminate();
 	inputText.Terminate();
