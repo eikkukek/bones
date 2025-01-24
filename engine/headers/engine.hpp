@@ -95,8 +95,8 @@ namespace engine {
 	private:
 
 		T* m_Data;
-		size_t m_Size;
-		size_t m_Capacity;
+		uint32_t m_Size;
+		uint32_t m_Capacity;
 
 	public:
 
@@ -110,9 +110,35 @@ namespace engine {
 			m_Size = size;
 		}
 
+		DynamicArray(const DynamicArray& other) noexcept 
+			: m_Data(nullptr), m_Size(0), m_Capacity(0) {
+			Reserve(other.m_Capacity);
+			for (const T& val : other) {
+				PushBack(val);
+			}
+		}
+
+		DynamicArray operator=(const DynamicArray& other) noexcept {
+			Clear();
+			Reserve(other.m_Capacity);
+			for (const T& val : other) {
+				PushBack(val);
+			}
+		}
+
 		DynamicArray(DynamicArray&& other) noexcept 
 			: m_Data(other.m_Data), m_Size(other.m_Size), m_Capacity(other.m_Capacity) {
 			other.m_Data = nullptr;
+			other.m_Size = 0;
+			other.m_Capacity = 0;
+		}
+
+		DynamicArray& operator=(DynamicArray&& other) noexcept {
+			Clear();
+			m_Data = other.m_Data;
+			m_Size = other.m_Size;
+			m_Capacity = other.m_Capacity;
+			other.m_Data = 0;
 			other.m_Size = 0;
 			other.m_Capacity = 0;
 		}
@@ -1908,12 +1934,20 @@ namespace engine {
 
 	private:
 
+		Box<float> m_BoundingBox;
+		DynamicArray<Face> m_TransformedFaces;
 		DynamicArray<Face> m_Faces;
 		DynamicArray<Vec3> m_Vertices;
 
 	public:
 
-		LogicMesh() : m_Faces(), m_Vertices() {}
+		LogicMesh() : m_Faces(), m_TransformedFaces(), m_Vertices() {}
+
+		LogicMesh(const LogicMesh&) = default;
+		LogicMesh& operator=(const LogicMesh&) = default;
+
+		LogicMesh(LogicMesh&&) = default;
+		LogicMesh& operator=(LogicMesh&&) = default;
 
 		bool Load(const DynamicArray<Vertex>& vertices, const DynamicArray<uint32_t> indices) {
 			if (indices.Size() % 3) {
@@ -1922,6 +1956,7 @@ namespace engine {
 				return false;
 			}
 			m_Faces.Clear();
+			m_TransformedFaces.Clear();
 			m_Vertices.Clear();
 			for (uint32_t index : indices) {
 				if (index >= vertices.Size()) {
@@ -1933,37 +1968,88 @@ namespace engine {
 			}
 			uint32_t vertexCount = m_Vertices.Size();
 			assert(vertexCount % 3);
-			m_Faces.Reserve(vertexCount / 3);
+			uint32_t faceCount = vertexCount / 3;
+			m_Faces.Reserve(faceCount);
 			for (uint32_t i = 0; i < vertexCount; i += 3) {
 				Face& face = m_Faces.EmplaceBack();
-				face.m_Vertices[0] = m_Vertices[i];
-				face.m_Vertices[1] = m_Vertices[i + 1];
-				face.m_Vertices[2] = m_Vertices[i + 2];
-				face.CalcNormal();
+				face[0] = m_Vertices[i];
+				face[1] = m_Vertices[i + 1];
+				face[2] = m_Vertices[i + 2];
 			}
 			return true;
 		}
 
-		bool IsRayHit(const Ray& ray, const Face& face, Vec3& outHitPosition, float& outDistance) {
-			Vec3 edge1 = m_Vertices[1] - m_Vertices[0];
-			Vec3 edge2 = m_Vertices[2] - m_Vertices[0];
-			Vec3 normal = Cross(edge1, edge2).Normalized();
+		void UpdateTransform(const Mat4& transform) {
+			uint32_t faceCount = m_Faces.Size();
+			m_TransformedFaces.Resize(faceCount);
+			m_BoundingBox = {
+				.m_Min {
+					float_max,
+					float_max,
+					float_max,
+				},
+				.m_Max {
+					float_min,
+					float_min,
+					float_min,
+				},
+			};
+			for (uint32_t i = 0; i < faceCount; i++) {
+				Face& face = m_Faces[i];
+				Face& transformedFace = m_TransformedFaces[i];
+				for (uint32_t j = 0; j < 3; j++) {
+					Vec3& pos = transformedFace[j];
+					pos = transform * face[j];
+					Vec3& max = m_BoundingBox.m_Max;
+					max = {
+						Max(pos.x, max.x),
+						Max(pos.y, max.y),
+						Max(pos.z, max.z),
+					};
+					Vec3& min = m_BoundingBox.m_Min;
+					min = {
+						Min(pos.x, min.x),
+						Min(pos.y, min.y),
+						Min(pos.z, min.z),
+					};
+				}
+			}
 		}
 
-		bool CastRay(const Ray& ray, const Mat4& transform, const Mat4& normalMatrix, RayHitInfo& outInfo) {
+		const Box<float>& GetBoundingBox() const {
+			return m_BoundingBox;
+		}
+
+		bool IsRayHit(const Ray& ray, const Face& face, Vec3& outHitPosition, float& outDistance) const {
+			Vec3 edge1 = m_Vertices[1] - m_Vertices[0];
+			Vec3 edge2 = m_Vertices[2] - m_Vertices[0];
+			Vec3 normal = Cross(edge1, edge2);
+			float det = -Dot(edge1, edge2);
+			if (det == 0.0f) {
+				return false;
+			}
+			float invDet = 1.0f / det;
+			Vec3 ao = ray.m_Origin - face[0];
+			Vec3 aoXd = Cross(ao, ray.m_Direction);
+			float u = Dot(edge2, aoXd) * invDet;
+			float v = -Dot(edge1, aoXd) * invDet;
+			outDistance = Dot(ao, normal) * invDet;
+			outHitPosition = ray.m_Origin + ray.m_Direction * outDistance;
+			return det >= 1e-6 && outDistance > 0.0f && outDistance <= ray.m_Length 
+				&& u >= 0.0f && v >= 0.0f && (u + v) <= 1.0f;
+		}
+
+		bool IsRayHit(const Ray& ray, RayHitInfo& outInfo) const {
 			outInfo = {
 				{},
 				float_max,
 			};
-			for (const Face& face : m_Faces) {
-				Face transformedFace;
-				for (uint32_t i = 0; i < 3; i++) {
-					transformedFace.m_Vertices[i] = transform * Vec4(face.m_Vertices[i], 1.0f);
-				}
-				transformedFace.m_Normal = normalMatrix * Vec4(face.m_Normal, 1.0f);
+			bool wasHit = false;
+			for (const Face& face : m_TransformedFaces) {
 				Vec3 hitPosition;
 				float distance = float_max;
-				if (IsRayHit(ray, transformedFace, hitPosition, distance)) {
+				if (IsRayHit(ray, face, hitPosition, distance)) {
+					wasHit = true;
 					if (distance < outInfo.m_Distance) {
 						outInfo = {
 							hitPosition,
@@ -1972,7 +2058,7 @@ namespace engine {
 					}
 				}
 			}
-			return outInfo.m_Distance <= ray.m_Length;
+			return wasHit;
 		}
 	};
 
@@ -2715,7 +2801,7 @@ namespace engine {
 			RemoveReference();
 		}
 
-		bool IsNull() {
+		bool IsNull() const {
 			return !m_Val;
 		}
 
@@ -2751,10 +2837,12 @@ namespace engine {
 
 	template<typename T>
 	class PersistentReferenceHolder {
-		
+
+		typedef T Derived;
+	
 		friend class PersistentReference<T>;
 			
-	public:
+	protected:
 
 		DynamicArray<PersistentReference<T>*> m_PersistentReferences;
 
@@ -4830,36 +4918,38 @@ outColor = pc.c_Color;
 		public:
 			
 			struct CreateInfo {
+				const LogicMesh& m_LogicMesh;
+				Mat4 m_Transform;
 			};
 
 		private:
 
 			const uint64_t m_ObjectID;
-			Rect<float> m_TopViewBoundingRect;
-			Vec3 m_Scale;
-			Vec3 m_CenterPosition;
-			DynamicMatrix<uint32_t> m_HeightMap;
-			uint32_t m_HeightMapMin;
-			uint32_t m_HeightMapMax;
+			LogicMesh m_LogicMesh;
+			Mat4 m_Transform;
 
-			Ground(uint64_t objectID, const CreateInfo& createInfo) : PersistentReferenceHolder<Ground>() ,
-				m_ObjectID(objectID) {}
+			Ground(uint64_t objectID, const CreateInfo& createInfo) 
+				: PersistentReferenceHolder<Ground>() , m_ObjectID(objectID), 
+					m_LogicMesh(createInfo.m_LogicMesh), m_Transform(createInfo.m_Transform) {
+				m_LogicMesh.UpdateTransform(m_Transform);
+			}
 			
 			Ground(const Ground &) = delete;
 			Ground(Ground&&) = default;
 
-			float GetHeightAtPosition(const Vec3& position) const {
-				return 0.0f;
-				Vec2 pos2D(position.x, position.z);
-				if (!m_TopViewBoundingRect.IsPointInside(pos2D)) {
-					return std::numeric_limits<float>::max();
-				}
-				Vec3 relative = pos2D - m_TopViewBoundingRect.m_Min;
-				Vec2 dimensions = m_TopViewBoundingRect.Dimensions();
-				Vec2_T<uint32_t> heightMapCoords(relative.x / dimensions.x * m_HeightMap.Rows(),
-					relative.y / dimensions.y * m_HeightMap.Columns());
-				size_t heightMapSize = m_HeightMap.Size();
-				return (float)m_HeightMap[heightMapCoords.y][heightMapCoords.x] / UINT32_MAX * m_Scale.y + m_CenterPosition.y;
+			bool AABBCheck(const Vec3& position) const {
+				return m_LogicMesh.GetBoundingBox().IsPointInside(position);
+			}
+
+			bool RayCheck(const Ray& ray, RayHitInfo& outHitInfo) const {
+				return m_LogicMesh.IsRayHit(ray, outHitInfo);
+			}
+
+		public:
+
+			void UpdateTransform(const Mat4& transform) {
+				m_Transform = transform;
+				m_LogicMesh.UpdateTransform(m_Transform);
 			}
 		};
 
@@ -4915,24 +5005,26 @@ outColor = pc.c_Color;
 				return m_BoundingRect.IsPointInside(Vec2(point.x, point.z));
 			}
 
-			const Ground* FindGround(const Vec3& oldPosition, const Vec3& deltaPosition, Vec2_T<bool>& outAxisBlocked) const {
-				outAxisBlocked = { false, false };
-				Vec2 newPosTopView(oldPosition.x + deltaPosition.x, oldPosition.z + deltaPosition.z);
-				Vec2 oldPositionTopView(oldPosition.x, oldPosition.z);
-				for (const PersistentReference<Ground>& ground : m_Grounds) {
-					Rect<float> boundingBox = ground.m_Val->m_TopViewBoundingRect;
-					if (boundingBox.IsPointInside(newPosTopView)) {
-						return ground.m_Val;
-					}
-					else if (boundingBox.IsPointInside(oldPositionTopView)) {
-						outAxisBlocked = {
-							boundingBox.m_Min.x >= newPosTopView.x || boundingBox.m_Max.x <= newPosTopView.x,
-							boundingBox.m_Min.y >= newPosTopView.y || boundingBox.m_Max.y <= newPosTopView.y,
-						};
-						return ground.m_Val;
+			const bool FindHeight(const Vec3& position, float rayLength, float& outHeight) const {
+				Ray ray {
+					.m_Origin = position,
+					.m_Direction = Vec3::Down(),
+					.m_Length = rayLength,
+				};
+				float maxHeight = float_min;
+				for (const PersistentReference<Ground>& ref : m_Grounds) {
+					assert(!ref.IsNull());
+					const Ground& ground = *ref;
+					ground.m_PersistentReferences.Data();
+					if (ground.AABBCheck(position)) {
+						RayHitInfo hitInfo;
+						if (ground.RayCheck(ray, hitInfo)) {
+							maxHeight = Max(hitInfo.m_HitPosition.y, maxHeight);
+						}
 					}
 				}
-				return nullptr;
+				outHeight = maxHeight;
+				return maxHeight != float_min;
 			}
 		};
 
@@ -4959,9 +5051,10 @@ outColor = pc.c_Color;
 				: PersistentReferenceHolder<Creature>(), m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
 					m_Collider(m_Position, m_YRotation, colliderInfo) {
 				assert(chunk);
-				Vec2_T<bool> _;
-				const Ground* ground = chunk->FindGround(position, {}, _);
-				m_Position.y = ground ? ground->GetHeightAtPosition(position) : 0.0f;
+				float height;
+				if (chunk->FindHeight(position, 2.0f, height)) {
+					m_Position.y = height;
+				}
 			}
 
 			Creature(const Creature&) = delete;
