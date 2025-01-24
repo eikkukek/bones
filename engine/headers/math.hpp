@@ -13,6 +13,7 @@ namespace engine {
 
 	constexpr auto pi = 3.14159265358979323846;
 	constexpr float float_max = std::numeric_limits<float>::max();
+	constexpr float float_min = - float_max;
 
 	constexpr inline float Lerp(float a, float b, float t) {
 		return a * (1 - t) + b * t;
@@ -31,8 +32,8 @@ namespace engine {
 
 		static constexpr inline size_t size = 2;
 
-		static constexpr Vec2_T Up() {
-			return Vec2_T(0.0f, 1.0f);
+		static constexpr Vec2_T Up(T num = Cast(1)) {
+			return Vec2_T(Cast(0), num);
 		}
 
 		T x, y;
@@ -114,34 +115,28 @@ namespace engine {
 
 		static constexpr inline size_t size = 3;
 
-		static constexpr const Vec3_T& Up() {
-			static constexpr Vec3_T up = Vec3_T(Cast(0), Cast(1), Cast(0));
-			return up;
+		static constexpr const Vec3_T Right(T num = Cast(1)) {
+			return Vec3_T(num, Cast(0), Cast(0));
 		}
 
-		static constexpr const Vec3_T& Down() {
-			static constexpr Vec3_T down = Vec3_T(Cast(0), Cast(-1), Cast(0));
-			return down;
+		static constexpr const Vec3_T Left(T num = Cast(1)) {
+			return Vec3_T(-num, Cast(0), Cast(0));
 		}
 
-		static constexpr const Vec3_T& Right() {
-			static constexpr Vec3_T right = Vec3_T(Cast(1), Cast(0), Cast(0));
-			return right;
+		static constexpr const Vec3_T Up(T num = Cast(1)) {
+			return Vec3_T(Cast(0), num, Cast(0));
 		}
 
-		static constexpr const Vec3_T& Left() {
-			static constexpr Vec3_T left = Vec3_T(Cast(-1), Cast(0), Cast(0));
-			return left;
+		static constexpr const Vec3_T Down(T num = Cast(1)) {
+			return Vec3_T(Cast(0), -num, Cast(0));
 		}
 
-		static constexpr const Vec3_T& Forward() {
-			static constexpr Vec3_T forward = Vec3_T(Cast(0), Cast(0), Cast(1));
-			return forward;
+		static constexpr const Vec3_T Forward(T num = Cast(1)) {
+			return Vec3_T(Cast(0), Cast(0), num);
 		}
 
-		static constexpr const Vec3_T& Backward() {
-			static constexpr Vec3_T backward = Vec3_T(Cast(0), Cast(0), Cast(-1));
-			return backward;
+		static constexpr const Vec3_T Backward(T num = Cast(1)) {
+			return Vec3_T(Cast(0), Cast(0), -num);
 		}
 
 		T x, y, z;
@@ -152,9 +147,9 @@ namespace engine {
 
 		constexpr inline Vec3_T(const Vec4_T<T>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(other.z)) {}
 
-		static constexpr inline T Dot(const Vec3_T& a, const Vec3_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z; }
-
-		constexpr inline T SqrMagnitude() const noexcept { return x * x + y * y + z * z; }
+		constexpr inline T SqrMagnitude() const noexcept { 
+			return x * x + y * y + z * z; 
+		}
 
 		constexpr inline T Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
 
@@ -192,6 +187,11 @@ namespace engine {
 	template<typename T>
 	static constexpr inline Vec3_T<T> Cross(const Vec3_T<T>& a, const Vec3_T<T>& b) noexcept { 
 		return Vec3_T(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x); 
+	}
+
+	template<typename T>
+	static constexpr inline T Dot(const Vec3_T<T>& a, const Vec3_T<T>& b) noexcept { 
+		return a.x * b.x + a.y * b.y + a.z * b.z; 
 	}
 
 	template<typename T>
@@ -431,8 +431,8 @@ namespace engine {
 			Vec3_T<T> pos = eyePosition;
 			pos.y = -pos.y;
 			Vec3_T<T> front = (lookAtPosition - pos).Normalized();
-			Vec3_T<T> right = Vec3_T<T>::Cross(upDirection.Normalized(), front).Normalized();
-			Vec3_T<T> up = Vec3_T<T>::Cross(front, right).Normalized();
+			Vec3_T<T> right = Cross(upDirection.Normalized(), front).Normalized();
+			Vec3_T<T> up = Cross(front, right).Normalized();
 			Mat4_T result{};
 			result[0].x = right.x;
 			result[1].x = right.y;
@@ -719,7 +719,7 @@ namespace engine {
 			if (aLen < Cast(0.00001) || bLen < Cast(0.00001)) {
 				return { Cast(0), Cast(0), Cast(0), Cast(0) };
 			}
-			Vec3_T<T> abCross = Vec3_T<T>::Cross(a, b);
+			Vec3_T<T> abCross = Cross(a, b);
 			return Quaternion_T(abCross.x, abCross.y, abCross.z, sqrt(aLen * bLen + Vec3_T<T>::Dot(a, b))).Normalized();
 		}
 
