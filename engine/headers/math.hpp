@@ -664,12 +664,15 @@ namespace engine {
 		constexpr inline Quaternion_T(Vec4_T<T> other) noexcept : x(other.x), y(other.y), z(other.z), w(other.w) {}
 
 		static constexpr inline T Dot(const Quaternion_T& a, const Quaternion_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
+
 		static constexpr inline T AngleBetween(const Quaternion_T& a, const Quaternion_T& b) noexcept {
 			return acos(fmin(fabs(Quaternion_T::Dot(a, b)), Cast(1))) * Cast(2);
 		}
+
 		static constexpr inline Quaternion_T Slerp(const Quaternion_T& from, const Quaternion_T& to, T t) noexcept {
 			return Quaternion_T(from * (Cast(1) - t) + to * t).Normalized();
 		}
+
 		static constexpr inline Quaternion_T RotateTowards(const Quaternion_T& from, const Quaternion_T& to, T maxRadians) noexcept {
 			T angle = AngleBetween(from, to);
 			if (abs(angle) < Cast(0.00001)) {
@@ -677,12 +680,14 @@ namespace engine {
 			}
 			return Slerp(from, to, Clamp(maxRadians / angle, Cast(0), Cast(1)));
 		}
+
 		static constexpr inline Quaternion_T AxisRotation(const Vec3_T<T>& axis, T radians) noexcept {
 			radians /= 2;
 			Vec3_T<T> norm = axis.Normalized();
 			T sine = sin(radians);
 			return Quaternion_T(norm.x * sine, norm.y * sine, norm.z * sine, cos(radians)).Normalized();
 		}
+
 		static constexpr inline Quaternion_T Multiply(const Quaternion_T& a, const Quaternion_T& b) noexcept {
 			return Quaternion_T(
 				a.x * b.w + a.w * b.x - a.y * b.z + a.z * b.y,
@@ -691,6 +696,7 @@ namespace engine {
 				a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
 			).Normalized();
 		}
+
 		static constexpr inline Quaternion_T RotationBetween(const Vec3_T<T>& a, const Vec3_T<T>& b) noexcept {
 			T aLen = a.SqrMagnitude(), bLen = b.SqrMagnitude();
 			if (aLen < Cast(0.00001) || bLen < Cast(0.00001)) {
@@ -711,6 +717,17 @@ namespace engine {
 			}
 			mag = sqrt(mag);
 			return { x / mag, y / mag, z / mag, w / mag };
+		}
+
+		constexpr inline Mat3_T<T> AsMat3() const noexcept {
+			T num1 = x * x;
+			T num2 = y * y;
+			T num3 = z * z;
+			return Mat3_T<T>(
+				Cast(1) - Cast(2) * (num2 + num3), Cast(2) * (x * y + z * w), Cast(2) * (x * z - y * w),
+				Cast(2) * (x * y - z * w), Cast(1) - Cast(2) * (num1 + num3), Cast(2) * (y * z + x * w),
+				Cast(2) * (x * z + y * w), Cast(2) * (y * z - x * w), Cast(1) - Cast(2) * (num1 + num2)
+			);
 		}
 
 		constexpr inline Mat4_T<T> AsMat4() const noexcept {
