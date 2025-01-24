@@ -12,6 +12,7 @@ namespace engine {
 #define Cast(x) static_cast<T>(x)
 
 	constexpr auto pi = 3.14159265358979323846;
+	constexpr float float_max = std::numeric_limits<float>::max();
 
 	constexpr inline float Lerp(float a, float b, float t) {
 		return a * (1 - t) + b * t;
@@ -153,17 +154,6 @@ namespace engine {
 
 		static constexpr inline T Dot(const Vec3_T& a, const Vec3_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
-		static constexpr inline Vec3_T Cross(const Vec3_T& a, const Vec3_T& b) noexcept { return Vec3_T(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x); }
-
-		static constexpr inline void Normalize(Vec3_T& vec) noexcept {
-			T mag = vec.SqrMagnitude();
-			if (mag <= Cast(0.00001)) {
-				vec.x = Cast(0); vec.y = Cast(0); vec.z = Cast(0);
-				return;
-			}
-			vec.x /= mag; vec.y /= mag; vec.z /= mag;
-		}
-
 		constexpr inline T SqrMagnitude() const noexcept { return x * x + y * y + z * z; }
 
 		constexpr inline T Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
@@ -198,6 +188,21 @@ namespace engine {
 
 		constexpr inline bool operator==(const Vec3_T& other) const noexcept = default;
 	};
+
+	template<typename T>
+	static constexpr inline Vec3_T<T> Cross(const Vec3_T<T>& a, const Vec3_T<T>& b) noexcept { 
+		return Vec3_T(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x); 
+	}
+
+	template<typename T>
+	static constexpr inline void Normalize(Vec3_T<T>& vec) noexcept {
+		T mag = vec.SqrMagnitude();
+		if (mag <= Cast(0.00001)) {
+			vec.x = Cast(0); vec.y = Cast(0); vec.z = Cast(0);
+			return;
+		}
+		vec.x /= mag; vec.y /= mag; vec.z /= mag;
+	}
 
 	typedef Vec3_T<float> Vec3;
 	typedef Vec3_T<int> IntVec3;
@@ -331,17 +336,57 @@ namespace engine {
 		Vec4_T<T> columns[4];
 
 		constexpr inline Mat4_T() noexcept : columns() {}
+
 		constexpr inline Mat4_T(T num) noexcept
-			: columns{ { num, Cast(0), Cast(0), Cast(0) }, { Cast(0), num, Cast(0), Cast(0) }, { Cast(0), Cast(0), num, Cast(0) }, { Cast(0), Cast(0), Cast(0), num } } {}
+			: columns{ { num, Cast(0), Cast(0), Cast(0) }, { Cast(0), num, Cast(0), Cast(0) }, 
+				{ Cast(0), Cast(0), num, Cast(0) }, { Cast(0), Cast(0), Cast(0), num } } {}
+
 		constexpr inline Mat4_T(T n0, T n1, T n2, T n3, T n4, T n5, T n6, T n7, T n8, T n9, T n10, T n11, T n12, T n13, T n14, T n15) noexcept
 			: columns{ { n0, n1, n2, n3 }, { n4, n5, n6, n7 }, { n8, n9, n10, n11 }, { n12, n13, n14, n15 } } {}
 
+		static constexpr inline Mat4_T Multiply(const Mat4_T a, const Mat4_T b) {
+
+			const Vec4_T<T>& aCol0 = a[0];
+			const Vec4_T<T>& aCol1 = a[1];
+			const Vec4_T<T>& aCol2 = a[2];
+			const Vec4_T<T>& aCol3 = a[3];
+
+			const Vec4_T<T>& bCol0 = b[0];
+			const Vec4_T<T>& bCol1 = b[1];
+			const Vec4_T<T>& bCol2 = b[2];
+			const Vec4_T<T>& bCol3 = b[3];
+
+			Mat4_T<T> result;
+			Vec4_T<T> col; 
+			col =  aCol0 * bCol0.x;
+			col += aCol1 * bCol0.y;
+			col += aCol2 * bCol0.z;
+			col += aCol3 * bCol0.w;
+			result[0] = col;
+			col =  aCol0 * bCol1.x;
+			col += aCol1 * bCol1.y;
+			col += aCol2 * bCol1.z;
+			col += aCol3 * bCol1.w;
+			result[1] = col;
+			col =  aCol0 * bCol2.x;
+			col += aCol1 * bCol2.y;
+			col += aCol2 * bCol2.z;
+			col += aCol3 * bCol2.w;
+			result[2] = col;
+			col =  aCol0 * bCol3.x;
+			col += aCol1 * bCol3.y;
+			col += aCol2 * bCol3.z;
+			col += aCol3 * bCol3.w;
+			result[3] = col;
+			return result;
+		}
+
 		static constexpr inline Vec4_T<T> Multiply(const Mat4_T& a, const Vec4_T<T>& b) noexcept {
 			return Vec4_T<T>(
-				a[0].x * b.x + a[1].x * b.y + a[2][0] * b.z + a[3][0] * b.w,
-				a[0].y * b.x + a[1].y * b.y + a[2][1] * b.z + a[3][1] * b.w,
-				a[0].z * b.x + a[1].z * b.y + a[2][2] * b.z + a[3][2] * b.w,
-				a[0].w * b.x + a[1].w * b.y + a[2][3] * b.z + a[3][3] * b.w
+				a[0][0] * b.x + a[1][0] * b.y + a[2][0] * b.z + a[3][0] * b.w,
+				a[0][1] * b.x + a[1][1] * b.y + a[2][1] * b.z + a[3][1] * b.w,
+				a[0][2] * b.x + a[1][2] * b.y + a[2][2] * b.z + a[3][2] * b.w,
+				a[0][3] * b.x + a[1][3] * b.y + a[2][3] * b.z + a[3][3] * b.w
 			);
 		}
 
@@ -350,7 +395,8 @@ namespace engine {
 				a.x * b[0].x + a.y * b[0].y + a.z * b[0].z + a.w * b[0].w,
 				a.x * b[1].x + a.y * b[1].y + a.z * b[1].z + a.w * b[1].w,
 				a.x * b[2].x + a.y * b[2].y + a.z * b[2].z + a.w * b[2].w,
-				a.x * b[3].x + a.y * b[3].y + a.z * b[3].z + a.w * b[3].w);
+				a.x * b[3].x + a.y * b[3].y + a.z * b[3].z + a.w * b[3].w
+			);
 		}
 
 		static constexpr inline T Determinant(const Mat4_T& a) noexcept {
@@ -434,48 +480,19 @@ namespace engine {
 			return result;
 		}
 
-		friend constexpr inline Mat4_T<T> operator*(const Mat4_T<T>& a, const Mat4_T<T>& b) {
-
-			const Vec4_T<T>& aCol0 = a[0];
-			const Vec4_T<T>& aCol1 = a[1];
-			const Vec4_T<T>& aCol2 = a[2];
-			const Vec4_T<T>& aCol3 = a[3];
-
-			const Vec4_T<T>& bCol0 = b[0];
-			const Vec4_T<T>& bCol1 = b[1];
-			const Vec4_T<T>& bCol2 = b[2];
-			const Vec4_T<T>& bCol3 = b[3];
-
-			Mat4_T<T> result;
-			Vec4_T<T> col; 
-			col =  aCol0 * bCol0.x;
-			col += aCol1 * bCol0.y;
-			col += aCol2 * bCol0.z;
-			col += aCol3 * bCol0.w;
-			result[0] = col;
-			col =  aCol0 * bCol1.x;
-			col += aCol1 * bCol1.y;
-			col += aCol2 * bCol1.z;
-			col += aCol3 * bCol1.w;
-			result[1] = col;
-			col =  aCol0 * bCol2.x;
-			col += aCol1 * bCol2.y;
-			col += aCol2 * bCol2.z;
-			col += aCol3 * bCol2.w;
-			result[2] = col;
-			col =  aCol0 * bCol3.x;
-			col += aCol1 * bCol3.y;
-			col += aCol2 * bCol3.z;
-			col += aCol3 * bCol3.w;
-			result[3] = col;
-			return result;
-		}
-
 		constexpr inline const Vec4_T<T>& operator[](size_t index) const { return columns[index]; }
 		constexpr inline Vec4_T<T>& operator[](size_t index) { return columns[index]; }
 
 		constexpr inline explicit operator Mat4_T() const noexcept {
 			return Mat4_T((Vec3_T<T>)columns[0], (Vec3_T<T>)columns[1], (Vec3_T<T>)columns[2]);
+		}
+
+		friend constexpr inline Mat4_T<T> operator*(const Mat4_T<T>& a, const Mat4_T<T>& b) {
+			return Multiply(a, b);
+		}
+
+		friend constexpr inline Vec4 operator*(const Mat4_T& a, const Vec4_T<T>& b) {
+			return Multiply(a, b);
 		}
 	};
 
