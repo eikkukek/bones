@@ -85,6 +85,42 @@ namespace engine {
 			"Engine called a warning:\n {}\n", warn);
 	}
 
+	template<typename T, size_t size_T>
+	class Array {
+	public:
+
+		typedef T* Iterator;
+		typedef const T* ConstIterator;
+
+		T m_Data[size_T]{};
+
+		constexpr size_t Size() const {
+			return size_T;
+		}
+
+		constexpr T& operator[](size_t index) {
+			assert(index < size_T);
+			return m_Data[index];
+		}
+
+		constexpr const T& operator[](size_t index) const {
+			assert(index < size_T);
+			return m_Data[index];
+		}
+
+		Iterator begin() {
+			return m_Data;
+		}
+
+		ConstIterator begin() const {
+			return m_Data;
+		}
+
+		ConstIterator end() const {
+			return m_Data[size_T];
+		}
+	};
+
 	template<typename T>
 	class DynamicArray {
 	public:
@@ -102,12 +138,8 @@ namespace engine {
 
 		DynamicArray() : m_Data(nullptr), m_Size(0), m_Capacity(0) {}
 
-		DynamicArray(size_t size) : m_Data(nullptr), m_Size(0), m_Capacity(0) {
-			if (!size) {
-				return;
-			}
-			Reserve(size * 2);
-			m_Size = size;
+		DynamicArray(uint32_t size) : m_Data(nullptr), m_Size(0), m_Capacity(0) {
+			Resize(size);
 		}
 
 		DynamicArray(const DynamicArray& other) noexcept 
@@ -144,7 +176,7 @@ namespace engine {
 		}
 
 		~DynamicArray() {
-			for (size_t i = 0; i < m_Size; i++) {
+			for (uint32_t i = 0; i < m_Size; i++) {
 				(&m_Data[i])->~T();
 			}
 			free(m_Data);
@@ -165,12 +197,12 @@ namespace engine {
 			return m_Data;
 		}
 
-		DynamicArray& Reserve(size_t capacity) {
+		DynamicArray& Reserve(uint32_t capacity) {
 			if (capacity < m_Capacity) {
 				return *this;
 			}
 			T* temp = (T*)malloc(sizeof(T) * capacity);
-			for (size_t i = 0; i < m_Size; i++) {
+			for (uint32_t i = 0; i < m_Size; i++) {
 				new(&temp[i]) T(std::move(m_Data[i]));
 			}
 			free(m_Data);
@@ -179,12 +211,12 @@ namespace engine {
 			return *this;
 		}
 
-		DynamicArray& Resize(size_t size) {
+		DynamicArray& Resize(uint32_t size) {
 			if (size == m_Size) {
 				return *this;
 			}
 			if (size < m_Size) {
-				for (size_t i = size; i < m_Size; i++) {
+				for (uint32_t i = size; i < m_Size; i++) {
 					(&m_Data[i])->~T();
 				}
 				m_Size = size;
@@ -193,7 +225,7 @@ namespace engine {
 			if (size >= m_Capacity) {
 				Reserve(size * 2);
 			}
-			for (size_t i = m_Size; i < size; i++) {
+			for (uint32_t i = m_Size; i < size; i++) {
 				new(&m_Data[i]) T();
 			}
 			m_Size = size;
@@ -1444,9 +1476,71 @@ namespace engine {
 		Vec3_T<T> m_Min{};
 		Vec3_T<T> m_Max{};
 
-		bool IsPointInside(const Vec3& point) const {
+		bool IsPointInside(const Vec3_T<T>& point) const {
 			return point.x > m_Min.x && point.y > m_Min.y && point.z > m_Min.z &&
 				point.x < m_Max.x && point.y < m_Max.y && point.z < m_Max.z;
+		}
+
+		bool IsLineCrossing(const Vec3_T<T>& a, const Vec3_T<T>& b) const {
+
+			static constexpr auto get_intersection = [](T distance1, T distance2, 
+					const Vec3_T<T>& a, const Vec3_T<T>& b, Vec3_T<T>& out) -> bool {
+				if ((distance1 * distance2) >= 0.0f) {
+					return false;
+				}
+				if (distance1 == distance2) {
+					return false;
+				}
+				out = a + (b - a) * (-distance1 / (distance2 - distance1));
+				return true;
+			};
+
+			static constexpr auto in_box = [](const Box<T>& box, const Vec3_T<T>& intersection, uint32_t axis) -> bool {
+				if (axis == 1) {
+					return intersection.y > box.m_Min.y && intersection.y < box.m_Max.y && 
+						intersection.z > box.m_Min.z && intersection.y < box.m_Max.z;
+				}
+				if (axis == 2) {
+					return intersection.x > box.m_Min.x && intersection.x < box.m_Max.x && 
+						intersection.z > box.m_Min.z && intersection.z < box.m_Max.z;
+				}
+				if (axis == 3) {
+					return intersection.x > box.m_Min.x && intersection.x < box.m_Max.x && 
+						intersection.x > box.m_Min.x && intersection.x < box.m_Max.x;
+				}
+				return false;
+			};
+
+			if (a.x < m_Min.x && b.x < m_Min.x) {
+				return false;
+			}
+			if (a.x > m_Max.x && b.x > m_Max.x) {
+				return false;
+			}
+			if (a.y < m_Min.y && b.y < m_Min.y) {
+				return false;
+			}
+			if (a.y > m_Max.y && b.y > m_Max.y) {
+				return false;
+			}
+			if (a.z < m_Min.z && b.z < m_Min.z) {
+				return false;
+			}
+			if (a.z > m_Max.z && b.z > m_Max.z) {
+				return false;
+			}
+			if (a.x > m_Min.x && a.x < m_Max.x &&
+				a.y > m_Min.y && a.y < m_Max.y &&
+				a.z > m_Min.z && a.z < m_Max.z) {
+				return true;
+			}
+			Vec3 intersection;
+			return get_intersection(a.x - m_Min.x, b.x - m_Min.x, a, b, intersection) && in_box(*this, intersection, 1) ||
+				get_intersection(a.y - m_Min.y, b.y - m_Min.y, a, b, intersection) && in_box(*this, intersection, 2) ||
+				get_intersection(a.z - m_Min.z, b.z - m_Min.z, a, b, intersection) && in_box(*this, intersection, 3) ||
+				get_intersection(a.x - m_Max.x, b.x - m_Max.x, a, b, intersection) && in_box(*this, intersection, 1) ||
+				get_intersection(a.y - m_Max.y, b.y - m_Max.y, a, b, intersection) && in_box(*this, intersection, 2) ||
+				get_intersection(a.z - m_Max.z, b.z - m_Max.z, a, b, intersection) && in_box(*this, intersection, 3);
 		}
 
 		bool OverLaps(const Box& other) const {
@@ -1930,7 +2024,7 @@ namespace engine {
 	class LogicMesh {
 	public:
 
-		typedef Vec3 Face[3];
+		typedef Array<Vec3, 3> Face;
 
 	private:
 
@@ -1943,11 +2037,34 @@ namespace engine {
 
 		LogicMesh() : m_Faces(), m_TransformedFaces(), m_Vertices() {}
 
+		LogicMesh(const DynamicArray<Vertex>& vertices, const DynamicArray<uint32_t> indices) 
+			: m_Faces(), m_TransformedFaces(), m_Vertices() {
+			Load(vertices, indices);
+		}
+
+		template<uint32_t vertex_count_T, uint32_t index_count_T>
+		LogicMesh(const Array<Vertex, vertex_count_T>& vertices, const Array<uint32_t, index_count_T>& indices) 
+			: m_Faces(), m_TransformedFaces(), m_Vertices() {
+			Load(vertices, indices);
+		}
+
 		LogicMesh(const LogicMesh&) = default;
 		LogicMesh& operator=(const LogicMesh&) = default;
 
 		LogicMesh(LogicMesh&&) = default;
 		LogicMesh& operator=(LogicMesh&&) = default;
+
+		const Box<float>& GetBoundingBox() const {
+			return m_BoundingBox;
+		}
+
+		const bool AABBCheck(const Vec3& position) const {
+			return m_BoundingBox.IsPointInside(position);
+		}
+
+		const bool AABBCheck(const Ray& ray) const {
+			return m_BoundingBox.IsLineCrossing(ray.m_Origin, ray.m_Origin + ray.m_Direction * ray.m_Length);
+		}
 
 		bool Load(const DynamicArray<Vertex>& vertices, const DynamicArray<uint32_t> indices) {
 			if (indices.Size() % 3) {
@@ -1958,6 +2075,7 @@ namespace engine {
 			m_Faces.Clear();
 			m_TransformedFaces.Clear();
 			m_Vertices.Clear();
+			m_Vertices.Reserve(vertices.Size());
 			for (uint32_t index : indices) {
 				if (index >= vertices.Size()) {
 					PrintError(ErrorOrigin::Engine, 
@@ -1968,8 +2086,35 @@ namespace engine {
 			}
 			uint32_t vertexCount = m_Vertices.Size();
 			assert(vertexCount % 3);
-			uint32_t faceCount = vertexCount / 3;
-			m_Faces.Reserve(faceCount);
+			m_Faces.Reserve(vertexCount / 3);
+			for (uint32_t i = 0; i < vertexCount; i += 3) {
+				Face& face = m_Faces.EmplaceBack();
+				face[0] = m_Vertices[i];
+				face[1] = m_Vertices[i + 1];
+				face[2] = m_Vertices[i + 2];
+			}
+			return true;
+		}
+
+		template<uint32_t vertex_count_T, uint32_t index_count_T>
+		bool Load(const Array<Vertex, vertex_count_T>& vertices, const Array<uint32_t, index_count_T>& indices) {
+			static_assert(!(index_count_T % 3));
+			m_Faces.Clear();
+			m_TransformedFaces.Clear();
+			m_Vertices.Clear();
+			m_Vertices.Reserve(vertex_count_T);
+			for (uint32_t i = 0; i < index_count_T; i++) {
+				uint32_t index = indices[i];
+				if (index >= vertex_count_T) {
+					PrintError(ErrorOrigin::Engine, 
+						"found invalid index when loading mesh (in function LogicMesh::Load)!");
+					return false;
+				}
+				m_Vertices.PushBack(vertices[index].m_Position);
+			}
+			uint32_t vertexCount = m_Vertices.Size();
+			assert(!(vertexCount % 3));
+			m_Faces.Reserve(vertexCount / 3);
 			for (uint32_t i = 0; i < vertexCount; i += 3) {
 				Face& face = m_Faces.EmplaceBack();
 				face[0] = m_Vertices[i];
@@ -2016,15 +2161,11 @@ namespace engine {
 			}
 		}
 
-		const Box<float>& GetBoundingBox() const {
-			return m_BoundingBox;
-		}
-
 		bool IsRayHit(const Ray& ray, const Face& face, Vec3& outHitPosition, float& outDistance) const {
-			Vec3 edge1 = m_Vertices[1] - m_Vertices[0];
-			Vec3 edge2 = m_Vertices[2] - m_Vertices[0];
+			Vec3 edge1 = face[2] - face[0];
+			Vec3 edge2 = face[1] - face[0];
 			Vec3 normal = Cross(edge1, edge2);
-			float det = -Dot(edge1, edge2);
+			float det = -Dot(ray.m_Direction, normal);
 			if (det == 0.0f) {
 				return false;
 			}
@@ -2035,8 +2176,8 @@ namespace engine {
 			float v = -Dot(edge1, aoXd) * invDet;
 			outDistance = Dot(ao, normal) * invDet;
 			outHitPosition = ray.m_Origin + ray.m_Direction * outDistance;
-			return det >= 1e-6 && outDistance > 0.0f && outDistance <= ray.m_Length 
-				&& u >= 0.0f && v >= 0.0f && (u + v) <= 1.0f;
+			return det >= 1e-6 && outDistance > 0.0f && outDistance <= ray.m_Length && 
+				u >= 0.0f && v >= 0.0f && (u + v) <= 1.0f;
 		}
 
 		bool IsRayHit(const Ray& ray, RayHitInfo& outInfo) const {
@@ -4411,27 +4552,28 @@ layout(location = 1) out vec3 outPosition;
 layout(location = 2) out vec3 outNormal;
 
 layout(set = 0, binding = 0) uniform CameraMatrices {
-mat4 c_Projection;
-mat4 c_View;
+	mat4 c_Projection;
+	mat4 c_View;
 } camera_matrices;
 
 layout(push_constant) uniform PushConstant {
-layout(offset = 0) 
-mat4 c_Transform;
-mat4 c_NormalMatrix;
+	layout(offset = 0) 
+	mat4 c_Transform;
+	mat4 c_NormalMatrix;
 } pc;
 
 void main() {
 
-vec3 modelPos = vec3(inPosition.x, -inPosition.y, inPosition.z);
+	const vec3 modelPos = vec3(inPosition.x, -inPosition.y, inPosition.z);
 
-outUV = inUV;
+	outUV = inUV;
 
-outNormal = normalize(vec3(pc.c_NormalMatrix * vec4(inNormal, 0.0f)));
+	outNormal = normalize(vec3(pc.c_NormalMatrix * vec4(inNormal, 0.0f)));
 
-outPosition = vec3(pc.c_Transform * vec4(modelPos, 1.0f));
+	outPosition = vec3(pc.c_Transform * vec4(modelPos, 1.0f));
 
-gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(modelPos, 1.0f);
+	gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(modelPos, 1.0f);
+
 }
 			)";
 
@@ -4450,9 +4592,9 @@ layout(set = 1, binding = 0) uniform sampler2D diffuse_map;
 
 void main() {
 
-outDiffuseColor = texture(diffuse_map, inUV);
-outPositionAndMetallic = vec4(inPosition, 1.0f);
-outNormalAndRougness = vec4(inNormal, 1.0f);
+	outDiffuseColor = texture(diffuse_map, inUV);
+	outPositionAndMetallic = vec4(inPosition, 1.0f);
+	outNormalAndRougness = vec4(inNormal, 1.0f);
 }
 			)";
 
@@ -4467,12 +4609,12 @@ layout(location = 4) in vec3 inBitangent;
 
 layout(push_constant) uniform PushConstant {
 layout(offset = 0)
-mat4 c_LightView;
-mat4 c_Transform;
+	mat4 c_LightView;
+	mat4 c_Transform;
 } pc;
 
 void main() {
-gl_Position = pc.c_LightView * pc.c_Transform * vec4(inPosition.x, -inPosition.y, inPosition.z, 1.0f);
+	gl_Position = pc.c_LightView * pc.c_Transform * vec4(inPosition.x, -inPosition.y, inPosition.z, 1.0f);
 }
 			)";
 
@@ -4485,8 +4627,8 @@ layout(location = 1) in vec2 inUV;
 layout(location = 0) out vec2 outUV;
 
 void main() {
-outUV = inUV;
-gl_Position = vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
+	outUV = inUV;
+	gl_Position = vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
 }
 			)";
 
@@ -4504,45 +4646,45 @@ layout(set = 0, binding = 2) uniform sampler2D normal_and_roughness;
 layout(set = 1, binding = 0) uniform sampler2D directional_light_shadow_map;
 
 layout(set = 1, binding = 1) uniform DirectionalLight {
-mat4 c_ViewSpaceMatrix;
-vec3 c_Direction;
-vec3 c_Color;
+	mat4 c_ViewSpaceMatrix;
+	vec3 c_Direction;
+	vec3 c_Color;
 } directional_light;
 
 bool IsInShadowDirLight(vec4 lightViewPos) {
 
-const vec4 shadowMapCoords = lightViewPos / lightViewPos.w;
+	const vec4 shadowMapCoords = lightViewPos / lightViewPos.w;
 
-if (shadowMapCoords.z > -1.0f && shadowMapCoords.z < 1.0f) {
-	float dist = texture(directional_light_shadow_map, shadowMapCoords.st * 0.5f + 0.5f).r;
-	float bias = 0.005f;
-	return shadowMapCoords.w > 0.0f && dist < shadowMapCoords.z - bias;
-}
+	if (shadowMapCoords.z > -1.0f && shadowMapCoords.z < 1.0f) {
+		float dist = texture(directional_light_shadow_map, shadowMapCoords.st * 0.5f + 0.5f).r;
+		float bias = 0.005f;
+		return shadowMapCoords.w > 0.0f && dist < shadowMapCoords.z - bias;
+	}
 
-return false;
+	return false;
 }
 
 void main() {
 
-const vec4 modelPosAndMetal = texture(position_and_metallic, inUV);
+	const vec4 modelPosAndMetal = texture(position_and_metallic, inUV);
 
-const vec3 pos = modelPosAndMetal.xyz;
-const vec3 normal = vec3(texture(normal_and_roughness, inUV));	
+	const vec3 pos = modelPosAndMetal.xyz;
+	const vec3 normal = vec3(texture(normal_and_roughness, inUV));	
 
-vec4 lightViewPos
-	= directional_light.c_ViewSpaceMatrix * vec4(modelPosAndMetal.xyz, 1.0f);
+	vec4 lightViewPos
+		= directional_light.c_ViewSpaceMatrix * vec4(modelPosAndMetal.xyz, 1.0f);
 
-vec3 lightDir = directional_light.c_Direction;
+	vec3 lightDir = directional_light.c_Direction;
 
-const float diff = IsInShadowDirLight(lightViewPos) ? 0.0f : max(dot(normal, lightDir), 0.0f);
+	const float diff = IsInShadowDirLight(lightViewPos) ? 0.0f : max(dot(normal, lightDir), 0.0f);
 
-const vec3 diffuse = diff * directional_light.c_Color;
+	const vec3 diffuse = diff * directional_light.c_Color;
 
-vec3 color = (vec3(0.2f, 0.2f, 0.2f) + diffuse) * vec3(texture(diffuse_colors, inUV));
-float gamma = 2.2f;
-color = pow(color, vec3(1.0f / gamma));
+	vec3 color = (vec3(0.2f, 0.2f, 0.2f) + diffuse) * vec3(texture(diffuse_colors, inUV));
+	float gamma = 2.2f;
+	color = pow(color, vec3(1.0f / gamma));
 
-outColor = vec4(color, 1.0f);
+	outColor = vec4(color, 1.0f);
 }
 			)";
 
@@ -4556,16 +4698,16 @@ layout(location = 3) in vec3 inTangent;
 layout(location = 4) in vec3 inBitangent;
 
 layout(set = 0, binding = 0) uniform CameraMatrices {
-mat4 c_Projection;
-mat4 c_View;
+	mat4 c_Projection;
+	mat4 c_View;
 } camera_matrices;
 
 layout(push_constant) uniform PushConstant {
-layout(offset = 0) mat4 c_Transform;
+	layout(offset = 0) mat4 c_Transform;
 } pc;
 
 void main() {
-gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(inPosition, 1.0f);
+	gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(inPosition, 1.0f);
 }
 			)";
 
@@ -4575,11 +4717,11 @@ gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Trans
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform PushConstant {
-layout(offset = 64) vec4 c_Color;
+	layout(offset = 64) vec4 c_Color;
 } pc;
 
 void main() {
-outColor = pc.c_Color;
+	outColor = pc.c_Color;
 }
 			)";
 		};
@@ -4937,15 +5079,19 @@ outColor = pc.c_Color;
 			Ground(const Ground &) = delete;
 			Ground(Ground&&) = default;
 
+		public:
+
 			bool AABBCheck(const Vec3& position) const {
-				return m_LogicMesh.GetBoundingBox().IsPointInside(position);
+				return m_LogicMesh.AABBCheck(position);
+			}
+
+			bool AABBCheck(const Ray& ray) const {
+				return m_LogicMesh.AABBCheck(ray);
 			}
 
 			bool RayCheck(const Ray& ray, RayHitInfo& outHitInfo) const {
 				return m_LogicMesh.IsRayHit(ray, outHitInfo);
 			}
-
-		public:
 
 			void UpdateTransform(const Mat4& transform) {
 				m_Transform = transform;
@@ -5016,7 +5162,7 @@ outColor = pc.c_Color;
 					assert(!ref.IsNull());
 					const Ground& ground = *ref;
 					ground.m_PersistentReferences.Data();
-					if (ground.AABBCheck(position)) {
+					if (ground.AABBCheck(position) || ground.AABBCheck(ray)) {
 						RayHitInfo hitInfo;
 						if (ground.RayCheck(ray, hitInfo)) {
 							maxHeight = Max(hitInfo.m_HitPosition.y, maxHeight);
@@ -5097,6 +5243,10 @@ outColor = pc.c_Color;
 					m_Position.y = height;
 				}
 				*/
+				float height;
+				if (m_Chunk->FindHeight(m_Position, 10.0f, height)) {
+					m_Position.y = height + 1.0f;
+				}
 				for (const PersistentReference<Obstacle>& obstacle : m_Chunk->m_Obstacles) {
 					assert(obstacle.m_Val);
 					Vec3 pushBack;
@@ -5382,6 +5532,7 @@ outColor = pc.c_Color;
 				};
 				for (const RenderData& renderData : m_World.m_RenderDatas) {
 					matrices[1] = renderData.m_Transform;
+					matrices[1][3].y *= -1;
 					vkCmdPushConstants(drawData.m_CommandBuffer, pipelines.m_DrawPipelineLayoutUD, VK_SHADER_STAGE_VERTEX_BIT, 0, 128, matrices);
 					vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 0, 1, renderData.m_MeshData.m_VertexBuffers, renderData.m_MeshData.m_VertexBufferOffsets);
 					vkCmdBindIndexBuffer(drawData.m_CommandBuffer, renderData.m_MeshData.m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
@@ -5815,11 +5966,16 @@ outColor = pc.c_Color;
 			for (size_t x = 0; x < m_ChunkMatrixSize.x; x++) {
 				for (size_t y = 0; y < m_ChunkMatrixSize.y; y++) {
 					Chunk& chunk = m_ChunkMatrix.EmplaceBack(Vec2_T<uint32_t>(x, y), 
-							Vec2(m_WorldRect.m_Min.x + x * m_ChunkDimensions.x, 
-								m_WorldRect.m_Min.y + y * m_ChunkDimensions.y), 
-								m_ChunkDimensions);
+						Vec2(m_WorldRect.m_Min.x + x * m_ChunkDimensions.x, 
+							m_WorldRect.m_Min.y + y * m_ChunkDimensions.y), 
+							m_ChunkDimensions);
 					for (Ground& ground : m_Grounds) {
-						if (chunk.m_BoundingRect.OverLaps(ground.m_TopViewBoundingRect)) {
+						Box<float> boundingBox = ground.m_LogicMesh.GetBoundingBox();
+						Rect<float> topViewRect {
+							.m_Min { boundingBox.m_Min.x, boundingBox.m_Min.z },
+							.m_Max { boundingBox.m_Max.x, boundingBox.m_Max.z },
+						};
+						if (chunk.m_BoundingRect.OverLaps(topViewRect)) {
 							chunk.m_Grounds.EmplaceBack(ground);
 						}
 					}
@@ -5974,7 +6130,7 @@ outColor = pc.c_Color;
 						FILE* fileStream = fopen(tuple.first.CString(), "r");
 						if (!fileStream) {
 							PrintError(ErrorOrigin::FileParsing, 
-								"failed to open mesh file when parsing world file (function GetQuadMesh in function World::Load)!");
+								"failed to open mesh file when parsing world file (function fopen in function World::Load)!");
 							continue;
 						}
 						Obj obj{};
@@ -6592,6 +6748,7 @@ outColor = pc.c_Color;
 						data.m_Transform,
 						Transpose(Inverse(data.m_Transform)),
 					};
+					matrices[0][3].y *= -1;
 					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DrawPipelineLayoutPBR,
 						VK_SHADER_STAGE_VERTEX_BIT, 0, 128, &matrices);
 					vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 0, 1, data.m_MeshData.m_VertexBuffers, 
@@ -6779,7 +6936,58 @@ outColor = pc.c_Color;
 		StaticMesh m_StaticQuadMesh;
 		StaticMesh m_StaticQuadMesh2D;
 
-	public:	
+		static constexpr uint32_t quad_vertex_count = 4;
+
+		static constexpr Vertex quad_vertices[quad_vertex_count] {
+			{
+				.m_Position { -1.0f, 1.0f, 0.0f },
+				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_UV { 0.0f, 1.0f },
+			},
+			{
+				.m_Position { 1.0f, 1.0f, 0.0f },
+				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_UV { 1.0f, 1.0f },
+			},
+			{
+				.m_Position { -1.0f, -1.0f, 0.0f },
+				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_UV { 0.0f, 0.0f },
+			},
+			{
+				.m_Position { 1.0f, -1.0f, 0.0f },
+				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_UV { 1.0f, 0.0f },
+			},	
+		};
+
+		static constexpr Vertex2D quad_vertices_2D[quad_vertex_count] {
+			{
+				.m_Position { -1.0f, 1.0f, 0.0f },
+				.m_UV { 0.0f, 0.0f },
+			},
+			{
+				.m_Position { 1.0f, 1.0f, 0.0f },
+				.m_UV { 1.0f, 0.0f },
+			},
+			{
+				.m_Position { -1.0f, -1.0f, 0.0f },
+				.m_UV { 0.0f, 1.0f },
+			},
+			{
+				.m_Position { 1.0f, -1.0f, 0.0f },
+				.m_UV { 1.0f, 1.0f },
+			},
+		};
+
+		static constexpr uint32_t quad_index_count = 6;
+
+		static constexpr uint32_t quad_indices[quad_index_count] {
+			3, 2, 0,
+			1, 3, 0,
+		};
+
+	public:
 
 		Engine(EngineMode mode, const char* appName, GLFWwindow* window, size_t maxUIWindows) :
 				m_Mode(UpdateEngineInstance(this, mode)),
@@ -6791,57 +6999,6 @@ outColor = pc.c_Color;
 				m_World(m_Renderer)
 		{
 			Input input(window);
-
-			static constexpr uint32_t quad_vertex_count = 4;
-
-			static constexpr Vertex quad_vertices[quad_vertex_count] {
-				{
-					.m_Position { -1.0f, 1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, 1.0f },
-					.m_UV { 0.0f, 1.0f },
-				},
-				{
-					.m_Position { 1.0f, 1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, 1.0f },
-					.m_UV { 1.0f, 1.0f },
-				},
-				{
-					.m_Position { -1.0f, -1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, 1.0f },
-					.m_UV { 0.0f, 0.0f },
-				},
-				{
-					.m_Position { 1.0f, -1.0f, 0.0f },
-					.m_Normal { 0.0f, 0.0f, 1.0f },
-					.m_UV { 1.0f, 0.0f },
-				},	
-			};
-
-			static constexpr uint32_t quad_index_count = 6;
-
-			static constexpr uint32_t quad_indices[quad_index_count] {
-				3, 2, 0,
-				1, 3, 0,
-			};
-
-			static constexpr Vertex2D quad_vertices_2D[quad_vertex_count] {
-				{
-					.m_Position { -1.0f, 1.0f, 0.0f },
-					.m_UV { 0.0f, 0.0f },
-				},
-				{
-					.m_Position { 1.0f, 1.0f, 0.0f },
-					.m_UV { 1.0f, 0.0f },
-				},
-				{
-					.m_Position { -1.0f, -1.0f, 0.0f },
-					.m_UV { 0.0f, 1.0f },
-				},
-				{
-					.m_Position { 1.0f, -1.0f, 0.0f },
-					.m_UV { 1.0f, 1.0f },
-				},
-			};
 
 			if (!m_StaticQuadMesh.CreateBuffers(quad_vertex_count, quad_vertices, quad_index_count, quad_indices)) {
 				CriticalError(ErrorOrigin::Engine, 
@@ -6909,6 +7066,15 @@ outColor = pc.c_Color;
 
 		const StaticMesh& GetQuadMesh() const {
 			return m_StaticQuadMesh;
+		}
+
+		static constexpr void GetQuadMesh(Array<Vertex, quad_vertex_count>& outVertices, Array<uint32_t, quad_index_count>& outIndices) {
+			for (uint32_t i = 0; i < quad_vertex_count; i++) {
+				outVertices[i] = quad_vertices[i];
+			}
+			for (uint32_t i = 0; i < quad_index_count; i++) {
+				outIndices[i] = quad_indices[i];
+			}
 		}
 
 		World& LoadWorld(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, 
