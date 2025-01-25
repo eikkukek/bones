@@ -190,7 +190,23 @@ int main() {
 	UI.AddEntity(&element);
 	UI.AddEntity(&inputText);
 
-	World::Ground::CreateInfo groundInfo {};
+	Array<Vertex, 4> quadVertices;
+	Array<uint32_t, 6> quadIndices;
+
+	Engine::GetQuadMesh(quadVertices, quadIndices);
+
+	LogicMesh logicQuadMesh(quadVertices, quadIndices);
+
+	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), -pi / 4).AsMat4();
+	groundTransform[0] *= 10.0f;
+	groundTransform[1] *= 10.0f;
+	groundTransform[2] *= 10.0f;
+	groundTransform[3] = { 0.0f, -1.0f, 0.0f, 1.0f };
+	
+	World::Ground::CreateInfo groundInfo {
+		.m_LogicMesh = logicQuadMesh,
+		.m_Transform = groundTransform,
+	};
 
 	World::Obstacle::CreateInfo obstacleInfo {
 		.m_Position = {},
@@ -219,14 +235,8 @@ int main() {
 
 	MeshData groundMesh = engine.GetQuadMesh().GetMeshData();
 
-	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), -pi / 2).AsMat4();
-	groundTransform[0] *= 10.0f;
-	groundTransform[1] *= 10.0f;
-	groundTransform[2] *= 10.0f;
-	groundTransform[3] = { 0.0f, 1.0f, 0.0f, 1.0f };
-
-	//auto groundRenderData = world.AddRenderData(grounds[0], groundTransform, groundMesh);
-	//(*groundRenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
+	auto groundRenderData = world.AddRenderData(grounds[0], groundTransform, groundMesh);
+	(*groundRenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 
 	Obj cubeObj{};
 	FILE* fileStream = fopen("resources\\meshes\\cube.obj", "r");
