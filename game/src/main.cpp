@@ -22,23 +22,26 @@ public:
 				Input::ReadKeyValue(Key::W) - Input::ReadKeyValue(Key::S)) * (5 * Time::DeltaTime());
 	}
 
-	static void MoveCallback(const engine::Creature& creature, const engine::Vec3& position, const engine::Vec3& deltaPosition) {
+	static void MoveCallback(const engine::Creature& creature, const engine::Vec3& position, const engine::Vec3& deltaPositio) {
 		using namespace engine;
 		s_Instance->m_RenderData.m_Val->m_Transform[3] = Vec4(position, 1.0f);
 	}
 
-	static void CameraFollowCallback(const engine::Creature& creature, engine::Vec3& outCameraPosition, engine::Vec3& outCameraLookAt) {
+	static void CameraFollowCallback(const engine::Creature& creature, engine::Vec3& outCameraPosition, engine::Vec3& outCameraLookAt,
+		uint32_t directionalLightCount, engine::UnidirectionalLight directionalLights[]) {
 		using namespace engine;
 		const engine::Vec3& creaturePos = creature.GetPosition();
 		static const Vec3 cameraOffset(20.0f, 20.0f, -20.0f);
 		static const Vec3 lookAtOffset(0.0f, 0.0f, 10.0f);
+		static const Vec3 lightOffset(50.0f, 50.0f, 2.0f);
 		outCameraPosition = creaturePos + cameraOffset;
 		outCameraLookAt = creaturePos + lookAtOffset;
+		directionalLights[0].SetViewMatrix(Mat4::LookAt(creaturePos + lightOffset, Vec3::Up(), creaturePos));
 	}
 
 	Player(engine::World& world, engine::StaticMesh& mesh) 
 		: m_World(world), 
-			m_Creature(world.AddCreature({ 3.0f, 0.0f, 0.0f }, 
+			m_Creature(world.AddCreature({ 3.0f, 0.0f, 0.0f }, 2.0f,
 				{ 
 					.m_LocalPosition {}, 
 					.m_Type { engine::Collider::Type::Pole },
@@ -198,9 +201,9 @@ int main() {
 	LogicMesh logicQuadMesh(quadVertices, quadIndices);
 
 	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), -pi / 4).AsMat4();
-	groundTransform[0] *= 10.0f;
-	groundTransform[1] *= 10.0f;
-	groundTransform[2] *= 10.0f;
+	groundTransform[0] *= 100.0f;
+	groundTransform[1] *= 100.0f;
+	groundTransform[2] *= 100.0f;
 	groundTransform[3] = { 0.0f, -1.0f, 0.0f, 1.0f };
 	
 	World::Ground::CreateInfo groundInfo {
