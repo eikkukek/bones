@@ -1686,16 +1686,17 @@ namespace engine {
 		Vec3 m_LocalPosition{};
 		const Vec3& m_BodyPosition;
 		const float& m_BodyYRotation;
+		const Vec3& m_BodyVelocity;
 
 	public:
 
-		Collider(Vec3& bodyPosition, float& bodyYRotation, const CreateInfo& info) 
-			: m_BodyPosition(bodyPosition), m_BodyYRotation(bodyYRotation), 
+		Collider(Vec3& bodyPosition, float& bodyYRotation, Vec3& bodyVelocity, const CreateInfo& info) 
+			: m_BodyPosition(bodyPosition), m_BodyYRotation(bodyYRotation), m_BodyVelocity(bodyVelocity),
 				m_LocalPosition(info.m_LocalPosition), m_Type(info.m_Type), u_Collider(info.m_Type, info.u_TypeInfo) {}
 
-		Collider(Vec3& bodyPosition, float& bodyYRotation, Collider&& other) 
-			: m_Type(other.m_Type), m_BodyYRotation(bodyYRotation), u_Collider(other.u_Collider), m_LocalPosition(other.m_LocalPosition),
-				m_BodyPosition(bodyPosition) {
+		Collider(Vec3& bodyPosition, float& bodyYRotation, Vec3& bodyVelocity, Collider&& other) 
+			: m_Type(other.m_Type), u_Collider(other.u_Collider), m_LocalPosition(other.m_LocalPosition),
+				m_BodyYRotation(bodyYRotation), m_BodyPosition(bodyPosition), m_BodyVelocity(other.m_BodyVelocity) {
 			other.~Collider();
 		}
 
@@ -1703,6 +1704,44 @@ namespace engine {
 		Collider(Collider&& other) = delete;
 
 	public:
+
+		Box<float> GetBoundingBox() const {
+			if (m_Type == Type::Fence) {
+				const Fence& fence = u_Collider.m_Fence;
+				Vec3 pos = m_BodyPosition + m_LocalPosition;
+				Box<float> result {
+					.m_Min { float_max, float_max, pos.y - fence.m_HalfDimensions.y },
+					.m_Max { float_min, float_min, pos.y + fence.m_HalfDimensions.y },
+				};
+				float yRot = m_BodyYRotation + fence.m_YRotation;
+				Vec2 vecs[4] {
+					pos + Vec2::Right(fence.m_HalfDimensions.x).Rotated(yRot),
+					pos + Vec2::Left(fence.m_HalfDimensions.x).Rotated(yRot),
+					pos + Vec2::Up(fence.m_HalfDimensions.z).Rotated(yRot),
+					pos + Vec2::Down(fence.m_HalfDimensions.z).Rotated(yRot),
+				};
+				for (uint32_t i = 0; i < 4; i++) {
+					Vec2& vec = vecs[i];
+					Vec3& min = result.m_Min;
+					min.x = Min(vec.x, min.x);
+					min.z = Min(vec.y, min.z);
+					Vec3& max = result.m_Max;
+					max.x = Max(vec.x, max.x);
+					max.z = Max(vec.y, max.z);
+				}
+				return result;
+			}
+			else if (m_Type == Type::Pole) {
+				const Pole& pole = u_Collider.m_Pole;
+				Vec3 pos = m_BodyPosition + m_LocalPosition;
+				Box<float> result {
+					.m_Min { pos.x - pole.m_Radius, pos.z - pole.m_Radius, pos.y - pole.m_HalfHeight },
+					.m_Max { pos.x + pole.m_Radius, pos.z + pole.m_Radius, pos.y + pole.m_HalfHeight },
+				};
+				return result;
+			}
+			return {};
+		}
 
 		static bool PoleToStaticPoleCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
 			const Pole& aPole = a.u_Collider.m_Pole;
@@ -1758,9 +1797,10 @@ namespace engine {
 						bFence.m_HalfDimensions.y,
 					},
 				};
-				Mat3 rotationMatrix = Quaternion::AxisRotation(Vec3::Forward(), bFence.m_YRotation + b.m_BodyYRotation).AsMat3();
-				Vec3 aPosRelRotated = (Vec3)aPosRel * rotationMatrix;
-				if (boundingRect.IsPointInside(aPosRel)) {
+				float bYRotation = b.m_BodyYRotation + bFence.m_YRotation;
+				Vec2 aPosRelRotated = aPosRel.Rotated(bYRotation);
+				if (boundingRect.IsPointInside(aPosRelRotated)) {
+					/*
 					float val = aPosRelRotated.y - boundingRect.m_Min.y;
 					float min = val;
 					bool xClosest = false;
@@ -1789,6 +1829,10 @@ namespace engine {
 						Vec2 pushBack2D = Vec3(0.0f, sign * (abs(min) + aPole.m_Radius), 0.0f) * invRot;
 						outAPushBack = Vec3(-pushBack2D.x, 0.0f, -pushBack2D.y);
 					}
+					*/
+					float bTop = b.m_BodyPosition.y + b.m_LocalPosition.y + bFence.m_HalfDimensions.y;
+					float aBottom = a.m_BodyPosition.y + b.m_LocalPosition.y - aPole.m_HalfHeight;
+					outAPushBack = Vec3(0.0f, bTop - aBottom, 0.0f);
 					return true;
 				}
 				else {
@@ -1799,9 +1843,11 @@ namespace engine {
 					float diffSqrMag = diff.SqrMagnitude();
 					if (diffSqrMag < aPole.m_Radius * aPole.m_Radius) {
 						float diffMag = sqrt(diffSqrMag);
-						Mat3 invRot = Quaternion::AxisRotation(Vec3::Forward(), - (bFence.m_YRotation + b.m_BodyYRotation)).AsMat3();
-						diff = Vec3(diff) * invRot;
-						outAPushBack = Vec3(diff.x / diffMag, 0.0f, diff.y / diffMag) * (aPole.m_Radius - diffMag);
+						if (diffMag == 0) {
+							return false;
+						}
+						diff = diff.Rotated(-bYRotation);
+						outAPushBack = Vec3(diff.x / diffMag, 0.0f, diff.y / diffMag) * (diffMag - aPole.m_Radius);
 						return true;
 					}
 				}
@@ -1809,7 +1855,7 @@ namespace engine {
 			return false;
 		}
 
-		static bool FenceToStaticFenceCollides(const Collider& a, const Vec3& aVelocity, const Collider& b, Vec3& outAPushBack) {
+		static bool FenceToStaticFenceCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
 
 			const Fence& aFence = a.u_Collider.m_Fence;
 			const Fence& bFence = b.u_Collider.m_Fence;
@@ -1969,7 +2015,7 @@ namespace engine {
 				vec2 = aLines[1].m_Direction * aFence.m_HalfDimensions.z;
 				Vec2 vec4 = (vec2 - vec1 * sign) * sign;
 
-				float threshold = aVelocity.SqrMagnitude() / 2;
+				float threshold = a.m_BodyVelocity.SqrMagnitude() / 2;
 
 				if (vec1.SqrMagnitude() < vec2.SqrMagnitude()) {
 					min = Min(min, vec4);
@@ -1992,10 +2038,10 @@ namespace engine {
 			return false;
 		}
 
-		static bool ColliderToStaticColliderCollides(const Collider& a, const Vec3& aVelocity, const Collider& b, Vec3& outAPushBack) {
+		static bool ColliderToStaticColliderCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
 			if (a.m_Type == Type::Fence) {
 				if (b.m_Type == Type::Fence) {
-					return FenceToStaticFenceCollides(a, aVelocity, b, outAPushBack);
+					return FenceToStaticFenceCollides(a, b, outAPushBack);
 				}
 			}
 			if (a.m_Type == Type::Pole) {
@@ -2145,6 +2191,7 @@ namespace engine {
 				for (uint32_t j = 0; j < 3; j++) {
 					Vec3& pos = transformedFace[j];
 					pos = transform * face[j];
+					pos.y *= -1;
 					Vec3& max = m_BoundingBox.m_Max;
 					max = {
 						Max(pos.x, max.x),
@@ -5052,10 +5099,10 @@ void main() {
 			}
 		};
 
-		class Ground : public PersistentReferenceHolder<Ground> {
+		class RayTarget : private PersistentReferenceHolder<RayTarget> {
 
 			friend class World;
-			friend class DynamicArray<Ground>;
+			friend class DynamicArray<RayTarget>;
 
 		public:
 			
@@ -5070,14 +5117,14 @@ void main() {
 			LogicMesh m_LogicMesh;
 			Mat4 m_Transform;
 
-			Ground(uint64_t objectID, const CreateInfo& createInfo) 
-				: PersistentReferenceHolder<Ground>() , m_ObjectID(objectID), 
+			RayTarget(uint64_t objectID, const CreateInfo& createInfo) 
+				: PersistentReferenceHolder<RayTarget>() , m_ObjectID(objectID), 
 					m_LogicMesh(createInfo.m_LogicMesh), m_Transform(createInfo.m_Transform) {
 				m_LogicMesh.UpdateTransform(m_Transform);
 			}
 			
-			Ground(const Ground &) = delete;
-			Ground(Ground&&) = default;
+			RayTarget(const RayTarget &) = delete;
+			RayTarget(RayTarget&&) = default;
 
 		public:
 
@@ -5099,7 +5146,7 @@ void main() {
 			}
 		};
 
-		class Obstacle : public PersistentReferenceHolder<Obstacle> {
+		class Obstacle : private PersistentReferenceHolder<Obstacle> {
 
 			friend class World;
 			friend class DynamicArray<Obstacle>;
@@ -5112,158 +5159,131 @@ void main() {
 				Collider::CreateInfo m_ColliderInfo{};
 			};
 
+			Box<float> GetBoundingBox() const {
+				return m_Collider.GetBoundingBox();
+			}
+
 		private:
 
 			uint64_t m_ObjectID;
 			Vec3 m_Position;
 			float m_YRotation;
+			Vec3 m_Velocity;
 			Collider m_Collider;
 
 			Obstacle(uint64_t objectID, const CreateInfo& info) noexcept 
 				: PersistentReferenceHolder<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position),
-					m_YRotation(info.m_YRotation), m_Collider(m_Position, m_YRotation, info.m_ColliderInfo) {}
+					m_YRotation(info.m_YRotation), m_Collider(m_Position, m_YRotation, m_Velocity, info.m_ColliderInfo) {}
 
 			Obstacle(const Obstacle&) = delete;
 
 			Obstacle(Obstacle&& other) noexcept : m_ObjectID(other.m_ObjectID),
 				m_Position(other.m_Position), m_YRotation(other.m_YRotation), 
-					m_Collider(m_Position, m_YRotation, std::move(other.m_Collider)) {}
+					m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}
 
-			bool Collides(const Collider& collider, const Vec3& colliderVelocity, Vec3& outColliderPushBack) const {
-				return Collider::ColliderToStaticColliderCollides(collider, colliderVelocity, m_Collider, outColliderPushBack);
+			bool Collides(const Collider& collider, Vec3& outColliderPushBack) const {
+				return Collider::ColliderToStaticColliderCollides(collider, m_Collider, outColliderPushBack);
 			}
 		};
 
-		class Chunk {
+		class Area : private PersistentReferenceHolder<Area> {
 
 			friend class World;
-			friend class DynamicArray<Chunk>;
+			friend class DynamicArray<Area>;
 
-			const Rect<float> m_BoundingRect;
-			const Vec2_T<uint32_t> m_ChunkMatrixCoords;
-			DynamicArray<PersistentReference<Ground>> m_Grounds{};
-			DynamicArray<PersistentReference<Obstacle>> m_Obstacles{};
+		public:
+
+			World& m_World;
+			const uint64_t m_ObjectID;
+
+		private:
+
+			Box<float> m_BoundingBox{};
+			DynamicArray<Obstacle> m_StaticObstacles{};
+			DynamicArray<RayTarget> m_RayTargets{};
 			
-			Chunk(Vec2_T<uint32_t> chunkCoords, Vec2 min, Vec2 dimensions) noexcept 
-				: m_BoundingRect { .m_Min { min }, .m_Max { min + dimensions } }, m_ChunkMatrixCoords(chunkCoords), m_Grounds() {}
+			Area(World& world, uint64_t objectID, const DynamicArray<Obstacle::CreateInfo>& staticObstacleInfos,
+					const DynamicArray<RayTarget::CreateInfo> rayTargetInfos) noexcept
+				: m_World(world), m_ObjectID(objectID) {
 
-			bool IsPointInside(const Vec3& point) const {
-				return m_BoundingRect.IsPointInside(Vec2(point.x, point.z));
+				m_StaticObstacles.Reserve(staticObstacleInfos.Size());
+				for (const Obstacle::CreateInfo& info : staticObstacleInfos) {
+					Obstacle& obstacle = m_StaticObstacles.EmplaceBack(m_World.m_NextObjectID++, info);
+				}
+
+				m_RayTargets.Reserve(rayTargetInfos.Size());
+				for (const RayTarget::CreateInfo& info : rayTargetInfos) {
+					m_RayTargets.EmplaceBack(m_World.m_NextObjectID++, info);
+				}
 			}
 
-			const bool FindHeight(const Vec3& position, float rayLength, float& outHeight) const {
-				Ray ray {
-					.m_Origin = position,
-					.m_Direction = Vec3::Down(),
-					.m_Length = rayLength,
-				};
-				float maxHeight = float_min;
-				for (const PersistentReference<Ground>& ref : m_Grounds) {
-					assert(!ref.IsNull());
-					const Ground& ground = *ref;
-					ground.m_PersistentReferences.Data();
-					if (ground.AABBCheck(position) || ground.AABBCheck(ray)) {
+			bool IsPointInside(const Vec3& point) const {
+				return m_BoundingBox.IsPointInside(Vec2(point.x, point.z));
+			}
+
+			const bool CastRay(const Ray& ray, RayHitInfo& outInfo) const {
+				float min_distance = float_max;
+				for (const RayTarget& target : m_RayTargets) {
+					if (target.AABBCheck(ray)) {
 						RayHitInfo hitInfo;
-						if (ground.RayCheck(ray, hitInfo)) {
-							maxHeight = Max(hitInfo.m_HitPosition.y, maxHeight);
+						if (target.RayCheck(ray, hitInfo) && min_distance > hitInfo.m_Distance) {
+							min_distance = hitInfo.m_Distance;
+							outInfo = hitInfo;
 						}
 					}
 				}
-				outHeight = maxHeight;
-				return maxHeight != float_min;
+			}
+
+			const bool CollisionCheck(Collider& collider, Vec3& outPushBack) const {
+				for (const Obstacle& obstacle : m_StaticObstacles) {
+					if (Collider::ColliderToStaticColliderCollides(collider, obstacle.m_Collider, outPushBack)) {
+					}
+				}
 			}
 		};
 
-		class Creature : public PersistentReferenceHolder<Creature> {
+		class UnidirectionalLight;
+
+		class Body : private PersistentReferenceHolder<Body> {
 
 			friend class World;
-			friend class DynamicArray<Creature>;
-
-		public:
-
-			typedef Vec3 (*MovementVectorUpdateFun)(const Creature& creature);
-			typedef void (*MoveCallbackFun)(const Creature& creature, const Vec3& position, const Vec3& deltaPosition);
-			typedef void (*CameraFollowCallbackFun)(const Creature& creature, Vec3& outCameraPos, Vec3& outCameraLookAt);
+			friend class DynamicArray<Body>;
 
 		private:	
 
-			const Chunk* m_Chunk;
+			const PersistentReference<Area> m_Area;
 			Vec3 m_Position;
+			Vec3 m_Velocity;
 			float m_YRotation;
+			float m_Height;
 			const uint64_t m_ObjectID;
 			Collider m_Collider;
 
-			Creature(uint64_t objectID, const Vec3& position, const Chunk* chunk, const Collider::CreateInfo& colliderInfo)
-				: PersistentReferenceHolder<Creature>(), m_Position(position), m_Chunk(chunk), m_ObjectID(objectID),
-					m_Collider(m_Position, m_YRotation, colliderInfo) {
-				assert(chunk);
-				float height;
-				if (chunk->FindHeight(position, 2.0f, height)) {
-					m_Position.y = height;
-				}
+			Body(uint64_t objectID, const Vec3& position, float height, Area& area, const Collider::CreateInfo& colliderInfo)
+				: PersistentReferenceHolder<Body>(), m_Area(area), m_Position(position), m_Velocity(0), m_ObjectID(objectID),
+					m_Height(height), m_Collider(m_Position, m_YRotation, m_Velocity, colliderInfo) {
 			}
 
-			Creature(const Creature&) = delete;
+			Body(const Body&) = delete;
 
-			Creature(Creature&& other) noexcept 
-				: m_Chunk(other.m_Chunk), m_Position(other.m_Position), m_YRotation(other.m_YRotation),
-					m_ObjectID(other.m_ObjectID), m_Collider(m_Position, m_YRotation, std::move(other.m_Collider)) {}
+			Body(Body&& other) noexcept 
+				: m_Area(other.m_Area), m_Position(other.m_Position), m_YRotation(other.m_YRotation),
+					m_ObjectID(other.m_ObjectID), m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}
 
 		public:
-
-			MovementVectorUpdateFun m_MovementVectorUpdate;
-			MoveCallbackFun m_MoveCallback;
-			CameraFollowCallbackFun m_CameraFollowCallback;
 
 			const Vec3& GetPosition() const {
 				return m_Position;
 			}
 
-		private:
-
-			Vec3 GetMovementVector() const {
-				if (m_MovementVectorUpdate) {
-					return m_MovementVectorUpdate(*this);
-				}
-				return {};
-			}
-
 			void Move(const Vec3& position) {
-				assert(m_Chunk);
+				if (m_Area.IsNull()) {
+					PrintError(ErrorOrigin::GameLogic,
+						"area was null when attempting to move body (in function World::Body::Move)!");
+					return;
+				}
 				Vec3 deltaPos = position - m_Position;
-				Vec2_T<bool> axisBlocked{};
 				m_Position += deltaPos;
-				/*
-				const Ground* ground = m_Chunk->FindGround(m_Position, deltaPos, axisBlocked);
-				if (ground) {
-					m_Position.x = !axisBlocked.x ? position.x : m_Position.x;
-					m_Position.z = !axisBlocked.y ? position.z : m_Position.z; 
-					float height = ground->GetHeightAtPosition(m_Position);
-					assert(height != std::numeric_limits<float>::max());
-					m_Position.y = height;
-				}
-				*/
-				float height;
-				if (m_Chunk->FindHeight(m_Position, 10.0f, height)) {
-					m_Position.y = height + 1.0f;
-				}
-				for (const PersistentReference<Obstacle>& obstacle : m_Chunk->m_Obstacles) {
-					assert(obstacle.m_Val);
-					Vec3 pushBack;
-					if (obstacle.m_Val->Collides(m_Collider, deltaPos, pushBack)) {
-						Vec2_T<bool> deltaDirSameAsPushBack = { 
-							deltaPos.x > 0 && pushBack.x > 0 || deltaPos.x < 0 && pushBack.x < 0,
-							deltaPos.z > 0 && pushBack.z > 0 || deltaPos.z < 0 && pushBack.z < 0,
-						};
-						m_Position -= Vec3(
-							deltaDirSameAsPushBack.x && axisBlocked.x ? 0.0f : pushBack.x, 0.0f, 
-							deltaDirSameAsPushBack.y && axisBlocked.y ? 0.0f : pushBack.z
-						);
-					}
-				}
-				if (m_MoveCallback) {
-					m_MoveCallback(*this, m_Position, deltaPos);
-				}
 			}
 		};
 
@@ -5336,6 +5356,8 @@ void main() {
 
 			friend class World;
 
+		public:
+
 			struct Matrices {
 
 				Mat4 m_Projection { 1 };
@@ -5373,6 +5395,10 @@ void main() {
 
 			World& m_World;
 
+			const uint64_t m_ObjectID;
+
+		private:
+
 			const Type m_Type;
 
 			DynamicArray<VkImageView> m_DepthImageViews{};
@@ -5390,8 +5416,8 @@ void main() {
 			VkSampler m_ShadowMapSampler{};
 			Renderer::Buffer m_FragmentBuffer;
 
-			UnidirectionalLight(World& world, Type type, Vec2_T<uint32_t> shadowMapResolution) 
-				: m_World(world), m_ShadowMapResolution(shadowMapResolution), m_Type(type),
+			UnidirectionalLight(World& world, uint64_t objectID, Type type, Vec2_T<uint32_t> shadowMapResolution) 
+				: m_World(world), m_ObjectID(objectID), m_ShadowMapResolution(shadowMapResolution), m_Type(type),
 					m_FragmentBuffer(world.m_Renderer) {}
 
 			UnidirectionalLight(const UnidirectionalLight&) = delete;
@@ -5453,6 +5479,24 @@ void main() {
 				renderer.DestroyDescriptorPool(m_ShadowMapDescriptorPool);
 				renderer.DestroySampler(m_ShadowMapSampler);
 				m_FragmentBuffer.Terminate();
+			}
+
+			FragmentBufferDirectional& GetDirectionalBuffer() {
+				assert(m_FragmentMap);
+				return *(FragmentBufferDirectional*)(m_FragmentMap);
+			}
+
+		public:
+
+			void SetViewMatrix(const Mat4& matrix) {
+				if (m_Type == Type::Directional) {
+					m_ViewMatrices.m_View = matrix;
+					auto& buf = GetDirectionalBuffer();
+					buf.m_ViewMatrix = m_ViewMatrices.GetLightViewMatrix();
+					buf.m_Direction = m_ViewMatrices.GetDirection();
+				}
+				else {
+				}
 			}
 
 			void DepthDraw(const Renderer::DrawData& drawData) const {
@@ -5657,7 +5701,9 @@ void main() {
 						m_DepthImageViews.Resize(imageCount);
 					}
 					if (m_ShadowMapSampler == VK_NULL_HANDLE) {
-						m_ShadowMapSampler = renderer.CreateSampler(Renderer::GetDefaultSamplerInfo());
+						VkSamplerCreateInfo samplerInfo = Renderer::GetDefaultSamplerInfo();
+						samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+						m_ShadowMapSampler = renderer.CreateSampler(samplerInfo);
 						if (m_ShadowMapSampler == VK_NULL_HANDLE) {
 							CriticalError(ErrorOrigin::Renderer, 
 								"failed to create shadow map sampler for directional light (function Renderer::CreateSampler in function World::DirectionalLight::SwapchainCreateCallback)!");
@@ -5720,7 +5766,7 @@ void main() {
 
 			StaticMesh m_Mesh;
 
-			DynamicArray<Tuple<PersistentReference<Ground>, Mat4>> m_Grounds{};
+			DynamicArray<Tuple<PersistentReference<RayHitInfo>, Mat4>> m_RayTargets{};
 			DynamicArray<Tuple<PersistentReference<Obstacle>, Mat4>> m_Obstacles{};
 
 			StaticMeshFile(Renderer& renderer) : m_Mesh(renderer) {}
@@ -5732,7 +5778,7 @@ void main() {
 			VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
 			VkDescriptorSet m_DescriptorSet = VK_NULL_HANDLE;
 
-			DynamicArray<PersistentReference<Ground>> m_Grounds{};
+			DynamicArray<PersistentReference<RayHitInfo>> m_RayTargets{};
 			DynamicArray<PersistentReference<Obstacle>> m_Obstacles{};
 
 			StaticTextureFile(Renderer& renderer) : m_Texture(renderer) {}
@@ -5745,12 +5791,9 @@ void main() {
 
 		uint64_t m_NextObjectID{};
 		VkDescriptorSet m_NullTextureDescriptorSet{};
-		DynamicArray<Obstacle> m_Obstacles{};
-		DynamicArray<Ground> m_Grounds{};
-		Vec2_T<uint32_t> m_ChunkMatrixSize{};
-		DynamicArray<Chunk> m_ChunkMatrix{};
+		DynamicArray<Area> m_Areas{};
 		Rect<float> m_WorldRect{};
-		DynamicArray<Creature> m_Creatures{};
+		DynamicArray<Body> m_Creatures{};
 		uint64_t m_CameraFollowObjectID = UINT64_MAX;
 		CameraMatricesBuffer* m_CameraMatricesMap = nullptr;
 
@@ -5792,7 +5835,7 @@ void main() {
 		VkImageView m_DefaultAlbedoImageView = VK_NULL_HANDLE;
 
 		World(Renderer& renderer) 
-			: m_Renderer(renderer), m_DirectionalLight(*this, UnidirectionalLight::Type::Directional, { 1024, 1024 }), 
+			: m_Renderer(renderer), m_DirectionalLight(*this, m_NextObjectID++, UnidirectionalLight::Type::Directional, { 1024, 1024 }), 
 				m_CameraMatricesBuffer(m_Renderer), m_DefaultAlbedoTexture(m_Renderer) {}
 
 		World(const World&) = delete;
@@ -5851,7 +5894,7 @@ void main() {
 			m_Renderer.UpdateDescriptorSets(1, &cameraDescriptorSetWrite);
 
 			m_DirectionalLight.Initialize(
-				Mat4::Orthogonal(-10.0f, 10.0f, -10.0f, 10.0f, 0.1f, 100.0f),
+				Mat4::Orthogonal(-40.0f, 40.0f, -40.0f, 40.0f, 0.1f, 500.0f),
 				Mat4::LookAt(Vec3(10.0f, 10.0f, 2.0f), Vec3::Up(), Vec3(0.0f, 0.0f, 0.0f)),
 				Vec3(201.0f / 255.0f, 226.0f / 255.0f, 255.0f / 255.0f));
 
@@ -6173,19 +6216,7 @@ void main() {
 
 	public:
 
-		Vec2_T<bool> IsOnChunkBorder(const Vec3& position) {
-			Vec2 dimensionsHalf = m_WorldRect.Dimensions() / 2;
-			Vec2 pos = Vec2(position.x, position.z) + dimensionsHalf;
-			Vec2 frac(pos.x / m_ChunkDimensions.x, pos.y / m_ChunkDimensions.y);
-			IntVec2 intgr = frac;
-			return { frac.x == (float)intgr.x, frac.y == (float)intgr.y };
-		}
-
-		Creature& AddCreature(const Vec3& position, const Collider::CreateInfo& colliderInfo) {
-			if (!m_ChunkMatrix.Size()) {
-				CriticalError(ErrorOrigin::GameLogic,
-					"attempting to add a creature to an empty world (in function World::AddCreature)!");
-			}
+		Body& AddBody(const Vec3& position, float height, const Collider::CreateInfo& colliderInfo) {
 			Vec3 pos(Clamp(position.x, m_WorldRect.m_Min.x + 0.01f, m_WorldRect.m_Max.x - 0.01f), 0.0f,
 				Clamp(position.z, m_WorldRect.m_Min.y + 0.01f, m_WorldRect.m_Max.y - 0.01f));
 			Vec2_T<bool> isOnBorder = IsOnChunkBorder(position);
@@ -6197,13 +6228,20 @@ void main() {
 			}
 			for (const Chunk& chunk : m_ChunkMatrix) {
 				if (chunk.IsPointInside(pos)) {
-					return m_Creatures.EmplaceBack(m_NextObjectID++, pos, &chunk, colliderInfo);
+					return m_Creatures.EmplaceBack(m_NextObjectID++, pos, height, &chunk, colliderInfo);
 				}
 			}
-			assert(false);
 		}
 
-		void SetCameraFollowCreature(const Creature& creature) {
+		bool RemoveBody(Body& body) {
+			RemoveRenderDatas(creature.m_ObjectID);
+			if (m_CameraFollowObjectID == creature.m_ObjectID) {
+					m_CameraFollowObjectID = UINT64_MAX;
+			}
+			return m_Creatures.Erase(&creature);
+		}
+
+		void SetCameraFollowBody(const Body& body) {
 			m_CameraFollowObjectID = creature.m_ObjectID;
 		}
 
@@ -6246,11 +6284,11 @@ void main() {
 			m_Renderer.DestroyImageView(map.m_ImageView);
 		}
 
-		PersistentReference<RenderData> AddRenderData(const Creature& creature, const Mat4& transform, const MeshData& meshData) {
+		PersistentReference<RenderData> AddRenderData(const Body& body, const Mat4& transform, const MeshData& meshData) {
 			return m_RenderDatas.EmplaceBack(creature.m_ObjectID, transform, meshData);
 		}
 
-		PersistentReference<RenderData> AddRenderData(const Ground& ground, const Mat4& transform, const MeshData& meshData) {
+		PersistentReference<RenderData> AddRenderData(const RayTarget& rayTarget, const Mat4& transform, const MeshData& meshData) {
 			return m_RenderDatas.EmplaceBack(ground.m_ObjectID, transform, meshData);
 		}
 		
@@ -6261,22 +6299,6 @@ void main() {
 		PersistentReference<DebugRenderData> AddDebugRenderData(const Obstacle& obstacle, const Mat4& transform, 
 				const Vec4& wireColor, const MeshData& meshData) {
 			return m_DebugRenderDatas.EmplaceBack(obstacle.m_ObjectID, transform, wireColor, meshData);
-		}
-
-		const DynamicArray<Ground>& GetGrounds() {
-			return m_Grounds;
-		}
-		
-		const DynamicArray<Obstacle>& GetObstacles() {
-			return m_Obstacles;
-		}
-
-		bool RemoveCreature(Creature& creature) {
-			RemoveRenderDatas(creature.m_ObjectID);
-			if (m_CameraFollowObjectID == creature.m_ObjectID) {
-					m_CameraFollowObjectID = UINT64_MAX;
-			}
-			return m_Creatures.Erase(&creature);
 		}
 
 	private:
@@ -6642,7 +6664,7 @@ void main() {
 					if (creature.m_CameraFollowCallback) {
 						Vec3 eye;
 						Vec3 lookAt;
-						creature.m_CameraFollowCallback(creature, eye, lookAt);
+						creature.m_CameraFollowCallback(creature, eye, lookAt, 1, &m_DirectionalLight);
 						m_CameraMatricesMap->m_View = Mat4::LookAt(eye, Vec3::Up(), lookAt);
 					}
 				}
@@ -6905,8 +6927,10 @@ void main() {
 		Vec2_T<bool> BoundsCheck(Vec2_T<uint32_t> chunkMatrixCoords) {
 			return { chunkMatrixCoords.x >= m_ChunkMatrixSize.x, chunkMatrixCoords.y >= m_ChunkMatrixSize.y };
 		}
-		};
 
+	};
+
+	typedef World::UnidirectionalLight UnidirectionalLight;
 
 	enum EngineModeBits {
 		EngineMode_Initialized = 1,
@@ -6942,22 +6966,22 @@ void main() {
 			{
 				.m_Position { -1.0f, 1.0f, 0.0f },
 				.m_Normal { 0.0f, 0.0f, 1.0f },
-				.m_UV { 0.0f, 1.0f },
+				.m_UV { 0.0f, 0.0f },
 			},
 			{
 				.m_Position { 1.0f, 1.0f, 0.0f },
 				.m_Normal { 0.0f, 0.0f, 1.0f },
-				.m_UV { 1.0f, 1.0f },
+				.m_UV { 1.0f, 0.0f },
 			},
 			{
 				.m_Position { -1.0f, -1.0f, 0.0f },
 				.m_Normal { 0.0f, 0.0f, 1.0f },
-				.m_UV { 0.0f, 0.0f },
+				.m_UV { 0.0f, 1.0f },
 			},
 			{
 				.m_Position { 1.0f, -1.0f, 0.0f },
 				.m_Normal { 0.0f, 0.0f, 1.0f },
-				.m_UV { 1.0f, 0.0f },
+				.m_UV { 1.0f, 1.0f },
 			},	
 		};
 
