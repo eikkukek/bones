@@ -32,8 +32,20 @@ namespace engine {
 
 		static constexpr inline size_t size = 2;
 
+		static constexpr Vec2_T Right(T num = Cast(1)) {
+			return Vec2_T(num, Cast(0));
+		}
+
+		static constexpr Vec2_T Left(T num = Cast(1)) {
+			return Vec2_T(-num, Cast(0));
+		}
+
 		static constexpr Vec2_T Up(T num = Cast(1)) {
 			return Vec2_T(Cast(0), num);
+		}
+
+		static constexpr Vec2_T Down(T num = Cast(1)) {
+			return Vec2_T(Cast(0), -num);
 		}
 
 		T x, y;
@@ -431,7 +443,7 @@ namespace engine {
 			Vec3_T<T> pos = eyePosition;
 			pos.y = -pos.y;
 			Vec3_T<T> front = (Vec3(lookAtPosition.x, -lookAtPosition.y, lookAtPosition.z) - pos).Normalized();
-			Vec3_T<T> right = Cross(upDirection.Normalized(), front).Normalized();
+			Vec3_T<T> right = Cross(upDirection, front).Normalized();
 			Vec3_T<T> up = Cross(front, right).Normalized();
 			Mat4_T result{};
 			result[0].x = right.x;
