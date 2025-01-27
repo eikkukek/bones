@@ -1667,14 +1667,9 @@ namespace engine {
 					default:
 						return false;
 				}
-				char c = fgetc(fileStream);
-				while (c != ' ' || c != '\n') {
-					c = fgetc(fileStream);
-				}
-				if (c != '}') {
+				if (FileHandler::Skip(fileStream, Array<char, 1> { '}' }) == EOF) {
 					PrintError(ErrorOrigin::FileParsing, 
 						"missing '}' when parsing collider (function Collider::CreateInfo::FromFile)!");
-					return false;
 				}
 				return true;
 			}
@@ -5200,25 +5195,21 @@ void main() {
 		private:
 
 			Box<float> m_BoundingBox{};
-			DynamicArray<Obstacle> m_StaticObstacles{};
+			DynamicArray<Obstacle> m_Obstacles{};
 			DynamicArray<RayTarget> m_RayTargets{};
 			
-			Area(World& world, uint64_t objectID, const DynamicArray<Obstacle::CreateInfo>& staticObstacleInfos,
-					const DynamicArray<RayTarget::CreateInfo> rayTargetInfos) noexcept
-				: m_World(world), m_ObjectID(objectID) {
-
-				m_StaticObstacles.Reserve(staticObstacleInfos.Size());
-				for (const Obstacle::CreateInfo& info : staticObstacleInfos) {
-					Obstacle& obstacle = m_StaticObstacles.EmplaceBack(m_World.m_NextObjectID++, info);
-				}
-
-				m_RayTargets.Reserve(rayTargetInfos.Size());
-				for (const RayTarget::CreateInfo& info : rayTargetInfos) {
-					m_RayTargets.EmplaceBack(m_World.m_NextObjectID++, info);
-				}
-			}
+			Area(World& world, uint64_t objectID) noexcept
+				: m_World(world), m_ObjectID(objectID) {}
 
 		public:
+
+			PersistentReference<Obstacle> AddObstacle(const Obstacle::CreateInfo& info) {
+				return m_StaticObstacles.EmplaceBack(m_World.m_NextObjectID++, info);
+			}
+
+			PersistentReference<RayTarget> AddRayTarget(const RayTarget::CreateInfo& info) {
+				return m_RayTargets.EmplaceBack(m_World.m_NextObjectID++, info);
+			}
 
 			bool IsPointInside(const Vec3& point) const {
 				return m_BoundingBox.IsPointInside(Vec2(point.x, point.z));
@@ -5315,21 +5306,29 @@ void main() {
 			virtual void Terminate() = 0;
 		};
 
+		enum RenderDataFlagBits {
+			RenderDataFlag_NoSave = 1,
+		};
+
+		typedef uint32_t RenderDataFlags;
+
 		struct RenderData : PersistentReferenceHolder<RenderData> {
 
 			friend class World;
 
 		private:
 
-			const uint64_t m_ObjectID;
+			RenderDataFlags m_FLags;
 
 		public:
+
+			const uint64_t m_ObjectID;
 
 			VkDescriptorSet m_AlbedoTextureDescriptorSet = VK_NULL_HANDLE;
 			Mat4 m_Transform{};
 			MeshData m_MeshData{};
 
-			RenderData(uint64_t objectID, const Mat4& transform, const MeshData& meshData) noexcept 
+			RenderData(uint64_t objectID, RenderDataFlags flags, const Mat4& transform, const MeshData& meshData) noexcept 
 				: PersistentReferenceHolder<RenderData>(), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
 
 			RenderData(const RenderData&) = delete;
@@ -5795,20 +5794,31 @@ void main() {
 
 			StaticMesh m_Mesh;
 
-			DynamicArray<Tuple<PersistentReference<RayTarget>, Mat4>> m_RayTargets{};
-			DynamicArray<Tuple<PersistentReference<Obstacle>, Mat4>> m_Obstacles{};
-
 			StaticMeshFile(Renderer& renderer) : m_Mesh(renderer) {}
+
+			bool LoadMesh(const String& fileName) {
+				FILE* fileStream = fopen(fileName.CString(), "r");
+				if (!fileStream) {
+					PrintError(ErrorOrigin::FileParsing, 
+						"failed to open mesh file (function fopen in function World::StaticMeshFile::LoadMesh)!");
+					fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+						"mesh that failed to load {}", fileName.CString());
+				}
+				MeshFileType type = GetMeshFileType(fileName);
+				if (type == MeshFileType::Obj) {
+					Obj obj{};
+					obj.Load(fileStream);
+				}
+				else {
+					return false;
+				}
+			}
 		};
 
 		struct StaticTextureFile {
-	
 			StaticTexture m_Texture;
 			VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
 			VkDescriptorSet m_DescriptorSet = VK_NULL_HANDLE;
-
-			DynamicArray<PersistentReference<RayTarget>> m_RayTargets{};
-			DynamicArray<PersistentReference<Obstacle>> m_Obstacles{};
 
 			StaticTextureFile(Renderer& renderer) : m_Texture(renderer) {}
 		};
@@ -6021,7 +6031,7 @@ void main() {
 			return m_Areas.EmplaceBack(*this, m_NextObjectID++, staticObstacleInfos, rayTargetInfos);
 		}
 
-		int ParseStaticMeshFile(FILE* fileStream, StaticMeshFile** outFile, Mat4& outTransform) {
+		int ParseStaticMesh(FILE* fileStream, StaticMeshFile** outFile, Mat4& outTransform) {
 			assert(outFile);
 			if (FileHandler::Skip(fileStream, Array<char, 2>{ '\n', ' ' }) == EOF) {
 				return EOF;
@@ -6029,8 +6039,9 @@ void main() {
 			String string{};
 			FileHandler::GetLine(fileStream, string);
 			*outFile = m_StaticMeshFiles.Find(string.CString());
-			if (!outFile) {
-				*outFile = m_StaticMeshFiles.Emplace(string.CString(), m_Renderer);
+			if (!*outFile) {
+				auto sm = m_StaticMeshFiles.Emplace(string.CString(), m_Renderer);
+				*outFile = sm;
 			}
 			if (fscanf(fileStream, "%f%f%f%f %f%f%f%f %f%f%f%f %f%f%f%f",
 					&outTransform[0][0], &outTransform[0][1], &outTransform[0][2], &outTransform[0][3],
@@ -6045,7 +6056,7 @@ void main() {
 			return 0;
 		}
 
-		bool LoadObstacle(FILE* fileStream) {
+		bool LoadObstacle(Area& area, FILE* fileStream) {
 			Obstacle::CreateInfo createInfo{};
 			int res = fscanf(fileStream, "{%f%f%f%f\n",
 				&createInfo.m_Position.x, &createInfo.m_Position.y, &createInfo.m_Position.z,
@@ -6060,19 +6071,16 @@ void main() {
 					"failed to parse collider for obstacle (in function Collider::CreateInfo::FromFile in function World::LoadObstacle)!");
 				return false;
 			}
-			Obstacle& obstacle = m_Obstacles.EmplaceBack(m_NextObjectID++, createInfo);
-			char c = fgetc(fileStream);
-			for (; c != '}'; c = fgetc(fileStream)) {
+			PersistentReference<Obstacle> obstacle = area.AddObstacle(createInfo);
+			while (true) {
+				char c = FileHandler::Skip(fileStream, Array<char, 2> { '}', '{' });
 				if (c == EOF) {
 					PrintError(ErrorOrigin::FileParsing, 
 						"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
 					return false;
 				}
-				if (c == ' ' || c == '\n') {
-					continue;
-				}
 				if (c == '{') {
-					for (; c != '}'; c = fgetc(fileStream)) {
+					while (true) {
 						if (c == EOF) {
 							PrintError(ErrorOrigin::FileParsing, 
 								"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
@@ -6090,7 +6098,7 @@ void main() {
 						if (!strcmp(buf, "SM")) {
 							StaticMeshFile* sm;
 							Mat4 transform;
-							res = ParseStaticMeshFile(fileStream, &sm, transform);
+							res = ParseStaticMesh(fileStream, &sm, transform);
 							if (res == EOF) {
 								PrintError(ErrorOrigin::FileParsing, 
 									"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
@@ -6102,7 +6110,7 @@ void main() {
 								return false;
 							}
 							assert(sm);
-							sm->m_Obstacles.PushBack({ obstacle, transform });
+							AddRenderData(0, *obstacle, transform, sm->m_Mesh.GetMeshData());
 						}
 					}	
 				}
@@ -6110,26 +6118,24 @@ void main() {
 			return true;
 		}
 
-		bool LoadArea(FILE* fileStream) {
+		Tuple<bool, PersistentReference<Area>> LoadArea(FILE* fileStream) {
 			if (!fileStream) {
 				PrintError(ErrorOrigin::FileParsing, 
 					"attempting to load area with file stream that's null (in function World::LoadArea)!");
-				return false;
+				return { false };
 			}
-			DynamicArray<Obstacle::CreateInfo> obstacleInfos{};
-			DynamicArray<RayTarget::CreateInfo> rayTargetInfos{};
-			uint32_t oCount, rCount;
-			if (fscanf(fileStream, "O count=%u R count=%u", &oc, &rc) != 2) {
+			Area& area = m_Areas.EmplaceBack();
+			uint32_t obstacleCount, rayTargetCount;
+			if (fscanf(fileStream, "O count=%u R count=%u", &obstacleCount, &rayTargetCount) != 2) {
 				PrintError(ErrorOrigin::FileParsing,
 					"failed to load area from file stream due to invalid format t(in function World::LoadArea)");
+				return { false };
 			}
-			obstacleInfos.Reserve(oCount);
-			rayTargetInfos.Reserve(rCount);
 			while (true) {
 				char c = fgetc(fileStream);
 				switch (c) {
 					case 'O':
-						LoadObstacle(fileStream);
+						LoadObstacle(area, fileStream);
 						break;
 					case 'R':
 						break;
@@ -6248,21 +6254,24 @@ void main() {
 			m_Renderer.DestroyImageView(map.m_ImageView);
 		}
 
-		PersistentReference<RenderData> AddRenderData(const Body& body, const Mat4& transform, const MeshData& meshData) {
-			return m_RenderDatas.EmplaceBack(body.m_ObjectID, transform, meshData);
+		PersistentReference<RenderData> AddRenderData(RenderDataFlags flags, const Body& body, 
+				const Mat4& transform, const MeshData& meshData) {
+			return m_RenderDatas.EmplaceBack(body.m_ObjectID, flags, transform, meshData);
 		}
 
-		PersistentReference<RenderData> AddRenderData(const RayTarget& rayTarget, const Mat4& transform, const MeshData& meshData) {
-			return m_RenderDatas.EmplaceBack(rayTarget.m_ObjectID, transform, meshData);
+		PersistentReference<RenderData> AddRenderData(RenderDataFlags flags, const RayTarget& rayTarget, 
+				const Mat4& transform, const MeshData& meshData) {
+			return m_RenderDatas.EmplaceBack(rayTarget.m_ObjectID, flags, transform, meshData);
 		}
 		
-		PersistentReference<RenderData> AddRenderData(const Obstacle& obstacle, const Mat4& transform, const MeshData& meshData) {
-			return m_RenderDatas.EmplaceBack(obstacle.m_ObjectID, transform, meshData);
+		PersistentReference<RenderData> AddRenderData(RenderDataFlags flags, const Obstacle& obstacle, 
+				const Mat4& transform, const MeshData& meshData) {
+			return m_RenderDatas.EmplaceBack(obstacle.m_ObjectID, flags, transform, meshData);
 		}
 
-		PersistentReference<DebugRenderData> AddDebugRenderData(const Obstacle& obstacle, const Mat4& transform, 
-				const Vec4& wireColor, const MeshData& meshData) {
-			return m_DebugRenderDatas.EmplaceBack(obstacle.m_ObjectID, transform, wireColor, meshData);
+		PersistentReference<DebugRenderData> AddDebugRenderData(RenderDataFlags flags, const Obstacle& obstacle, 
+				const Mat4& transform, const Vec4& wireColor, const MeshData& meshData) {
+			return m_DebugRenderDatas.EmplaceBack(obstacle.m_ObjectID, flags, transform, wireColor, meshData);
 		}
 
 	private:
