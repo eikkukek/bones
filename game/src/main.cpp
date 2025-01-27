@@ -2,7 +2,7 @@
 #include "random.hpp"
 #include <chrono>
 
-class Player {
+class Player : public engine::World::Entity {
 public:
 
 	static inline Player* s_Instance = nullptr;
@@ -10,10 +10,11 @@ public:
 	engine::World& m_World;
 	engine::StaticMesh& m_Mesh;
 	engine::Quaternion m_Rotation;
-	engine::PersistentReference<engine::Creature> m_Creature;
+	engine::PersistentReference<engine::Body> m_Body;
 	engine::PersistentReference<engine::World::RenderData> m_RenderData;
 
-	static engine::Vec3 MovementVectorUpdate(const engine::Creature& creature) {
+	/*
+	static engine::Vec3 MovementVectorUpdate(const engine::Body& creature) {
 		using namespace engine;
 		using Key = Input::Key;
 		return Vec3(
@@ -38,17 +39,18 @@ public:
 		outCameraLookAt = creaturePos + lookAtOffset;
 		directionalLights[0].SetViewMatrix(Mat4::LookAt(creaturePos + lightOffset, Vec3::Up(), creaturePos));
 	}
+	*/
 
 	Player(engine::World& world, engine::StaticMesh& mesh) 
 		: m_World(world), 
-			m_Creature(world.AddCreature({ 3.0f, 0.0f, 0.0f }, 2.0f,
+			m_Body(world.AddBody({ 3.0f, 0.0f, 0.0f }, 2.0f,
 				{ 
 					.m_LocalPosition {}, 
 					.m_Type { engine::Collider::Type::Pole },
 					.u_TypeInfo { .m_PoleInfo { .m_Radius = 1, .m_Height = 2 } },
 				}
 			)), 
-			m_Mesh(mesh), m_RenderData(world.AddRenderData(*m_Creature, {}, {})) {
+			m_Mesh(mesh), m_RenderData(world.AddRenderData(*m_Body, {}, {})) {
 		using namespace engine;
 		s_Instance = this;
 		World::RenderData& renderData = *m_RenderData;
