@@ -1196,17 +1196,18 @@ namespace engine {
 	class FileHandler {
 	public:
 
-		static int Skip(FILE* fs, uint32_t delimiterCount, const char* delimiters) {
+		template<size_t delimiter_count_T>
+		static int Skip(FILE* fs, const Array<char, delimiter_count_T>& delimiters) {
 			char c = fgetc(fs);
 			while (true) {
 				if (c == EOF) {
 					return EOF;
 				}
-				for (uint32_t i = 0; i < delimiterCount; i++) {
-					if (c == delimiters[i]) {
+				for (char delim : delimiters) {
+					if (c == delim) {
 						return c;
 					}
-				}	
+				}
 				c = fgetc(fs);
 			}
 			return c;
@@ -5217,6 +5218,8 @@ void main() {
 				}
 			}
 
+		public:
+
 			bool IsPointInside(const Vec3& point) const {
 				return m_BoundingBox.IsPointInside(Vec2(point.x, point.z));
 			}
@@ -5251,12 +5254,12 @@ void main() {
 
 		private:	
 
+			const uint64_t m_ObjectID;
 			const PersistentReference<Area> m_Area;
 			Vec3 m_Position;
 			Vec3 m_Velocity;
 			float m_YRotation;
 			float m_Height;
-			const uint64_t m_ObjectID;
 			Collider m_Collider;
 
 			Body(uint64_t objectID, const Vec3& position, float height, Area& area, const Collider::CreateInfo& colliderInfo)
@@ -5267,10 +5270,10 @@ void main() {
 			Body(const Body&) = delete;
 
 			Body(Body&& other) noexcept 
-				: m_Area(other.m_Area), m_Position(other.m_Position), m_YRotation(other.m_YRotation),
-					m_ObjectID(other.m_ObjectID), m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}
+				: m_ObjectID(other.m_ObjectID), m_Area(other.m_Area), m_Position(other.m_Position), m_YRotation(other.m_YRotation),
+					m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}
 
-		public:
+		public:	
 
 			const Vec3& GetPosition() const {
 				return m_Position;
@@ -5282,9 +5285,34 @@ void main() {
 						"area was null when attempting to move body (in function World::Body::Move)!");
 					return;
 				}
-				Vec3 deltaPos = position - m_Position;
-				m_Position += deltaPos;
+				m_Position += position - m_Position;
+				Vec3 pushBack;
+				if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
+					m_Position += pushBack;
+				}
 			}
+
+			void SetYRotation(float rot) {
+				m_YRotation = rot;
+				if (m_Area.IsNull()) {
+					PrintError(ErrorOrigin::GameLogic,
+						"area was null when attempting to rotate body (in function World::Body::SetYRotation)!");
+					return;
+				}
+				Vec3 pushBack;
+				if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
+					m_Position += pushBack;
+				}
+			}
+
+			const Collider& GetCollider()  const {
+				return m_Collider;
+			}
+		};
+
+		class Entity {
+			virtual void Update(World& world) = 0;
+			virtual void Terminate() = 0;
 		};
 
 		struct RenderData : PersistentReferenceHolder<RenderData> {
@@ -5442,6 +5470,7 @@ void main() {
 					if (!renderer.AllocateCommandBuffers(Renderer::GetDefaultCommandBufferAllocateInfo(
 							renderer.GetCommandPool<Renderer::Queue::Graphics>(), 1), 
 							&commandBuffer->m_CommandBuffer)) {
+			m_Are
 						CriticalError(ErrorOrigin::Renderer, 
 							"failed to allocate command buffer (function Renderer::AllocateCommandBuffers in function World::Initialize)");
 					}
@@ -5766,7 +5795,7 @@ void main() {
 
 			StaticMesh m_Mesh;
 
-			DynamicArray<Tuple<PersistentReference<RayHitInfo>, Mat4>> m_RayTargets{};
+			DynamicArray<Tuple<PersistentReference<RayTarget>, Mat4>> m_RayTargets{};
 			DynamicArray<Tuple<PersistentReference<Obstacle>, Mat4>> m_Obstacles{};
 
 			StaticMeshFile(Renderer& renderer) : m_Mesh(renderer) {}
@@ -5778,7 +5807,7 @@ void main() {
 			VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
 			VkDescriptorSet m_DescriptorSet = VK_NULL_HANDLE;
 
-			DynamicArray<PersistentReference<RayHitInfo>> m_RayTargets{};
+			DynamicArray<PersistentReference<RayTarget>> m_RayTargets{};
 			DynamicArray<PersistentReference<Obstacle>> m_Obstacles{};
 
 			StaticTextureFile(Renderer& renderer) : m_Texture(renderer) {}
@@ -5793,7 +5822,7 @@ void main() {
 		VkDescriptorSet m_NullTextureDescriptorSet{};
 		DynamicArray<Area> m_Areas{};
 		Rect<float> m_WorldRect{};
-		DynamicArray<Body> m_Creatures{};
+		DynamicArray<Body> m_Bodies{};
 		uint64_t m_CameraFollowObjectID = UINT64_MAX;
 		CameraMatricesBuffer* m_CameraMatricesMap = nullptr;
 
@@ -5988,51 +6017,13 @@ void main() {
 			}
 		}
 
-		void Load(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, 
-				uint32_t groundCount, Ground::CreateInfo groundInfos[], uint32_t obstacleCount, Obstacle::CreateInfo obstacleInfos[]) {
-			m_Grounds.Reserve(groundCount);
-			for (uint32_t i = 0; i < groundCount; i++) {
-				m_Grounds.EmplaceBack(m_NextObjectID++, groundInfos[i]);
-			}
-			m_Obstacles.Reserve(obstacleCount);
-			for (uint32_t i = 0; i < obstacleCount; i++) {
-				m_Obstacles.EmplaceBack(m_NextObjectID++, obstacleInfos[i]);
-			}
-			m_ChunkDimensions = { 
-				(float)worldDimensions.x / chunkMatrixSize.x, 
-				(float)worldDimensions.y / chunkMatrixSize.y,
-			};
-			m_ChunkMatrixSize = chunkMatrixSize;
-			m_ChunkMatrix.Reserve(m_ChunkMatrixSize.x * m_ChunkMatrixSize.y);
-			m_WorldRect.m_Max = Vec2(worldDimensions.x / 2.0f, worldDimensions.y / 2.0f);
-			m_WorldRect.m_Min = -m_WorldRect.m_Max;
-			for (size_t x = 0; x < m_ChunkMatrixSize.x; x++) {
-				for (size_t y = 0; y < m_ChunkMatrixSize.y; y++) {
-					Chunk& chunk = m_ChunkMatrix.EmplaceBack(Vec2_T<uint32_t>(x, y), 
-						Vec2(m_WorldRect.m_Min.x + x * m_ChunkDimensions.x, 
-							m_WorldRect.m_Min.y + y * m_ChunkDimensions.y), 
-							m_ChunkDimensions);
-					for (Ground& ground : m_Grounds) {
-						Box<float> boundingBox = ground.m_LogicMesh.GetBoundingBox();
-						Rect<float> topViewRect {
-							.m_Min { boundingBox.m_Min.x, boundingBox.m_Min.z },
-							.m_Max { boundingBox.m_Max.x, boundingBox.m_Max.z },
-						};
-						if (chunk.m_BoundingRect.OverLaps(topViewRect)) {
-							chunk.m_Grounds.EmplaceBack(ground);
-						}
-					}
-					for (Obstacle& obstacle : m_Obstacles) {
-						chunk.m_Obstacles.EmplaceBack(obstacle);
-					}
-				}
-			}
+		Area& LoadArea(const DynamicArray<Obstacle::CreateInfo>& staticObstacleInfos, const DynamicArray<RayTarget::CreateInfo>& rayTargetInfos) {
+			return m_Areas.EmplaceBack(*this, m_NextObjectID++, staticObstacleInfos, rayTargetInfos);
 		}
 
 		int ParseStaticMeshFile(FILE* fileStream, StaticMeshFile** outFile, Mat4& outTransform) {
 			assert(outFile);
-			char delimiters[2] { '\n', ' ' };
-			if (FileHandler::Skip(fileStream, 2, delimiters) == EOF) {
+			if (FileHandler::Skip(fileStream, Array<char, 2>{ '\n', ' ' }) == EOF) {
 				return EOF;
 			}
 			String string{};
@@ -6081,15 +6072,13 @@ void main() {
 					continue;
 				}
 				if (c == '{') {
-					constexpr size_t delimiter_count = 2;
-					constexpr char delimiters[delimiter_count] { '\n', ' ' };
 					for (; c != '}'; c = fgetc(fileStream)) {
 						if (c == EOF) {
 							PrintError(ErrorOrigin::FileParsing, 
 								"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
 							return false;
 						}
-						if (FileHandler::Skip(fileStream, delimiter_count, delimiters) == EOF) {
+						if (FileHandler::Skip(fileStream, Array<char, 2> { '\n', ' ' }) == EOF) {
 							PrintError(ErrorOrigin::FileParsing, 
 								"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
 							return false;
@@ -6121,41 +6110,28 @@ void main() {
 			return true;
 		}
 
-		bool Load(FILE* fileStream) {
+		bool LoadArea(FILE* fileStream) {
 			if (!fileStream) {
 				PrintError(ErrorOrigin::FileParsing, 
-					"attempting to load world with file stream that's null!");
+					"attempting to load area with file stream that's null (in function World::LoadArea)!");
 				return false;
 			}
-			m_NextObjectID = 0;
-			uint32_t staticMeshCount;
-			Vec2_T<uint32_t> worldDimensions;
-			Vec2_T<uint32_t>& chunkMatrixSize = m_ChunkMatrixSize;
-			int res = 
-				fscanf(fileStream, "%u%u%u%u%u", 
-					&staticMeshCount,
-					&worldDimensions.x, &worldDimensions.y,
-					&chunkMatrixSize.x, &chunkMatrixSize.y
-				);
-			if (res != 5) {
-				PrintError(ErrorOrigin::FileParsing, 
-					"failed to load world due to parsing error (function World::Load)!");
-				return false;
+			DynamicArray<Obstacle::CreateInfo> obstacleInfos{};
+			DynamicArray<RayTarget::CreateInfo> rayTargetInfos{};
+			uint32_t oCount, rCount;
+			if (fscanf(fileStream, "O count=%u R count=%u", &oc, &rc) != 2) {
+				PrintError(ErrorOrigin::FileParsing,
+					"failed to load area from file stream due to invalid format t(in function World::LoadArea)");
 			}
+			obstacleInfos.Reserve(oCount);
+			rayTargetInfos.Reserve(rCount);
 			while (true) {
 				char c = fgetc(fileStream);
-				while (c != '\n' && c != EOF) {
-					char c = fgetc(fileStream);
-				}
-				if (c == EOF) {
-					break;
-				}
-				c = fgetc(fileStream);
 				switch (c) {
 					case 'O':
 						LoadObstacle(fileStream);
 						break;
-					case 'G':
+					case 'R':
 						break;
 					default:
 						continue;
@@ -6198,7 +6174,7 @@ void main() {
 						for (const auto& tuple : meshFile.m_Obstacles) {
 							AddRenderData(*tuple.first, tuple.second, meshData);
 						}
-						for (const auto& tuple : meshFile.m_Grounds) {
+						for (const auto& tuple : meshFile.m_RayTargets) {
 							AddRenderData(*tuple.first, tuple.second, meshData);
 						}
 						break;
@@ -6208,10 +6184,9 @@ void main() {
 		}
 
 		void Unload() {
-			m_Grounds.Clear();
-			m_ChunkMatrix.Clear();
-			m_Creatures.Clear();
+			m_Bodies.Clear();
 			m_RenderDatas.Clear();
+			m_Areas.Clear();
 		};
 
 	public:
@@ -6219,30 +6194,19 @@ void main() {
 		Body& AddBody(const Vec3& position, float height, const Collider::CreateInfo& colliderInfo) {
 			Vec3 pos(Clamp(position.x, m_WorldRect.m_Min.x + 0.01f, m_WorldRect.m_Max.x - 0.01f), 0.0f,
 				Clamp(position.z, m_WorldRect.m_Min.y + 0.01f, m_WorldRect.m_Max.y - 0.01f));
-			Vec2_T<bool> isOnBorder = IsOnChunkBorder(position);
-			if (isOnBorder.x) {
-				pos.x += 0.01f;
-			}
-			if (isOnBorder.y) {
-				pos.z += 0.01f;
-			}
-			for (const Chunk& chunk : m_ChunkMatrix) {
+			for (const Area& chunk : m_Areas) {
 				if (chunk.IsPointInside(pos)) {
-					return m_Creatures.EmplaceBack(m_NextObjectID++, pos, height, &chunk, colliderInfo);
+					return m_Bodies.EmplaceBack(m_NextObjectID++, pos, height, &chunk, colliderInfo);
 				}
 			}
 		}
 
 		bool RemoveBody(Body& body) {
-			RemoveRenderDatas(creature.m_ObjectID);
-			if (m_CameraFollowObjectID == creature.m_ObjectID) {
+			RemoveRenderDatas(body.m_ObjectID);
+			if (m_CameraFollowObjectID == body.m_ObjectID) {
 					m_CameraFollowObjectID = UINT64_MAX;
 			}
-			return m_Creatures.Erase(&creature);
-		}
-
-		void SetCameraFollowBody(const Body& body) {
-			m_CameraFollowObjectID = creature.m_ObjectID;
+			return m_Bodies.Erase(&body);
 		}
 
 		bool CreateTextureMap(const StaticTexture& texture, TextureMap& out) const {
@@ -6285,11 +6249,11 @@ void main() {
 		}
 
 		PersistentReference<RenderData> AddRenderData(const Body& body, const Mat4& transform, const MeshData& meshData) {
-			return m_RenderDatas.EmplaceBack(creature.m_ObjectID, transform, meshData);
+			return m_RenderDatas.EmplaceBack(body.m_ObjectID, transform, meshData);
 		}
 
 		PersistentReference<RenderData> AddRenderData(const RayTarget& rayTarget, const Mat4& transform, const MeshData& meshData) {
-			return m_RenderDatas.EmplaceBack(ground.m_ObjectID, transform, meshData);
+			return m_RenderDatas.EmplaceBack(rayTarget.m_ObjectID, transform, meshData);
 		}
 		
 		PersistentReference<RenderData> AddRenderData(const Obstacle& obstacle, const Mat4& transform, const MeshData& meshData) {
@@ -6611,7 +6575,7 @@ void main() {
 		}
 
 		void LogicUpdate() {
-			for (Creature& creature : m_Creatures) {
+			for (Creature& creature : m_Bodies) {
 				Vec3 movementVector = creature.GetMovementVector();
 				if (movementVector == Vec3(0.0f, movementVector.y, 0.0f)) {
 					continue;
@@ -7200,5 +7164,5 @@ void main() {
 
 	};
 
-	typedef World::Creature Creature;
+	typedef World::Body Body;
 }
