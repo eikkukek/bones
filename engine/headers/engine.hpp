@@ -3,6 +3,8 @@
 #include "renderer.hpp"
 #include "text_renderer.hpp"
 #include "math.hpp"
+#include "builtin_shaders.hpp"
+#include "builtin_pipelines.hpp"
 #include "fmt/printf.h"
 #include "fmt/color.h"
 #include "vulkan/vulkan_core.h"
@@ -45,7 +47,8 @@ namespace engine {
 		Vulkan = 8,
 		Stb = 9,
 		FileParsing = 10,
-		GameLogic = 11,
+		FileWriting = 11,
+		GameLogic = 12,
 		MaxEnum,
 	};
 
@@ -62,6 +65,7 @@ namespace engine {
 			"Vulkan",
 			"stb",
 			"FileParsing",
+			"FileWriting",
 			"GameLogic",
 		};
 		if (origin == ErrorOrigin::MaxEnum) {
@@ -117,7 +121,7 @@ namespace engine {
 		}
 
 		ConstIterator end() const {
-			return m_Data[size_T];
+			return &m_Data[size_T];
 		}
 	};
 
@@ -727,6 +731,20 @@ namespace engine {
 
 		constexpr String() noexcept : m_Data(nullptr), m_Length(0), m_Capacity(0) {}
 
+		String(const String& other) : m_Data(nullptr), m_Length(0), m_Capacity(0) {
+			Reserve(other.m_Capacity);
+			memcpy(m_Data, other.m_Data, other.m_Length * sizeof(char));
+			m_Length = other.m_Length;
+		}
+
+		String& operator=(const String& other) {
+			Clear();
+			Reserve(other.m_Capacity);
+			memcpy(m_Data, other.m_Data, other.m_Length * sizeof(char));
+			m_Length = other.m_Length;
+			return *this;
+		}
+
 		constexpr String(String&& other) noexcept
 			: m_Data(other.m_Data), m_Length(other.m_Length), m_Capacity(other.m_Capacity) {
 			other.m_Data = nullptr;
@@ -863,6 +881,10 @@ namespace engine {
 				res = (res * 54059) ^ ((uint64_t)m_Data[i] * 76963);
 			}
 			return res;
+		}
+
+		bool operator==(const String& other) const {
+			return m_Data && other.m_Data && !strcmp(m_Data, other.m_Data);
 		}
 
 		friend bool operator==(const String& a, const char* b) {
@@ -1210,7 +1232,6 @@ namespace engine {
 				}
 				c = fgetc(fs);
 			}
-			return c;
 		}
 
 		static int GetLine(FILE* fs, String& os) {
@@ -1222,6 +1243,18 @@ namespace engine {
 				os.Push(c);
 			}
 			return c;
+		}
+
+		static int SkipLine(FILE* fs) {
+			char c = fgetc(fs);
+			while (true) {
+				if (c == EOF) {
+					return EOF;
+				}
+				if (c == '\n') {
+					return c;
+				}
+			}
 		}
 	};
 
@@ -4572,734 +4605,532 @@ outColor = texture(image, inUV);
 		}
 	};
 
-	class World {
+	class World;
 
-		friend class Engine;
+	class RayTarget : private PersistentReferenceHolder<RayTarget> {
+
+		friend class World;
+		friend class DynamicArray<RayTarget>;
+
+	public:
+		
+		struct CreateInfo {
+			const LogicMesh& m_LogicMesh;
+			Mat4 m_Transform;
+		};
+
+	private:
+
+		const uint64_t m_ObjectID;
+		LogicMesh m_LogicMesh;
+		Mat4 m_Transform;
+
+		RayTarget(uint64_t objectID, const CreateInfo& createInfo) 
+			: PersistentReferenceHolder<RayTarget>() , m_ObjectID(objectID), 
+				m_LogicMesh(createInfo.m_LogicMesh), m_Transform(createInfo.m_Transform) {
+			m_LogicMesh.UpdateTransform(m_Transform);
+		}
+		
+		RayTarget(const RayTarget &) = delete;
+		RayTarget(RayTarget&&) = default;
 
 	public:
 
-		class Shaders {
-		public:
+		bool AABBCheck(const Vec3& position) const {
+			return m_LogicMesh.AABBCheck(position);
+		}
 
-			static constexpr const char* pbr_draw_pipeline_vertex_shader = R"(
-#version 450
+		bool AABBCheck(const Ray& ray) const {
+			return m_LogicMesh.AABBCheck(ray);
+		}
 
-layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec2 inUV;
-layout(location = 3) in vec3 inTangent;
-layout(location = 4) in vec3 inBitangent;
+		bool RayCheck(const Ray& ray, RayHitInfo& outHitInfo) const {
+			return m_LogicMesh.IsRayHit(ray, outHitInfo);
+		}
 
-layout(location = 0) out vec2 outUV;
-layout(location = 1) out vec3 outPosition;
-layout(location = 2) out vec3 outNormal;
+		void UpdateTransform(const Mat4& transform) {
+			m_Transform = transform;
+			m_LogicMesh.UpdateTransform(m_Transform);
+		}
+	};
 
-layout(set = 0, binding = 0) uniform CameraMatrices {
-	mat4 c_Projection;
-	mat4 c_View;
-} camera_matrices;
+	class Obstacle : private PersistentReferenceHolder<Obstacle> {
 
-layout(push_constant) uniform PushConstant {
-	layout(offset = 0) 
-	mat4 c_Transform;
-	mat4 c_NormalMatrix;
-} pc;
+		friend class World;
+		friend class Area;
+		friend class DynamicArray<Obstacle>;
 
-void main() {
+	public:
 
-	const vec3 modelPos = vec3(inPosition.x, -inPosition.y, inPosition.z);
+		struct CreateInfo {
+			Vec3 m_Position{};
+			float m_YRotation{};
+			Collider::CreateInfo m_ColliderInfo{};
+		};
 
-	outUV = inUV;
+		Box<float> GetBoundingBox() const {
+			return m_Collider.GetBoundingBox();
+		}
 
-	outNormal = normalize(vec3(pc.c_NormalMatrix * vec4(inNormal, 0.0f)));
+	private:
 
-	outPosition = vec3(pc.c_Transform * vec4(modelPos, 1.0f));
+		uint64_t m_ObjectID;
+		Vec3 m_Position;
+		float m_YRotation;
+		Vec3 m_Velocity;
+		Collider m_Collider;
 
-	gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(modelPos, 1.0f);
+		Obstacle(uint64_t objectID, const CreateInfo& info) noexcept 
+			: PersistentReferenceHolder<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position),
+				m_YRotation(info.m_YRotation), m_Collider(m_Position, m_YRotation, m_Velocity, info.m_ColliderInfo) {}
 
-}
-			)";
+		Obstacle(const Obstacle&) = delete;
 
-			static constexpr const char* pbr_draw_pipeline_fragment_shader = R"(
-#version 450
+		Obstacle(Obstacle&& other) noexcept : m_ObjectID(other.m_ObjectID),
+			m_Position(other.m_Position), m_YRotation(other.m_YRotation), 
+				m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}
 
-layout(location = 0) in vec2 inUV;
-layout(location = 1) in vec3 inPosition;
-layout(location = 2) in vec3 inNormal;
+		bool Collides(const Collider& collider, Vec3& outColliderPushBack) const {
+			return Collider::ColliderToStaticColliderCollides(collider, m_Collider, outColliderPushBack);
+		}
+	};
 
-layout(location = 0) out vec4 outDiffuseColor;
-layout(location = 1) out vec4 outPositionAndMetallic;
-layout(location = 2) out vec4 outNormalAndRougness;
+	class Area : private PersistentReferenceHolder<Area> {
 
-layout(set = 1, binding = 0) uniform sampler2D diffuse_map;
+		friend class World;
+		friend class DynamicArray<Area>;
 
-void main() {
+	public:
 
-	outDiffuseColor = texture(diffuse_map, inUV);
-	outPositionAndMetallic = vec4(inPosition, 1.0f);
-	outNormalAndRougness = vec4(inNormal, 1.0f);
-}
-			)";
+		uint64_t& m_NextObjectID;
+		const uint64_t m_ObjectID;
 
-			static constexpr const char * ud_draw_vertex_shader = R"(
-#version 450
+	private:
 
-layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec2 inUV;
-layout(location = 3) in vec3 inTangent;
-layout(location = 4) in vec3 inBitangent;
+		Box<float> m_BoundingBox{};
+		DynamicArray<Obstacle> m_Obstacles{};
+		DynamicArray<RayTarget> m_RayTargets{};
+		
+		Area(uint64_t& nextObjectID, uint64_t objectID) noexcept
+			: m_NextObjectID(nextObjectID), m_ObjectID(objectID) {}
 
-layout(push_constant) uniform PushConstant {
-layout(offset = 0)
-	mat4 c_LightView;
-	mat4 c_Transform;
-} pc;
+	public:
 
-void main() {
-	gl_Position = pc.c_LightView * pc.c_Transform * vec4(inPosition.x, -inPosition.y, inPosition.z, 1.0f);
-}
-			)";
+		PersistentReference<Obstacle> AddObstacle(const Obstacle::CreateInfo& info) {
+			return m_Obstacles.EmplaceBack(m_NextObjectID++, info);
+		}
 
-			static constexpr const char* pbr_render_pipeline_vertex_shader = R"(
-#version 450
+		PersistentReference<RayTarget> AddRayTarget(const RayTarget::CreateInfo& info) {
+			return m_RayTargets.EmplaceBack(m_NextObjectID++, info);
+		}
 
-layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec2 inUV;
+		bool IsPointInside(const Vec3& point) const {
+			return m_BoundingBox.IsPointInside(Vec2(point.x, point.z));
+		}
 
-layout(location = 0) out vec2 outUV;
+		const bool CastRay(const Ray& ray, RayHitInfo& outInfo) const {
+			float min_distance = float_max;
+			for (const RayTarget& target : m_RayTargets) {
+				if (target.AABBCheck(ray)) {
+					RayHitInfo hitInfo;
+					if (target.RayCheck(ray, hitInfo) && min_distance > hitInfo.m_Distance) {
+						min_distance = hitInfo.m_Distance;
+						outInfo = hitInfo;
+					}
+				}
+			}
+			return min_distance <= outInfo.m_Distance;
+		}
 
-void main() {
-	outUV = inUV;
-	gl_Position = vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
-}
-			)";
+		const bool CollisionCheck(Collider& collider, Vec3& outPushBack) const {
+			for (const Obstacle& obstacle : m_Obstacles) {
+				if (Collider::ColliderToStaticColliderCollides(collider, obstacle.m_Collider, outPushBack)) {
+					return true;
+				}
+			}
+			return false;
+		}
+	};
 
-			static constexpr const char* pbr_render_pipeline_fragment_shader = R"(
-#version 450
+	class Body : private PersistentReferenceHolder<Body> {
 
-layout(location = 0) in vec2 inUV;
+		friend class World;
+		friend class DynamicArray<Body>;
 
-layout(location = 0) out vec4 outColor;
+	private:	
 
-layout(set = 0, binding = 0) uniform sampler2D diffuse_colors;
-layout(set = 0, binding = 1) uniform sampler2D position_and_metallic;
-layout(set = 0, binding = 2) uniform sampler2D normal_and_roughness;
+		const uint64_t m_ObjectID;
+		const PersistentReference<Area> m_Area;
+		Vec3 m_Position;
+		Vec3 m_Velocity;
+		float m_YRotation;
+		float m_Height;
+		Collider m_Collider;
 
-layout(set = 1, binding = 0) uniform sampler2D directional_light_shadow_map;
+		Body(uint64_t objectID, const Vec3& position, float height, Area& area, const Collider::CreateInfo& colliderInfo)
+			: PersistentReferenceHolder<Body>(), m_Area(area), m_Position(position), m_Velocity(0), m_ObjectID(objectID),
+				m_Height(height), m_Collider(m_Position, m_YRotation, m_Velocity, colliderInfo) {
+		}
 
-layout(set = 1, binding = 1) uniform DirectionalLight {
-	mat4 c_ViewSpaceMatrix;
-	vec3 c_Direction;
-	vec3 c_Color;
-} directional_light;
+		Body(const Body&) = delete;
 
-bool IsInShadowDirLight(vec4 lightViewPos) {
+		Body(Body&& other) noexcept 
+			: m_ObjectID(other.m_ObjectID), m_Area(other.m_Area), m_Position(other.m_Position), m_YRotation(other.m_YRotation),
+				m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}
 
-	const vec4 shadowMapCoords = lightViewPos / lightViewPos.w;
+	public:	
 
-	if (shadowMapCoords.z > -1.0f && shadowMapCoords.z < 1.0f) {
-		float dist = texture(directional_light_shadow_map, shadowMapCoords.st * 0.5f + 0.5f).r;
-		float bias = 0.005f;
-		return shadowMapCoords.w > 0.0f && dist < shadowMapCoords.z - bias;
+		const Vec3& GetPosition() const {
+			return m_Position;
+		}
+
+		void Move(const Vec3& position) {
+			if (m_Area.IsNull()) {
+				PrintError(ErrorOrigin::GameLogic,
+					"area was null when attempting to move body (in function World::Body::Move)!");
+				return;
+			}
+			m_Position += position - m_Position;
+			Vec3 pushBack;
+			if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
+				m_Position += pushBack;
+			}
+		}
+
+		void SetYRotation(float rot) {
+			m_YRotation = rot;
+			if (m_Area.IsNull()) {
+				PrintError(ErrorOrigin::GameLogic,
+					"area was null when attempting to rotate body (in function World::Body::SetYRotation)!");
+				return;
+			}
+			Vec3 pushBack;
+			if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
+				m_Position += pushBack;
+			}
+		}
+
+		const Collider& GetCollider()  const {
+			return m_Collider;
+		}
+	};
+
+	class UnidirectionalLight {
+
+		friend class World;
+
+	public:
+
+		struct Matrices {
+
+			Mat4 m_Projection { 1 };
+			Mat4 m_View { 1 };
+
+			Mat4 GetLightViewMatrix() const {
+				return m_Projection * m_View;
+			}
+
+			Vec3 GetDirection() const {
+				return m_View.LookAtFront();
+			}
+		};
+
+		enum class Type {
+			Directional = 0,
+			Spot = 1,
+		};
+
+		struct FragmentBufferDirectional {
+			Mat4 m_ViewMatrix{};
+			Vec3 m_Direction{};
+			uint8_t pad0[4];
+			Vec3 m_Color{};
+		};
+
+		struct FragmentBufferSpot {
+			Mat4 m_ViewMatrix{};
+			Vec3 m_Position{};
+			uint8_t pad0[4];
+			Vec3 m_Color{};
+			uint8_t pad1[4];
+			float angle;
+		};
+
+		World& m_World;
+
+		const uint64_t m_ObjectID;
+
+	private:
+
+		const Type m_Type;
+
+		DynamicArray<VkImageView> m_DepthImageViews{};
+		Vec2_T<uint32_t> m_ShadowMapResolution;
+
+		Matrices m_ViewMatrices{};
+
+		DynamicArray<VkDescriptorSet> m_ShadowMapDescriptorSets{};
+
+		void* m_FragmentMap{};
+
+		DynamicArray<VkImage> m_DepthImages{};
+		DynamicArray<VkDeviceMemory> m_DepthImagesMemory{};
+		VkDescriptorPool m_ShadowMapDescriptorPool{};
+		VkSampler m_ShadowMapSampler{};
+		Renderer::Buffer m_FragmentBuffer;
+
+		UnidirectionalLight(World& world, uint64_t objectID, Type type, Vec2_T<uint32_t> shadowMapResolution);
+
+		UnidirectionalLight(const UnidirectionalLight&) = delete;
+		UnidirectionalLight(UnidirectionalLight&&) = delete;
+
+		void Initialize(const Mat4& projection, const Mat4& view, const Vec3& color);
+
+		void Terminate();
+
+		FragmentBufferDirectional& GetDirectionalBuffer() {
+			assert(m_FragmentMap);
+			return *(FragmentBufferDirectional*)(m_FragmentMap);
+		}
+
+	public:
+
+		void SetViewMatrix(const Mat4& matrix) {
+			if (m_Type == Type::Directional) {
+				m_ViewMatrices.m_View = matrix;
+				auto& buf = GetDirectionalBuffer();
+				buf.m_ViewMatrix = m_ViewMatrices.GetLightViewMatrix();
+				buf.m_Direction = m_ViewMatrices.GetDirection();
+			}
+			else {
+			}
+		}
+
+		void DepthDraw(const Renderer::DrawData& drawData) const;
+
+		VkDeviceSize FragmentBufferSize() const {
+			return m_Type == Type::Directional ? sizeof(FragmentBufferDirectional) : sizeof(FragmentBufferSpot);
+		}
+
+		void SwapchainCreateCallback(uint32_t imageCount, VkCommandBuffer commandBuffer) {
+
+			Renderer& renderer = m_World.m_Renderer;
+
+			if (m_FragmentBuffer.IsNull()) {
+				if (!m_FragmentBuffer.Create(FragmentBufferSize(), 
+						VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create buffer for directional light (function Renderer::Buffer::Create in function World::DirectionalLight::SwapchainCreateCallback)!");
+				}
+				if (!m_FragmentBuffer.MapMemory(0, m_FragmentBuffer.m_BufferSize, (void**)&m_FragmentMap)) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to map buffer memory for directional light (function Renderer::Buffer::MapMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
+				}
+			}
+
+			if (m_DepthImageViews.Size() != imageCount) {
+				if (m_DepthImages.Size() < imageCount) {
+
+					size_t oldImageCount = m_DepthImages.Size();
+
+					m_DepthImages.Resize(imageCount);
+					m_DepthImagesMemory.Resize(imageCount);
+					m_DepthImageViews.Resize(imageCount);
+
+					VkExtent3D extent = { m_ShadowMapResolution.x, m_ShadowMapResolution.y, 1 };
+
+					for (size_t i = oldImageCount; i < imageCount; i++) {
+						VkImage& image = m_DepthImages[i];
+						VkDeviceMemory& memory = m_DepthImagesMemory[i];
+						VkImageView& imageView = m_DepthImageViews[i];
+						image = renderer.CreateImage(VK_IMAGE_TYPE_2D, renderer.m_DepthOnlyFormat, 
+							extent, 1, 1, VK_SAMPLE_COUNT_1_BIT, 
+							VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+							VK_SHARING_MODE_EXCLUSIVE, 1, &renderer.m_GraphicsQueueFamilyIndex);
+						if (image == VK_NULL_HANDLE) {
+							CriticalError(ErrorOrigin::Renderer, 
+								"failed to create depth image for directional light (function Renderer::CreateImage in function World::DirectionalLight::SwapchainCreateCallback)!");
+						}
+						memory = renderer.AllocateImageMemory(image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+						if (memory == VK_NULL_HANDLE) {
+							CriticalError(ErrorOrigin::Renderer, 
+								"failed to allocate depth image memory for directional light (function Renderer::AllocateImageMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
+						}
+						imageView = renderer.CreateImageView(image, VK_IMAGE_VIEW_TYPE_2D, renderer.m_DepthOnlyFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+						if (imageView == VK_NULL_HANDLE) {
+							CriticalError(ErrorOrigin::Renderer, 
+								"failed to create depth image view for directional light (function Renderer::AllocateImageMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
+						}
+
+						VkImageMemoryBarrier memoryBarrier = {
+							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+							.pNext = nullptr,
+							.srcAccessMask = 0,
+							.dstAccessMask = 0,
+							.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+							.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.image = image,
+							.subresourceRange {
+								.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+								.baseMipLevel = 0,
+								.levelCount = 1,
+								.baseArrayLayer = 0,
+								.layerCount = 1,
+							},
+						};
+
+						vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
+							VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &memoryBarrier);
+					}	
+				}
+				else {
+					for (size_t i = imageCount; i < m_DepthImages.Size(); i++) {
+						renderer.DestroyImageView(m_DepthImageViews[i]);
+						renderer.DestroyImage(m_DepthImages[i]);
+						renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
+					}
+					m_DepthImages.Resize(imageCount);
+					m_DepthImagesMemory.Resize(imageCount);
+					m_DepthImageViews.Resize(imageCount);
+				}
+				if (m_ShadowMapSampler == VK_NULL_HANDLE) {
+					VkSamplerCreateInfo samplerInfo = Renderer::GetDefaultSamplerInfo();
+					samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+					m_ShadowMapSampler = renderer.CreateSampler(samplerInfo);
+					if (m_ShadowMapSampler == VK_NULL_HANDLE) {
+						CriticalError(ErrorOrigin::Renderer, 
+							"failed to create shadow map sampler for directional light (function Renderer::CreateSampler in function World::DirectionalLight::SwapchainCreateCallback)!");
+					}
+				}
+				if (m_ShadowMapDescriptorPool != VK_NULL_HANDLE) {
+					renderer.DestroyDescriptorPool(m_ShadowMapDescriptorPool);
+				}
+				DynamicArray<VkDescriptorPoolSize> poolSizes(2 * imageCount);
+				for (uint32_t i = 0; i < poolSizes.Size();) {
+					poolSizes[i++] = {
+						.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+						.descriptorCount = 1,
+					};
+					poolSizes[i++] = {
+						.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+						.descriptorCount = 1,
+					};
+				}
+				m_ShadowMapDescriptorPool = renderer.CreateDescriptorPool(0, imageCount, poolSizes.Size(), poolSizes.Data());
+				if (m_ShadowMapDescriptorPool == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create descriptor pool for directional light (function Renderer::CreateDescriptorPool in function World::DirectionalLight::SwapchainCreateCallback)!");
+				}
+				m_ShadowMapDescriptorSets.Resize(imageCount);
+				DynamicArray<VkDescriptorSetLayout> setLayouts(imageCount);
+				for (VkDescriptorSetLayout& layout : setLayouts) {
+					layout = m_World.m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout;
+				}
+				if (!renderer.AllocateDescriptorSets(nullptr, m_ShadowMapDescriptorPool, imageCount, setLayouts.Data(), m_ShadowMapDescriptorSets.Data())) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to allocate descriptor sets for directional light (function Renderer::AllocateDescriptorSets in function World::DirectionalLight::SwapchainCreateCallback)!");
+				}
+				VkDescriptorBufferInfo descriptorBufferInfo {
+					.buffer = m_FragmentBuffer.m_Buffer,
+					.offset = 0,
+					.range = FragmentBufferSize(),
+				};
+				for (uint32_t i = 0; i < imageCount; i++) {
+					VkDescriptorImageInfo imageInfo {
+						.sampler = m_ShadowMapSampler,
+						.imageView = m_DepthImageViews[i],
+						.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+					};
+					VkWriteDescriptorSet descriptorWrites[2] {
+						Renderer::GetDescriptorWrite(nullptr, 0, m_ShadowMapDescriptorSets[i], VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr),
+						Renderer::GetDescriptorWrite(nullptr, 1, m_ShadowMapDescriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &descriptorBufferInfo),
+					};
+					renderer.UpdateDescriptorSets(2, descriptorWrites);
+				}
+			}	
+		}
+	};
+
+	bool LoadMesh(const String& fileName, StaticMesh& outMesh) {
+		FILE* fileStream = fopen(fileName.CString(), "r");
+		if (!fileStream) {
+			PrintError(ErrorOrigin::FileParsing, 
+				"failed to open mesh file (function fopen in function LoadMesh)!");
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+				"file that failed to open {}", fileName.CString());
+			return false;
+		}
+		MeshFileType type = GetMeshFileType(fileName);
+		if (type == MeshFileType::Obj) {
+			Obj obj{};
+			DynamicArray<Vertex> vertices{};
+			DynamicArray<uint32_t> indices{};
+			if (!obj.Load(fileStream)) {
+				PrintError(ErrorOrigin::FileParsing, 
+					"failed to load obj mesh file (function Obj::Load in function LoadMesh)");
+				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+					"mesh file that failed to load {}", fileName.CString());
+				fclose(fileStream);
+				return false;
+			}
+			fclose(fileStream);
+			if (!obj.GetMesh(Vertex::SetPosition, Vertex::SetUV, Vertex::SetNormal, vertices, indices)) {
+				PrintError(ErrorOrigin::FileParsing, 
+					"failed to load obj mesh file (function Obj::Load in function LoadMesh)");
+				return false;
+			}
+			if (!outMesh.CreateBuffers(vertices.Size(), vertices.Data(), indices.Size(), indices.Data())) {
+				PrintError(ErrorOrigin::Engine, 
+					"failed to create buffers for static mesh (function Obj::Load in function LoadMesh)");
+				return false;
+			}
+		}
+		return true;
 	}
 
-	return false;
-}
+	struct MeshMetafile {
 
-void main() {
+		const uint64_t m_ID;
+		String m_FileName{};
+		StaticMesh m_Mesh;
 
-	const vec4 modelPosAndMetal = texture(position_and_metallic, inUV);
+		MeshMetafile(uint64_t ID, const String& filename, Renderer& renderer) : m_ID(ID), m_FileName(filename), m_Mesh(renderer) {}
+	};
 
-	const vec3 pos = modelPosAndMetal.xyz;
-	const vec3 normal = vec3(texture(normal_and_roughness, inUV));	
+	class TextureMetafile {
+		StaticTexture m_Texture;
+		VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
+		VkDescriptorSet m_DescriptorSet = VK_NULL_HANDLE;
 
-	vec4 lightViewPos
-		= directional_light.c_ViewSpaceMatrix * vec4(modelPosAndMetal.xyz, 1.0f);
+		TextureMetafile(Renderer& renderer) : m_Texture(renderer) {}
+	};
 
-	vec3 lightDir = directional_light.c_Direction;
+	enum class MetafileType {
+		Mesh = 1,
+		Texture = 2,
+		MaxEnum = 3,
+	};
 
-	const float diff = IsInShadowDirLight(lightViewPos) ? 0.0f : max(dot(normal, lightDir), 0.0f);
+	class AssetManager {
+	public:
 
-	const vec3 diffuse = diff * directional_light.c_Color;
+		String m_ProjectName;
 
-	vec3 color = (vec3(0.2f, 0.2f, 0.2f) + diffuse) * vec3(texture(diffuse_colors, inUV));
-	float gamma = 2.2f;
-	color = pow(color, vec3(1.0f / gamma));
+		DynamicArray<MeshMetafile> m_MeshMetafiles{};
+		DynamicArray<TextureMetafile> m_TextureMetafiles{};
+		
+		AssetManager(const String& projectName) 
+			: m_ProjectName(projectName) {}
+	};
 
-	outColor = vec4(color, 1.0f);
-}
-			)";
+	class World {
 
-			static constexpr const char* debug_pipeline_vertex_shader = R"(
-#version 450
+		friend class Engine;
+		friend class UnidirectionalLight;
 
-layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec2 inUV;
-layout(location = 3) in vec3 inTangent;
-layout(location = 4) in vec3 inBitangent;
-
-layout(set = 0, binding = 0) uniform CameraMatrices {
-	mat4 c_Projection;
-	mat4 c_View;
-} camera_matrices;
-
-layout(push_constant) uniform PushConstant {
-	layout(offset = 0) mat4 c_Transform;
-} pc;
-
-void main() {
-	gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(inPosition, 1.0f);
-}
-			)";
-
-			static constexpr const char* debug_pipeline_fragment_shader = R"(
-#version 450
-
-layout(location = 0) out vec4 outColor;
-
-layout(push_constant) uniform PushConstant {
-	layout(offset = 64) vec4 c_Color;
-} pc;
-
-void main() {
-	outColor = pc.c_Color;
-}
-			)";
-		};
-
-		class Pipelines {
-
-			friend class World;
-
-			VkPipeline m_DrawPipelinePBR = VK_NULL_HANDLE;
-			VkPipelineLayout m_DrawPipelineLayoutPBR = VK_NULL_HANDLE;
-
-			VkPipeline m_DrawPipelineUD{};
-			VkPipelineLayout m_DrawPipelineLayoutUD{};
-
-			VkPipeline m_RenderPipelinePBR = VK_NULL_HANDLE;
-			VkPipelineLayout m_RenderPipelineLayoutPBR = VK_NULL_HANDLE;
-
-			VkPipeline m_DebugPipeline = VK_NULL_HANDLE;
-			VkPipelineLayout m_DebugPipelineLayout = VK_NULL_HANDLE;
-
-			VkDescriptorSetLayout m_DirectionalLightShadowMapDescriptorSetLayout = VK_NULL_HANDLE;
-			VkDescriptorSetLayout m_CameraDescriptorSetLayout = VK_NULL_HANDLE;
-			VkDescriptorSetLayout m_SingleTextureDescriptorSetLayoutPBR = VK_NULL_HANDLE;
-			VkDescriptorSetLayout m_RenderPBRImagesDescriptorSetLayout = VK_NULL_HANDLE;
-
-			void Initialize(Renderer& renderer, VkFormat colorImageResourceFormat) {
-
-				static constexpr VkDescriptorSetLayoutBinding camera_descriptor_set_layout_binding 
-					= Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT);
-
-				m_CameraDescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 1, &camera_descriptor_set_layout_binding);
-
-				if (m_CameraDescriptorSetLayout == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create camera descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
-				}
-
-				static constexpr VkDescriptorSetLayoutBinding texture_descriptor_set_layout_binding
-					= Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT);
-
-				m_SingleTextureDescriptorSetLayoutPBR = renderer.CreateDescriptorSetLayout(nullptr, 1, &texture_descriptor_set_layout_binding);
-
-				if (m_SingleTextureDescriptorSetLayoutPBR == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create albedo descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
-				}
-
-				const VkPushConstantRange pbrDrawPushConstantRange {
-					.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-					.offset = 0,
-					.size = 128,
-				};
-
-				const VkDescriptorSetLayout drawPbrDescriptorSetLayouts[2] {
-					m_CameraDescriptorSetLayout,
-					m_SingleTextureDescriptorSetLayoutPBR,
-				};
-
-				m_DrawPipelineLayoutPBR 
-					= renderer.CreatePipelineLayout(2, drawPbrDescriptorSetLayouts, 1, &pbrDrawPushConstantRange);
-
-				if (m_DrawPipelineLayoutPBR == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create pbr draw pipeline layout for world (function Renderer::CreatePipelineLayout in function World::Pipelines::Initialize)!");
-				}
-
-				const VkPushConstantRange udDrawPipelinePushConstantRange {
-					.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-					.offset = 0,
-					.size = 128,
-				};
-
-				m_DrawPipelineLayoutUD = renderer.CreatePipelineLayout(0, nullptr, 1, &udDrawPipelinePushConstantRange);
-
-				if (m_DrawPipelineLayoutUD == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create unidirectional light pipeline layout (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
-				}
-
-				const VkDescriptorSetLayout pbrRenderPipelineDescriptorSetLayouts[2] {
-					m_RenderPBRImagesDescriptorSetLayout,
-					m_DirectionalLightShadowMapDescriptorSetLayout,
-				};
-
-				m_RenderPipelineLayoutPBR 
-						= renderer.CreatePipelineLayout(2, pbrRenderPipelineDescriptorSetLayouts, 0, nullptr);
-
-				if (m_RenderPipelineLayoutPBR == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"faileld to create pbr render pipeline layout for world (function Renderer::CreatePipelineLayout in function World::Pipelines::Initialize)!");
-				}
-
-				const VkPushConstantRange debugPushConstantRanges[2] {
-					Renderer::GetPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, 0, 64),
-					Renderer::GetPushConstantRange(VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16),
-				};
-
-				m_DebugPipelineLayout = renderer.CreatePipelineLayout(1, &m_CameraDescriptorSetLayout, 2, debugPushConstantRanges);
-
-				if (m_DebugPipelineLayout == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create debug pipeline layout for world (function Renderer::CreatePipelineLayout in function World::Pipelines::initialize)");
-				}
-
-				Renderer::Shader pbrDrawShaders[2] {
-					{ renderer, VK_SHADER_STAGE_VERTEX_BIT, },
-					{ renderer, VK_SHADER_STAGE_FRAGMENT_BIT, },
-				};
-
-				if (!pbrDrawShaders[0].Compile(Shaders::pbr_draw_pipeline_vertex_shader)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile pbr draw vertex shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
-				}
-
-				if (!pbrDrawShaders[1].Compile(Shaders::pbr_draw_pipeline_fragment_shader)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile pbr draw fragment shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
-				}
-
-				const VkPipelineShaderStageCreateInfo pbrDrawPipelineShaderStageInfos[2] {
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaders[0]),
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaders[1]),
-				};
-
-				Renderer::Shader udDrawVertexShader(renderer, VK_SHADER_STAGE_VERTEX_BIT);
-
-				if (!udDrawVertexShader.Compile(Shaders::ud_draw_vertex_shader)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile unidirectional light draw vertex shader (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
-				}
-
-				const VkPipelineShaderStageCreateInfo udDrawPipelineShaderStageInfo 
-					= Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(udDrawVertexShader);
-
-				Renderer::Shader pbrRenderShaders[2] {
-					{ renderer, VK_SHADER_STAGE_VERTEX_BIT, },
-					{ renderer, VK_SHADER_STAGE_FRAGMENT_BIT, },
-				};
-
-				if (!pbrRenderShaders[0].Compile(Shaders::pbr_render_pipeline_vertex_shader)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile pbr render vertex shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
-				}
-
-				if (!pbrRenderShaders[1].Compile(Shaders::pbr_render_pipeline_fragment_shader)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile pbr render fragment shader code (function Renderer::Shader::Compile in function World::Pipeliens:.Initialize)");
-				}
-
-				const VkPipelineShaderStageCreateInfo pbrRenderPipelineShaderStageInfos[2] {
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaders[0]),
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaders[1]),
-				};
-
-				Renderer::Shader debugShaders[2] {
-					{ renderer, VK_SHADER_STAGE_VERTEX_BIT, },
-					{ renderer, VK_SHADER_STAGE_FRAGMENT_BIT, },
-				};
-
-				if (!debugShaders[0].Compile(Shaders::debug_pipeline_vertex_shader)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile vertex shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
-				}
-
-				if (!debugShaders[1].Compile(Shaders::debug_pipeline_fragment_shader)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to compile fragment shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
-				}
-
-				const VkPipelineShaderStageCreateInfo debugPipelineShaderStageInfos[2] {
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugShaders[0]),
-					Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugShaders[1]),
-				};
-
-				static constexpr uint32_t pbr_draw_color_attachment_count = 3;
-
-				const VkFormat pbrDrawRenderingColorFormats[pbr_draw_color_attachment_count] {
-					colorImageResourceFormat,
-					colorImageResourceFormat,
-					colorImageResourceFormat,
-				};
-
-				const VkPipelineRenderingCreateInfo pbrDrawPipelineRenderingInfo 
-					= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(pbr_draw_color_attachment_count, pbrDrawRenderingColorFormats, renderer.m_DepthOnlyFormat);
-
-				const VkPipelineRenderingCreateInfo udPipelineRenderingCreateInfo 
-					= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(0, nullptr, renderer.m_DepthOnlyFormat);
-
-				const VkPipelineRenderingCreateInfo pbrRenderPipelineRenderingInfo
-					= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &renderer.m_SwapchainSurfaceFormat.format, VK_FORMAT_UNDEFINED);
-
-				const VkPipelineRenderingCreateInfo debugPipelineRenderingInfo 
-					= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &renderer.m_SwapchainSurfaceFormat.format, 
-						renderer.m_DepthOnlyFormat);
-
-				VkPipelineColorBlendStateCreateInfo pbrDrawPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
-				pbrDrawPipelineColorBlendState.attachmentCount = pbr_draw_color_attachment_count;
-				VkPipelineColorBlendAttachmentState pbrDrawPipelineColorAttachmentStates[pbr_draw_color_attachment_count] {
-					Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
-					Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
-					Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
-				};
-				pbrDrawPipelineColorBlendState.pAttachments = pbrDrawPipelineColorAttachmentStates;
-
-				VkPipelineColorBlendStateCreateInfo pbrRenderPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
-				pbrRenderPipelineColorBlendState.attachmentCount = 1;
-				pbrRenderPipelineColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend;
-
-				VkPipelineColorBlendStateCreateInfo debugPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
-				debugPipelineColorBlendState.attachmentCount = 1;
-				debugPipelineColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
-
-				VkPipelineRasterizationStateCreateInfo debugPipelineRasterizationState = Renderer::GraphicsPipelineDefaults::rasterization_state;
-				debugPipelineRasterizationState.polygonMode = VK_POLYGON_MODE_LINE;
-
-				static constexpr uint32_t pipeline_count = 4;
-
-				VkGraphicsPipelineCreateInfo graphicsPipelineInfos[pipeline_count] = { 
-					{
-						.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-						.pNext = &pbrDrawPipelineRenderingInfo,
-						.stageCount = 2,
-						.pStages = pbrDrawPipelineShaderStageInfos,
-						.pVertexInputState = &Vertex::GetVertexInputState(),
-						.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
-						.pTessellationState = nullptr,
-						.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
-						.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
-						.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
-						.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
-						.pColorBlendState = &pbrDrawPipelineColorBlendState,
-						.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
-						.layout = m_DrawPipelineLayoutPBR,
-						.renderPass = VK_NULL_HANDLE,
-						.subpass = 0,
-						.basePipelineHandle = VK_NULL_HANDLE,
-						.basePipelineIndex = 0,
-					},
-					{
-						.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-						.pNext = &udPipelineRenderingCreateInfo,
-						.flags = 0,
-						.stageCount = 1,
-						.pStages = &udDrawPipelineShaderStageInfo,
-						.pVertexInputState = &Vertex::GetVertexInputState(),
-						.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
-						.pTessellationState = nullptr,
-						.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
-						.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
-						.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
-						.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
-						.pColorBlendState = &Renderer::GraphicsPipelineDefaults::color_blend_state,
-						.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
-						.layout = m_DrawPipelineLayoutUD,
-						.renderPass = VK_NULL_HANDLE,
-						.subpass = 0,
-						.basePipelineHandle = VK_NULL_HANDLE,
-						.basePipelineIndex = 0,
-					},
-					{
-						.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-						.pNext = &pbrRenderPipelineRenderingInfo,
-						.stageCount = 2,
-						.pStages = pbrRenderPipelineShaderStageInfos,
-						.pVertexInputState = &Vertex2D::GetVertexInputState(),
-						.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
-						.pTessellationState = nullptr,
-						.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
-						.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
-						.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
-						.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state_no_depth_tests,
-						.pColorBlendState = &pbrRenderPipelineColorBlendState,
-						.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
-						.layout = m_RenderPipelineLayoutPBR,
-						.renderPass = nullptr,
-						.subpass = 0,
-						.basePipelineHandle = VK_NULL_HANDLE,
-						.basePipelineIndex = 0,
-					},
-					{
-						.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-						.pNext = &debugPipelineRenderingInfo,
-						.stageCount = 2,
-						.pStages = debugPipelineShaderStageInfos,
-						.pVertexInputState = &Vertex::GetVertexInputState(),
-						.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
-						.pTessellationState = nullptr,
-						.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
-						.pRasterizationState = &debugPipelineRasterizationState,
-						.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
-						.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
-						.pColorBlendState = &debugPipelineColorBlendState,
-						.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
-						.layout = m_DebugPipelineLayout,
-						.renderPass = VK_NULL_HANDLE,
-						.subpass = 0,
-						.basePipelineHandle = VK_NULL_HANDLE,
-						.basePipelineIndex = 0,
-					},
-				};
-
-				VkPipeline pipelines[pipeline_count];
-
-				if (!renderer.CreateGraphicsPipelines(pipeline_count, graphicsPipelineInfos, pipelines)) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create world graphics pipeline (function Renderer::CreateGraphicsPipelines in function World::Pipelines::Initialize)!");
-				}
-
-				m_DrawPipelinePBR = pipelines[0];
-				m_DrawPipelineUD = pipelines[1];
-				m_RenderPipelinePBR = pipelines[2];
-				m_DebugPipeline = pipelines[3];
-			}
-
-			void Terminate(Renderer& renderer) {
-				renderer.DestroyDescriptorSetLayout(m_CameraDescriptorSetLayout);
-				renderer.DestroyDescriptorSetLayout(m_RenderPBRImagesDescriptorSetLayout);
-				renderer.DestroyDescriptorSetLayout(m_DirectionalLightShadowMapDescriptorSetLayout);
-				renderer.DestroyDescriptorSetLayout(m_SingleTextureDescriptorSetLayoutPBR);
-				renderer.DestroyPipeline(m_DrawPipelinePBR);
-				renderer.DestroyPipelineLayout(m_DrawPipelineLayoutPBR);
-				renderer.DestroyPipeline(m_DrawPipelineUD);
-				renderer.DestroyPipelineLayout(m_DrawPipelineLayoutUD);
-				renderer.DestroyPipeline(m_RenderPipelinePBR);
-				renderer.DestroyPipelineLayout(m_RenderPipelineLayoutPBR);
-				renderer.DestroyPipeline(m_DebugPipeline);
-				renderer.DestroyPipelineLayout(m_DebugPipelineLayout);
-			}
-		};
-
-		class RayTarget : private PersistentReferenceHolder<RayTarget> {
-
-			friend class World;
-			friend class DynamicArray<RayTarget>;
-
-		public:
-			
-			struct CreateInfo {
-				const LogicMesh& m_LogicMesh;
-				Mat4 m_Transform;
-			};
-
-		private:
-
-			const uint64_t m_ObjectID;
-			LogicMesh m_LogicMesh;
-			Mat4 m_Transform;
-
-			RayTarget(uint64_t objectID, const CreateInfo& createInfo) 
-				: PersistentReferenceHolder<RayTarget>() , m_ObjectID(objectID), 
-					m_LogicMesh(createInfo.m_LogicMesh), m_Transform(createInfo.m_Transform) {
-				m_LogicMesh.UpdateTransform(m_Transform);
-			}
-			
-			RayTarget(const RayTarget &) = delete;
-			RayTarget(RayTarget&&) = default;
-
-		public:
-
-			bool AABBCheck(const Vec3& position) const {
-				return m_LogicMesh.AABBCheck(position);
-			}
-
-			bool AABBCheck(const Ray& ray) const {
-				return m_LogicMesh.AABBCheck(ray);
-			}
-
-			bool RayCheck(const Ray& ray, RayHitInfo& outHitInfo) const {
-				return m_LogicMesh.IsRayHit(ray, outHitInfo);
-			}
-
-			void UpdateTransform(const Mat4& transform) {
-				m_Transform = transform;
-				m_LogicMesh.UpdateTransform(m_Transform);
-			}
-		};
-
-		class Obstacle : private PersistentReferenceHolder<Obstacle> {
-
-			friend class World;
-			friend class DynamicArray<Obstacle>;
-
-		public:
-
-			struct CreateInfo {
-				Vec3 m_Position{};
-				float m_YRotation{};
-				Collider::CreateInfo m_ColliderInfo{};
-			};
-
-			Box<float> GetBoundingBox() const {
-				return m_Collider.GetBoundingBox();
-			}
-
-		private:
-
-			uint64_t m_ObjectID;
-			Vec3 m_Position;
-			float m_YRotation;
-			Vec3 m_Velocity;
-			Collider m_Collider;
-
-			Obstacle(uint64_t objectID, const CreateInfo& info) noexcept 
-				: PersistentReferenceHolder<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position),
-					m_YRotation(info.m_YRotation), m_Collider(m_Position, m_YRotation, m_Velocity, info.m_ColliderInfo) {}
-
-			Obstacle(const Obstacle&) = delete;
-
-			Obstacle(Obstacle&& other) noexcept : m_ObjectID(other.m_ObjectID),
-				m_Position(other.m_Position), m_YRotation(other.m_YRotation), 
-					m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}
-
-			bool Collides(const Collider& collider, Vec3& outColliderPushBack) const {
-				return Collider::ColliderToStaticColliderCollides(collider, m_Collider, outColliderPushBack);
-			}
-		};
-
-		class Area : private PersistentReferenceHolder<Area> {
-
-			friend class World;
-			friend class DynamicArray<Area>;
-
-		public:
-
-			World& m_World;
-			const uint64_t m_ObjectID;
-
-		private:
-
-			Box<float> m_BoundingBox{};
-			DynamicArray<Obstacle> m_Obstacles{};
-			DynamicArray<RayTarget> m_RayTargets{};
-			
-			Area(World& world, uint64_t objectID) noexcept
-				: m_World(world), m_ObjectID(objectID) {}
-
-		public:
-
-			PersistentReference<Obstacle> AddObstacle(const Obstacle::CreateInfo& info) {
-				return m_StaticObstacles.EmplaceBack(m_World.m_NextObjectID++, info);
-			}
-
-			PersistentReference<RayTarget> AddRayTarget(const RayTarget::CreateInfo& info) {
-				return m_RayTargets.EmplaceBack(m_World.m_NextObjectID++, info);
-			}
-
-			bool IsPointInside(const Vec3& point) const {
-				return m_BoundingBox.IsPointInside(Vec2(point.x, point.z));
-			}
-
-			const bool CastRay(const Ray& ray, RayHitInfo& outInfo) const {
-				float min_distance = float_max;
-				for (const RayTarget& target : m_RayTargets) {
-					if (target.AABBCheck(ray)) {
-						RayHitInfo hitInfo;
-						if (target.RayCheck(ray, hitInfo) && min_distance > hitInfo.m_Distance) {
-							min_distance = hitInfo.m_Distance;
-							outInfo = hitInfo;
-						}
-					}
-				}
-			}
-
-			const bool CollisionCheck(Collider& collider, Vec3& outPushBack) const {
-				for (const Obstacle& obstacle : m_StaticObstacles) {
-					if (Collider::ColliderToStaticColliderCollides(collider, obstacle.m_Collider, outPushBack)) {
-					}
-				}
-			}
-		};
-
-		class UnidirectionalLight;
-
-		class Body : private PersistentReferenceHolder<Body> {
-
-			friend class World;
-			friend class DynamicArray<Body>;
-
-		private:	
-
-			const uint64_t m_ObjectID;
-			const PersistentReference<Area> m_Area;
-			Vec3 m_Position;
-			Vec3 m_Velocity;
-			float m_YRotation;
-			float m_Height;
-			Collider m_Collider;
-
-			Body(uint64_t objectID, const Vec3& position, float height, Area& area, const Collider::CreateInfo& colliderInfo)
-				: PersistentReferenceHolder<Body>(), m_Area(area), m_Position(position), m_Velocity(0), m_ObjectID(objectID),
-					m_Height(height), m_Collider(m_Position, m_YRotation, m_Velocity, colliderInfo) {
-			}
-
-			Body(const Body&) = delete;
-
-			Body(Body&& other) noexcept 
-				: m_ObjectID(other.m_ObjectID), m_Area(other.m_Area), m_Position(other.m_Position), m_YRotation(other.m_YRotation),
-					m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}
-
-		public:	
-
-			const Vec3& GetPosition() const {
-				return m_Position;
-			}
-
-			void Move(const Vec3& position) {
-				if (m_Area.IsNull()) {
-					PrintError(ErrorOrigin::GameLogic,
-						"area was null when attempting to move body (in function World::Body::Move)!");
-					return;
-				}
-				m_Position += position - m_Position;
-				Vec3 pushBack;
-				if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
-					m_Position += pushBack;
-				}
-			}
-
-			void SetYRotation(float rot) {
-				m_YRotation = rot;
-				if (m_Area.IsNull()) {
-					PrintError(ErrorOrigin::GameLogic,
-						"area was null when attempting to rotate body (in function World::Body::SetYRotation)!");
-					return;
-				}
-				Vec3 pushBack;
-				if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
-					m_Position += pushBack;
-				}
-			}
-
-			const Collider& GetCollider()  const {
-				return m_Collider;
-			}
-		};
+	public:
 
 		class Entity {
 			virtual void Update(World& world) = 0;
@@ -5337,29 +5168,6 @@ void main() {
 
 		};	
 
-		struct DebugRenderData : PersistentReferenceHolder<DebugRenderData> {
-
-			friend class Engine;
-
-		private:
-
-			const uint64_t m_ObjectID;
-
-		public:
-
-			Mat4 m_Transform;
-			Vec4 m_WireColor;
-			MeshData m_MeshData;
-
-			DebugRenderData(uint64_t objectID, const Mat4& transform, const Vec4& wireColor, const MeshData& meshData) noexcept 
-				: PersistentReferenceHolder<DebugRenderData>(), 
-					m_ObjectID(objectID), m_Transform(transform), m_WireColor(wireColor), m_MeshData(meshData) {}
-
-			DebugRenderData(const DebugRenderData&) = delete;
-
-			DebugRenderData(DebugRenderData&& other) noexcept = default;
-		};
-
 		struct TextureMap {
 
 			friend class World;
@@ -5379,464 +5187,20 @@ void main() {
 			Mat4 m_View;
 		};
 
-		class UnidirectionalLight {
-
-			friend class World;
-
-		public:
-
-			struct Matrices {
-
-				Mat4 m_Projection { 1 };
-				Mat4 m_View { 1 };
-
-				Mat4 GetLightViewMatrix() const {
-					return m_Projection * m_View;
-				}
-
-				Vec3 GetDirection() const {
-					return m_View.LookAtFront();
-				}
-			};
-
-			enum class Type {
-				Directional = 0,
-				Spot = 1,
-			};
-
-			struct FragmentBufferDirectional {
-				Mat4 m_ViewMatrix{};
-				Vec3 m_Direction{};
-				uint8_t pad0[4];
-				Vec3 m_Color{};
-			};
-
-			struct FragmentBufferSpot {
-				Mat4 m_ViewMatrix{};
-				Vec3 m_Position{};
-				uint8_t pad0[4];
-				Vec3 m_Color{};
-				uint8_t pad1[4];
-				float angle;
-			};
-
-			World& m_World;
-
-			const uint64_t m_ObjectID;
-
-		private:
-
-			const Type m_Type;
-
-			DynamicArray<VkImageView> m_DepthImageViews{};
-			Vec2_T<uint32_t> m_ShadowMapResolution;
-
-			Matrices m_ViewMatrices{};
-
-			DynamicArray<VkDescriptorSet> m_ShadowMapDescriptorSets{};
-
-			void* m_FragmentMap{};
-
-			DynamicArray<VkImage> m_DepthImages{};
-			DynamicArray<VkDeviceMemory> m_DepthImagesMemory{};
-			VkDescriptorPool m_ShadowMapDescriptorPool{};
-			VkSampler m_ShadowMapSampler{};
-			Renderer::Buffer m_FragmentBuffer;
-
-			UnidirectionalLight(World& world, uint64_t objectID, Type type, Vec2_T<uint32_t> shadowMapResolution) 
-				: m_World(world), m_ObjectID(objectID), m_ShadowMapResolution(shadowMapResolution), m_Type(type),
-					m_FragmentBuffer(world.m_Renderer) {}
-
-			UnidirectionalLight(const UnidirectionalLight&) = delete;
-			UnidirectionalLight(UnidirectionalLight&&) = delete;
-
-			void Initialize(const Mat4& projection, const Mat4& view, const Vec3& color) {
-
-				assert(m_Type == Type::Directional);
-
-				Renderer& renderer = m_World.m_Renderer;
-
-				uint32_t framesInFlight = renderer.m_FramesInFlight;	
-
-				if (m_DepthImages.Size() != framesInFlight) {
-					LockGuard graphicsQueueLockGuard(renderer.m_EarlyGraphicsCommandBufferQueueMutex);
-					Renderer::CommandBuffer<Renderer::Queue::Graphics>* commandBuffer
-						= renderer.m_EarlyGraphicsCommandBufferQueue.New();
-					if (!commandBuffer) {
-						CriticalError(ErrorOrigin::Renderer,
-							"renderer graphics command buffer was out of memory (in function World::Initialize)!");
-					}
-					if (!renderer.AllocateCommandBuffers(Renderer::GetDefaultCommandBufferAllocateInfo(
-							renderer.GetCommandPool<Renderer::Queue::Graphics>(), 1), 
-							&commandBuffer->m_CommandBuffer)) {
-			m_Are
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to allocate command buffer (function Renderer::AllocateCommandBuffers in function World::Initialize)");
-					}
-					if (!renderer.BeginCommandBuffer(commandBuffer->m_CommandBuffer)) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to begin command buffer (function Renderer::BeginCommandBuffer in function World::Initialize)");
-					}
-					SwapchainCreateCallback(framesInFlight, commandBuffer->m_CommandBuffer);
-					VkResult vkRes = vkEndCommandBuffer(commandBuffer->m_CommandBuffer);
-					if (vkRes != VK_SUCCESS) {
-						CriticalError(ErrorOrigin::Vulkan, 
-							"failed to end command buffer (function vkEndCommandBuffer in function World::Initialize)!",
-						vkRes);
-					}
-					commandBuffer->m_Flags = Renderer::CommandBufferFlag_FreeAfterSubmit;
-				}
-
-				m_ViewMatrices.m_Projection = projection;
-				m_ViewMatrices.m_View = view;
-
-				*(FragmentBufferDirectional*)m_FragmentMap = {
-					.m_ViewMatrix = m_ViewMatrices.GetLightViewMatrix(),
-					.m_Direction = m_ViewMatrices.GetDirection(),
-					.m_Color = color,
-				};
-			}
-
-			void Terminate() {
-				Renderer& renderer = m_World.m_Renderer;
-				for (uint32_t i = 0; i < m_DepthImages.Size(); i++) {
-					renderer.DestroyImageView(m_DepthImageViews[i]);
-					renderer.DestroyImage(m_DepthImages[i]);
-					renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
-				}
-				renderer.DestroyDescriptorPool(m_ShadowMapDescriptorPool);
-				renderer.DestroySampler(m_ShadowMapSampler);
-				m_FragmentBuffer.Terminate();
-			}
-
-			FragmentBufferDirectional& GetDirectionalBuffer() {
-				assert(m_FragmentMap);
-				return *(FragmentBufferDirectional*)(m_FragmentMap);
-			}
-
-		public:
-
-			void SetViewMatrix(const Mat4& matrix) {
-				if (m_Type == Type::Directional) {
-					m_ViewMatrices.m_View = matrix;
-					auto& buf = GetDirectionalBuffer();
-					buf.m_ViewMatrix = m_ViewMatrices.GetLightViewMatrix();
-					buf.m_Direction = m_ViewMatrices.GetDirection();
-				}
-				else {
-				}
-			}
-
-			void DepthDraw(const Renderer::DrawData& drawData) const {
-
-				VkImageMemoryBarrier memoryBarrier1 {
-					.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-					.pNext = nullptr,
-					.srcAccessMask = 0,
-					.dstAccessMask = 0,
-					.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-					.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-					.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-					.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-					.image = m_DepthImages[drawData.m_CurrentFrame],
-					.subresourceRange {
-						.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-						.baseMipLevel = 0,
-						.levelCount = 1,
-						.baseArrayLayer = 0,
-						.layerCount = 1,
-					},
-				};
-
-				vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
-					0, 0, nullptr, 0, nullptr, 1, &memoryBarrier1);
-
-				VkExtent2D extent { m_ShadowMapResolution.x, m_ShadowMapResolution.y };
-
-				VkRect2D scissor {
-					.offset = { 0, 0 },
-					.extent = extent,
-				};
-
-				VkViewport viewport {
-					.x = 0,
-					.y = 0,
-					.width = (float)extent.width,
-					.height = (float)extent.height,
-					.minDepth = 0.0f,
-					.maxDepth = 1.0f,
-				};
-
-				vkCmdSetScissor(drawData.m_CommandBuffer, 0, 1, &scissor);
-				vkCmdSetViewport(drawData.m_CommandBuffer, 0, 1, &viewport);
-
-				VkRenderingAttachmentInfo depthAttachment {
-					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-					.pNext = nullptr,
-					.imageView = m_DepthImageViews[drawData.m_CurrentFrame],
-					.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-					.resolveMode = VK_RESOLVE_MODE_NONE,
-					.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-					.clearValue { .depthStencil { .depth = 1.0f, .stencil = 0 } },
-				};
-
-				VkRenderingInfo renderingInfo {
-					.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.renderArea = { .offset { 0, 0 }, .extent { extent }, },
-					.layerCount = 1,
-					.viewMask = 0,
-					.colorAttachmentCount = 0,
-					.pColorAttachments = nullptr,
-					.pDepthAttachment = &depthAttachment,
-					.pStencilAttachment = nullptr,
-				};
-
-				const Pipelines& pipelines = m_World.m_Pipelines;
-
-				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
-				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.m_DrawPipelineUD);
-				Mat4 matrices[2] {
-					m_ViewMatrices.GetLightViewMatrix(),
-					{},
-				};
-				for (const RenderData& renderData : m_World.m_RenderDatas) {
-					matrices[1] = renderData.m_Transform;
-					matrices[1][3].y *= -1;
-					vkCmdPushConstants(drawData.m_CommandBuffer, pipelines.m_DrawPipelineLayoutUD, VK_SHADER_STAGE_VERTEX_BIT, 0, 128, matrices);
-					vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 0, 1, renderData.m_MeshData.m_VertexBuffers, renderData.m_MeshData.m_VertexBufferOffsets);
-					vkCmdBindIndexBuffer(drawData.m_CommandBuffer, renderData.m_MeshData.m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-					vkCmdDrawIndexed(drawData.m_CommandBuffer, renderData.m_MeshData.m_IndexCount, 1, 0, 0, 0);
-				}	
-				vkCmdEndRendering(drawData.m_CommandBuffer);
-
-				scissor.extent = drawData.m_SwapchainExtent;
-				viewport.width = (float)drawData.m_SwapchainExtent.width;
-				viewport.height = (float)drawData.m_SwapchainExtent.height;
-				vkCmdSetScissor(drawData.m_CommandBuffer, 0, 1, &scissor);
-				vkCmdSetViewport(drawData.m_CommandBuffer, 0, 1, &viewport);
-
-				VkImageMemoryBarrier memoryBarrier2 {
-					.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-					.pNext = nullptr,
-					.srcAccessMask = 0,
-					.dstAccessMask = 0,
-					.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-					.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-					.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-					.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-					.image = m_DepthImages[drawData.m_CurrentFrame],
-					.subresourceRange {
-						.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-						.baseMipLevel = 0,
-						.levelCount = 1,
-						.baseArrayLayer = 0,
-						.layerCount = 1,
-					},
-				};
-
-				vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
-					0, 0, nullptr, 0, nullptr, 1, &memoryBarrier2);
-			}
-
-			VkDeviceSize FragmentBufferSize() const {
-				return m_Type == Type::Directional ? sizeof(FragmentBufferDirectional) : sizeof(FragmentBufferSpot);
-			}
-
-			void SwapchainCreateCallback(uint32_t imageCount, VkCommandBuffer commandBuffer) {
-
-				Renderer& renderer = m_World.m_Renderer;
-
-				if (m_FragmentBuffer.IsNull()) {
-					if (!m_FragmentBuffer.Create(FragmentBufferSize(), 
-							VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create buffer for directional light (function Renderer::Buffer::Create in function World::DirectionalLight::SwapchainCreateCallback)!");
-					}
-					if (!m_FragmentBuffer.MapMemory(0, m_FragmentBuffer.m_BufferSize, (void**)&m_FragmentMap)) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to map buffer memory for directional light (function Renderer::Buffer::MapMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
-					}
-				}
-
-				if (m_DepthImageViews.Size() != imageCount) {
-					if (m_DepthImages.Size() < imageCount) {
-
-						size_t oldImageCount = m_DepthImages.Size();
-
-						m_DepthImages.Resize(imageCount);
-						m_DepthImagesMemory.Resize(imageCount);
-						m_DepthImageViews.Resize(imageCount);
-
-						VkExtent3D extent = { m_ShadowMapResolution.x, m_ShadowMapResolution.y, 1 };
-
-						for (size_t i = oldImageCount; i < imageCount; i++) {
-							VkImage& image = m_DepthImages[i];
-							VkDeviceMemory& memory = m_DepthImagesMemory[i];
-							VkImageView& imageView = m_DepthImageViews[i];
-							image = renderer.CreateImage(VK_IMAGE_TYPE_2D, renderer.m_DepthOnlyFormat, 
-								extent, 1, 1, VK_SAMPLE_COUNT_1_BIT, 
-								VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
-								VK_SHARING_MODE_EXCLUSIVE, 1, &renderer.m_GraphicsQueueFamilyIndex);
-							if (image == VK_NULL_HANDLE) {
-								CriticalError(ErrorOrigin::Renderer, 
-									"failed to create depth image for directional light (function Renderer::CreateImage in function World::DirectionalLight::SwapchainCreateCallback)!");
-							}
-							memory = renderer.AllocateImageMemory(image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-							if (memory == VK_NULL_HANDLE) {
-								CriticalError(ErrorOrigin::Renderer, 
-									"failed to allocate depth image memory for directional light (function Renderer::AllocateImageMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
-							}
-							imageView = renderer.CreateImageView(image, VK_IMAGE_VIEW_TYPE_2D, renderer.m_DepthOnlyFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
-							if (imageView == VK_NULL_HANDLE) {
-								CriticalError(ErrorOrigin::Renderer, 
-									"failed to create depth image view for directional light (function Renderer::AllocateImageMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
-							}
-
-							VkImageMemoryBarrier memoryBarrier = {
-								.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-								.pNext = nullptr,
-								.srcAccessMask = 0,
-								.dstAccessMask = 0,
-								.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-								.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-								.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-								.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-								.image = image,
-								.subresourceRange {
-									.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-									.baseMipLevel = 0,
-									.levelCount = 1,
-									.baseArrayLayer = 0,
-									.layerCount = 1,
-								},
-							};
-
-							vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-								VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &memoryBarrier);
-						}	
-					}
-					else {
-						for (size_t i = imageCount; i < m_DepthImages.Size(); i++) {
-							renderer.DestroyImageView(m_DepthImageViews[i]);
-							renderer.DestroyImage(m_DepthImages[i]);
-							renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
-						}
-						m_DepthImages.Resize(imageCount);
-						m_DepthImagesMemory.Resize(imageCount);
-						m_DepthImageViews.Resize(imageCount);
-					}
-					if (m_ShadowMapSampler == VK_NULL_HANDLE) {
-						VkSamplerCreateInfo samplerInfo = Renderer::GetDefaultSamplerInfo();
-						samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-						m_ShadowMapSampler = renderer.CreateSampler(samplerInfo);
-						if (m_ShadowMapSampler == VK_NULL_HANDLE) {
-							CriticalError(ErrorOrigin::Renderer, 
-								"failed to create shadow map sampler for directional light (function Renderer::CreateSampler in function World::DirectionalLight::SwapchainCreateCallback)!");
-						}
-					}
-					if (m_ShadowMapDescriptorPool != VK_NULL_HANDLE) {
-						renderer.DestroyDescriptorPool(m_ShadowMapDescriptorPool);
-					}
-					DynamicArray<VkDescriptorPoolSize> poolSizes(2 * imageCount);
-					for (uint32_t i = 0; i < poolSizes.Size();) {
-						poolSizes[i++] = {
-							.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-							.descriptorCount = 1,
-						};
-						poolSizes[i++] = {
-							.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-							.descriptorCount = 1,
-						};
-					}
-					m_ShadowMapDescriptorPool = renderer.CreateDescriptorPool(0, imageCount, poolSizes.Size(), poolSizes.Data());
-					if (m_ShadowMapDescriptorPool == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create descriptor pool for directional light (function Renderer::CreateDescriptorPool in function World::DirectionalLight::SwapchainCreateCallback)!");
-					}
-					m_ShadowMapDescriptorSets.Resize(imageCount);
-					DynamicArray<VkDescriptorSetLayout> setLayouts(imageCount);
-					for (VkDescriptorSetLayout& layout : setLayouts) {
-						layout = m_World.m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout;
-					}
-					if (!renderer.AllocateDescriptorSets(nullptr, m_ShadowMapDescriptorPool, imageCount, setLayouts.Data(), m_ShadowMapDescriptorSets.Data())) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to allocate descriptor sets for directional light (function Renderer::AllocateDescriptorSets in function World::DirectionalLight::SwapchainCreateCallback)!");
-					}
-					VkDescriptorBufferInfo descriptorBufferInfo {
-						.buffer = m_FragmentBuffer.m_Buffer,
-						.offset = 0,
-						.range = FragmentBufferSize(),
-					};
-					for (uint32_t i = 0; i < imageCount; i++) {
-						VkDescriptorImageInfo imageInfo {
-							.sampler = m_ShadowMapSampler,
-							.imageView = m_DepthImageViews[i],
-							.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-						};
-						VkWriteDescriptorSet descriptorWrites[2] {
-							Renderer::GetDescriptorWrite(nullptr, 0, m_ShadowMapDescriptorSets[i], VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr),
-							Renderer::GetDescriptorWrite(nullptr, 1, m_ShadowMapDescriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &descriptorBufferInfo),
-						};
-						renderer.UpdateDescriptorSets(2, descriptorWrites);
-					}
-				}	
-			}
-		};
-
-	private:
+	public:
 
 		Renderer& m_Renderer;
 
-		struct StaticMeshFile {
-
-			StaticMesh m_Mesh;
-
-			StaticMeshFile(Renderer& renderer) : m_Mesh(renderer) {}
-
-			bool LoadMesh(const String& fileName) {
-				FILE* fileStream = fopen(fileName.CString(), "r");
-				if (!fileStream) {
-					PrintError(ErrorOrigin::FileParsing, 
-						"failed to open mesh file (function fopen in function World::StaticMeshFile::LoadMesh)!");
-					fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
-						"mesh that failed to load {}", fileName.CString());
-				}
-				MeshFileType type = GetMeshFileType(fileName);
-				if (type == MeshFileType::Obj) {
-					Obj obj{};
-					obj.Load(fileStream);
-				}
-				else {
-					return false;
-				}
-			}
-		};
-
-		struct StaticTextureFile {
-			StaticTexture m_Texture;
-			VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
-			VkDescriptorSet m_DescriptorSet = VK_NULL_HANDLE;
-
-			StaticTextureFile(Renderer& renderer) : m_Texture(renderer) {}
-		};
-
-		Dictionary<StaticMeshFile> m_StaticMeshFiles;
-		Dictionary<StaticTextureFile> m_StaticDiffuseTextureFiles;
+	private:
 
 		Vec2_T<uint32_t> m_RenderResolution{};
 
 		uint64_t m_NextObjectID{};
 		VkDescriptorSet m_NullTextureDescriptorSet{};
 		DynamicArray<Area> m_Areas{};
-		Rect<float> m_WorldRect{};
 		DynamicArray<Body> m_Bodies{};
 		uint64_t m_CameraFollowObjectID = UINT64_MAX;
 		CameraMatricesBuffer* m_CameraMatricesMap = nullptr;
-
-		Vec2_T<float> m_ChunkDimensions{};
 
 		VkFormat m_ColorImageResourcesFormat{};
 
@@ -5844,15 +5208,13 @@ void main() {
 		DynamicArray<VkImageView> m_PositionAndMetallicImageViews{};
 		DynamicArray<VkImageView> m_NormalAndRougnessImageViews{};
 		DynamicArray<VkImageView> m_DepthImageViews{};
-		Pipelines m_Pipelines{};
+		pipelines::World m_Pipelines{};
 		DynamicArray<RenderData> m_RenderDatas{};
 		VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
 		DynamicArray<VkDescriptorSet> m_RenderPBRImagesDescriptorSets{};
 		UnidirectionalLight m_DirectionalLight;
 		MeshData m_StaticQuadMeshDataPBR{};
 	
-		DynamicArray<DebugRenderData> m_DebugRenderDatas{};
-
 		VkDescriptorSet m_DefaultAlbedoDescriptorSet{};
 		const float m_CameraFov = pi / 4.0f;
 		const float m_CameraNear = 0.1f;
@@ -5880,122 +5242,7 @@ void main() {
 		World(const World&) = delete;
 		World(World&&) = delete;
 
-		void Initialize(const StaticMesh& quadMesh2D) {
-
-			m_StaticQuadMeshDataPBR = quadMesh2D.GetMeshData();
-
-			m_Pipelines.Initialize(m_Renderer, m_ColorImageResourcesFormat);
-
-			if (!m_CameraMatricesBuffer.Create(sizeof(CameraMatricesBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
-					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to create camera matrices buffer (function Renderer::Buffer::Create in function World::Initialize)!");
-			}
-
-			VkResult vkRes = vkMapMemory(m_Renderer.m_VulkanDevice, m_CameraMatricesBuffer.m_VulkanDeviceMemory, 0, 
-				sizeof(CameraMatricesBuffer), 0, (void**)&m_CameraMatricesMap);
-			if (vkRes != VK_SUCCESS) {
-				CriticalError(ErrorOrigin::Vulkan, 
-					"failed to map camera matrices buffer (function vkMapMemory in function World::Initialize)!");
-			}
-
-			m_CameraMatricesMap->m_Projection = Mat4::Projection(m_CameraFov, 
-				(float)m_Renderer.m_SwapchainExtent.width / m_Renderer.m_SwapchainExtent.height, m_CameraNear, m_CameraFar);
-			m_CameraMatricesMap->m_View = Mat4::LookAt({ 0.0f, 0.0f, 0.0f }, Vec3(0.0f, 1.0f, 0.0f), Vec3(0.0f, 0.0f, 3.0f));
-
-			VkDescriptorPoolSize camPoolSize {
-				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-				.descriptorCount = 1,
-			};
-
-			m_CameraMatricesDescriptorPool = m_Renderer.CreateDescriptorPool(0, 1, 1, &camPoolSize);
-
-			if (m_CameraMatricesDescriptorPool == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to create camera matrices descriptor pool (function Renderer::CreateDescriptorPool in function World::Initialize)");
-			}
-
-			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_CameraMatricesDescriptorPool, 1, 
-					&m_Pipelines.m_CameraDescriptorSetLayout, &m_CameraMatricesDescriptorSet)) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to allocate camera matrices descriptor set (function Renderer::AllocateDescriptorSets in function World::Initialize)!");
-			}
-
-			VkDescriptorBufferInfo cameraDecriptorBufferInfo {
-				.buffer = m_CameraMatricesBuffer.m_Buffer,
-				.offset = 0,
-				.range = sizeof(CameraMatricesBuffer),
-			};
-
-			VkWriteDescriptorSet cameraDescriptorSetWrite = Renderer::GetDescriptorWrite(nullptr, 0, m_CameraMatricesDescriptorSet,
-				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &cameraDecriptorBufferInfo);
-
-			m_Renderer.UpdateDescriptorSets(1, &cameraDescriptorSetWrite);
-
-			m_DirectionalLight.Initialize(
-				Mat4::Orthogonal(-40.0f, 40.0f, -40.0f, 40.0f, 0.1f, 500.0f),
-				Mat4::LookAt(Vec3(10.0f, 10.0f, 2.0f), Vec3::Up(), Vec3(0.0f, 0.0f, 0.0f)),
-				Vec3(201.0f / 255.0f, 226.0f / 255.0f, 255.0f / 255.0f));
-
-			static constexpr uint32_t default_texture_count = 1;
-
-			static constexpr VkDescriptorPoolSize default_textures_pool_sizes[default_texture_count] {
-				{
-					.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-					.descriptorCount = 1,
-				},
-			};
-
-			m_DefaultTextureDescriptorPool = m_Renderer.CreateDescriptorPool(0, 1, default_texture_count, default_textures_pool_sizes);
-
-			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_DefaultTextureDescriptorPool,
-					1, &m_Pipelines.m_SingleTextureDescriptorSetLayoutPBR, &m_DefaultAlbedoDescriptorSet)) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to allocate default texture descriptor sets for world (function Renderer::AllocateDescriptorSets in function World::Initialize)!");
-			}
-
-			if (m_DefaultTextureDescriptorPool == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to create default texture descriptor pool for world (function Renderer::CreateDescriptorPool in function World::Initialize)!");
-			}
-
-			static constexpr uint32_t default_albedo_pixel = PackColorRBGA({ 242.0f / 255.0f, 15.0f / 255.0f, 204.0f / 255.0f, 1.0f });
-			static constexpr Vec2_T<uint32_t> default_albedo_extent = { 64U, 64U };
-			static constexpr size_t default_albedo_pixel_count = default_albedo_extent.x * default_albedo_extent.y;
-
-			uint32_t* const defaultAlbedoImage = (uint32_t*)malloc(sizeof(uint32_t) * default_albedo_pixel_count);
-
-			assert(defaultAlbedoImage);
-
-			for (size_t i = 0; i < default_albedo_pixel_count; i++) {
-				defaultAlbedoImage[i] = default_albedo_pixel;
-			}
-
-			if (!m_DefaultAlbedoTexture.Create(VK_FORMAT_R8G8B8A8_SRGB, default_albedo_extent, defaultAlbedoImage)) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to create default albedo texture for world(function Texture::Create in function World::Initialize)!");
-			}
-
-			free(defaultAlbedoImage);
-
-			m_DefaultAlbedoImageView = m_DefaultAlbedoTexture.CreateImageView();
-
-			if (m_DefaultAlbedoImageView == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to create default albedo image view for world (function Texture::CreateImageView in function World::Initialize)");
-			}
-
-			const VkDescriptorImageInfo defaultAlbedoImageInfo {
-				.sampler = m_ColorResourceImageSampler,
-				.imageView = m_DefaultAlbedoImageView,
-				.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-			};
-
-			const VkWriteDescriptorSet defaultAlbedoDescriptorWrite = Renderer::GetDescriptorWrite(nullptr, 0, m_DefaultAlbedoDescriptorSet, 
-				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &defaultAlbedoImageInfo, nullptr);
-
-			m_Renderer.UpdateDescriptorSets(1, &defaultAlbedoDescriptorWrite);
-		}
+		void Initialize(const StaticMesh& quadMesh2D);
 
 		void Terminate() {
 			m_CameraMatricesBuffer.Terminate();
@@ -6027,11 +5274,15 @@ void main() {
 			}
 		}
 
+	public:
+
 		Area& LoadArea(const DynamicArray<Obstacle::CreateInfo>& staticObstacleInfos, const DynamicArray<RayTarget::CreateInfo>& rayTargetInfos) {
 			return m_Areas.EmplaceBack(*this, m_NextObjectID++, staticObstacleInfos, rayTargetInfos);
 		}
 
-		int ParseStaticMesh(FILE* fileStream, StaticMeshFile** outFile, Mat4& outTransform) {
+	private:
+
+		int LoadStaticMesh(FILE* fileStream, StaticMeshFile** outFile, Mat4& outTransform) {
 			assert(outFile);
 			if (FileHandler::Skip(fileStream, Array<char, 2>{ '\n', ' ' }) == EOF) {
 				return EOF;
@@ -6042,6 +5293,10 @@ void main() {
 			if (!*outFile) {
 				auto sm = m_StaticMeshFiles.Emplace(string.CString(), m_Renderer);
 				*outFile = sm;
+				if (!sm->LoadMesh(string)) {
+					PrintError(ErrorOrigin::FileParsing, 
+						"failed to load static mesh (function World::StaticMeshFile::LoadMesh in function World::LoadStaticMesh)!");
+				}
 			}
 			if (fscanf(fileStream, "%f%f%f%f %f%f%f%f %f%f%f%f %f%f%f%f",
 					&outTransform[0][0], &outTransform[0][1], &outTransform[0][2], &outTransform[0][3],
@@ -6050,7 +5305,7 @@ void main() {
 					&outTransform[3][0], &outTransform[3][1], &outTransform[3][2], &outTransform[3][3])
 				!= 16) {
 				PrintError(ErrorOrigin::FileParsing, 
-					"failed to parse static mesh transform (function fscanf in function World::ParseStaticMeshFile)!");
+					"failed to parse static mesh transform (function fscanf in function World::LoadStaticMesh)!");
 				return 1;
 			}
 			return 0;
@@ -6098,7 +5353,7 @@ void main() {
 						if (!strcmp(buf, "SM")) {
 							StaticMeshFile* sm;
 							Mat4 transform;
-							res = ParseStaticMesh(fileStream, &sm, transform);
+							res = LoadStaticMesh(fileStream, &sm, transform);
 							if (res == EOF) {
 								PrintError(ErrorOrigin::FileParsing, 
 									"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
@@ -6106,7 +5361,7 @@ void main() {
 							}
 							else if (res) {
 								PrintError(ErrorOrigin::FileParsing, 
-									"failed to parse static mesh file (in function World::LoadObstacle)!");
+									"failed to load static mesh (function World::LoadStaticMesh in function World::LoadObstacle)!");
 								return false;
 							}
 							assert(sm);
@@ -6143,50 +5398,7 @@ void main() {
 						continue;
 				}
 			}
-			for (auto tuple : m_StaticMeshFiles) {
-				MeshFileType fileType = GetMeshFileType(tuple.first);
-				StaticMeshFile& meshFile = tuple.second;
-				switch (fileType) {
-					case MeshFileType::Unrecognized:
-						PrintError(ErrorOrigin::FileParsing, 
-							"found unrecognized mesh file type when parsing world file (function GetMeshFileType in function World::Load)!");
-						break;
-					case MeshFileType::Obj:
-						FILE* fileStream = fopen(tuple.first.CString(), "r");
-						if (!fileStream) {
-							PrintError(ErrorOrigin::FileParsing, 
-								"failed to open mesh file when parsing world file (function fopen in function World::Load)!");
-							continue;
-						}
-						Obj obj{};
-						if (!obj.Load(fileStream)) {
-							fclose(fileStream);
-							PrintError(ErrorOrigin::FileParsing, 
-								"failed to load obj file (function Obj::Load in function World::Load)!");
-							continue;
-						}
-						fclose(fileStream);
-						DynamicArray<Vertex> vertices{};
-						DynamicArray<uint32_t> indices{};
-						if (!obj.GetMesh(Vertex::SetPosition, Vertex::SetUV, Vertex::SetNormal, vertices, indices)) {
-							PrintError(ErrorOrigin::Engine, 
-								"failed to construct mesh from obj file (function Obj::GetMesh in function World::Load)!");
-						}
-						if (!meshFile.m_Mesh.CreateBuffers(vertices.Size(), vertices.Data(), indices.Size(), indices.Data())) {
-							PrintError(ErrorOrigin::Engine, 
-								"failed to create mesh (function StaticMesh::CreateBuffers in function World::Load)!");
-						}
-						MeshData meshData = meshFile.m_Mesh.GetMeshData();
-						for (const auto& tuple : meshFile.m_Obstacles) {
-							AddRenderData(*tuple.first, tuple.second, meshData);
-						}
-						for (const auto& tuple : meshFile.m_RayTargets) {
-							AddRenderData(*tuple.first, tuple.second, meshData);
-						}
-						break;
-				}
-			}
-			return true;
+			return { true, area };
 		}
 
 		void Unload() {
@@ -6198,11 +5410,9 @@ void main() {
 	public:
 
 		Body& AddBody(const Vec3& position, float height, const Collider::CreateInfo& colliderInfo) {
-			Vec3 pos(Clamp(position.x, m_WorldRect.m_Min.x + 0.01f, m_WorldRect.m_Max.x - 0.01f), 0.0f,
-				Clamp(position.z, m_WorldRect.m_Min.y + 0.01f, m_WorldRect.m_Max.y - 0.01f));
-			for (const Area& chunk : m_Areas) {
-				if (chunk.IsPointInside(pos)) {
-					return m_Bodies.EmplaceBack(m_NextObjectID++, pos, height, &chunk, colliderInfo);
+			for (const Area& area : m_Areas) {
+				if (area.IsPointInside(position)) {
+					return m_Bodies.EmplaceBack(m_NextObjectID++, area, height, &area, colliderInfo);
 				}
 			}
 		}
@@ -6269,319 +5479,20 @@ void main() {
 			return m_RenderDatas.EmplaceBack(obstacle.m_ObjectID, flags, transform, meshData);
 		}
 
-		PersistentReference<DebugRenderData> AddDebugRenderData(RenderDataFlags flags, const Obstacle& obstacle, 
-				const Mat4& transform, const Vec4& wireColor, const MeshData& meshData) {
-			return m_DebugRenderDatas.EmplaceBack(obstacle.m_ObjectID, flags, transform, wireColor, meshData);
-		}
-
 	private:
 
-		void SwapchainCreateCallback(VkExtent2D swapchainExtent, Vec2_T<uint32_t> renderResolution, float aspectRatio, uint32_t imageCount) {
-
-			m_RenderResolution = renderResolution;
-
-			if (m_CameraMatricesMap) {
-				m_CameraMatricesMap->m_Projection 
-					= Mat4::Projection(m_CameraFov, aspectRatio, m_CameraNear, m_CameraFar);
-			}
-
-			if (m_ColorImageResourcesFormat == VK_FORMAT_UNDEFINED) {
-				VkFormat colorImageResourcesFormatCandidates[2] = { VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_B8G8R8A8_SRGB };
-				m_ColorImageResourcesFormat = m_Renderer.FindSupportedFormat(1, colorImageResourcesFormatCandidates, 
-					VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
-				if (m_ColorImageResourcesFormat == VK_FORMAT_UNDEFINED) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"couldn't find suitable format for color image resources (function Renderer::FindSupportedFormat in function World::SwapchainCreateCallback)!");
+		void RemoveRenderDatas(uint64_t objectID) {
+			auto end = m_RenderDatas.end();
+			for (auto iter = m_RenderDatas.begin(); iter != end;) {
+				if (iter->m_ObjectID == objectID) {
+					iter = m_RenderDatas.Erase(iter);
+					continue;
 				}
+				++iter;
 			}
-
-			static constexpr uint32_t descriptor_count = 3;
-
-			if (m_Pipelines.m_RenderPBRImagesDescriptorSetLayout == VK_NULL_HANDLE) {
-
-				VkDescriptorSetLayoutBinding imageSamplerDescriptorSetBinding {
-					.binding = 0,
-					.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-					.descriptorCount = 1,
-					.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-					.pImmutableSamplers = nullptr,
-				};
-
-				VkDescriptorSetLayoutBinding pbrRenderPipelineDescriptorSetBindings[descriptor_count] {
-					imageSamplerDescriptorSetBinding,
-					imageSamplerDescriptorSetBinding,
-					imageSamplerDescriptorSetBinding,
-				};
-
-				for (uint32_t i = 1; i < descriptor_count; i++) {
-					pbrRenderPipelineDescriptorSetBindings[i].binding = i;
-				}
-
-				m_Pipelines.m_RenderPBRImagesDescriptorSetLayout 
-					= m_Renderer.CreateDescriptorSetLayout(nullptr, descriptor_count, pbrRenderPipelineDescriptorSetBindings);
-
-				if (m_Pipelines.m_RenderPBRImagesDescriptorSetLayout == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create pbr render pipeline samplers descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::SwapchainCreateCallback)!");
-				}
-			}
-
-			if (m_ColorResourceImageSampler == VK_NULL_HANDLE) {
-				m_ColorResourceImageSampler = m_Renderer.CreateSampler(m_Renderer.GetDefaultSamplerInfo());
-				if (m_ColorResourceImageSampler == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create color resource image sampler for world (function Renderer::CreateSampler in function World::SwapchainCreateCallback)!");
-				}
-			}
-
-			if (m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout == VK_NULL_HANDLE) {
-				
-				static constexpr VkDescriptorSetLayoutBinding dir_light_shadow_map_descriptor_set_layout_bindings[2] {
-					Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT),
-					Renderer::GetDescriptorSetLayoutBinding(1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT),
-				};
-
-				m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout 
-					= m_Renderer.CreateDescriptorSetLayout(nullptr, 2, dir_light_shadow_map_descriptor_set_layout_bindings);
-
-				if (m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create directional light descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Initialize)!");
-				}
-			}
-
-			m_Renderer.DestroyDescriptorPool(m_RenderPBRImagesDescriptorPool);
-			VkDescriptorPoolSize poolSize {
-				.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-				.descriptorCount = 1,
-			};
-			DynamicArray<VkDescriptorPoolSize> poolSizes(descriptor_count * imageCount);
-			for (VkDescriptorPoolSize& size : poolSizes) {
-				size = poolSize;
-			}
-			m_RenderPBRImagesDescriptorPool = m_Renderer.CreateDescriptorPool(0, imageCount, poolSizes.Size(), poolSizes.Data());
-
-			if (m_RenderPBRImagesDescriptorPool == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to create pbr render pipeline image descriptor pool (function Renderer::CreateDescriptorPool in function World::SwapchainCreateCallback)!");
-			}
-
-			m_RenderPBRImagesDescriptorSets.Resize(imageCount);
-
-			DynamicArray<VkDescriptorSetLayout> setLayouts(imageCount);
-
-			for (VkDescriptorSetLayout& set : setLayouts) {
-				set = m_Pipelines.m_RenderPBRImagesDescriptorSetLayout;
-			}
-
-			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_RenderPBRImagesDescriptorPool, imageCount, 
-					setLayouts.Data(), m_RenderPBRImagesDescriptorSets.Data())) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to allocate pbr rendering pipeline image descriptor sets (function Renderer::AllocateDescriptorSets in function World::SwapchainCreateCallback)!");
-			}
-
-			DestroyImageResources();
-			m_DiffuseImageViews.Resize(imageCount);
-			m_PositionAndMetallicImageViews.Resize(imageCount);
-			m_NormalAndRougnessImageViews.Resize(imageCount);
-			m_DepthImageViews.Resize(imageCount);
-			m_DiffuseImages.Resize(imageCount);
-			m_PositionAndMetallicImages.Resize(imageCount);
-			m_NormalAndRougnessImages.Resize(imageCount);
-			m_DepthImages.Resize(imageCount);
-			m_DiffuseImagesMemory.Resize(imageCount);
-			m_PositionAndMetallicImagesMemory.Resize(imageCount);
-			m_NormalAndRougnessImagesMemory.Resize(imageCount);
-			m_DepthImagesMemory.Resize(imageCount);
-
-			LockGuard graphicsQueueLockGuard(m_Renderer.m_EarlyGraphicsCommandBufferQueueMutex);
-			Renderer::CommandBuffer<Renderer::Queue::Graphics>* commandBuffer
-				= m_Renderer.m_EarlyGraphicsCommandBufferQueue.New();
-			if (!commandBuffer) {
-				CriticalError(ErrorOrigin::Renderer,
-					"renderer graphics command buffer was out of memory (in function World::SwapchainCreateCallback)!");
-			}
-			if (!m_Renderer.AllocateCommandBuffers(Renderer::GetDefaultCommandBufferAllocateInfo(
-					m_Renderer.GetCommandPool<Renderer::Queue::Graphics>(), 1), 
-					&commandBuffer->m_CommandBuffer)) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to allocate command buffer (function Renderer::AllocateCommandBuffers in function World::SwapchainCreateCallback)");
-			}
-			if (!m_Renderer.BeginCommandBuffer(commandBuffer->m_CommandBuffer)) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to begin command buffer (function Renderer::BeginCommandBuffer in function World::SwapchainCreateCallback)");
-			}
-
-			VkFormat depthFormat = m_Renderer.m_DepthOnlyFormat;
-			VkExtent3D imageExtent {
-				.width = m_RenderResolution.x,
-				.height = m_RenderResolution.y,
-				.depth = 1,
-			};
-			uint32_t colorImageQueueFamilies[1] { m_Renderer.m_GraphicsQueueFamilyIndex, };
-			uint32_t colorImageQueueFamilyCount = 1;
-			VkImageUsageFlags colorImageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; 
-			VkSharingMode colorImageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-			for (uint32_t i = 0; i < imageCount; i++) {
-				{
-					VkImage& image = m_DiffuseImages[i];
-					VkDeviceMemory& imageMemory = m_DiffuseImagesMemory[i];
-					VkImageView& imageView = m_DiffuseImageViews[i];
-					image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
-						VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, colorImageUsage, 
-						colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
-					if (image == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create world diffuse image (function Renderer::CreateImage in function World::SwapchainCreateCallback)!");
-					}
-					imageMemory = m_Renderer.AllocateImageMemory(image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-					if (imageMemory == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to allocate world diffuse image memory (function Renderer::AllocateImageMemory in function World::Initialize)");
-					}
-					imageView = m_Renderer.CreateImageView(image, VK_IMAGE_VIEW_TYPE_2D, m_ColorImageResourcesFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-					if (imageView == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create world diffuse image view (function Renderer::CreateImageView in function World::SwapchainCreateCallback)");
-					}
-				}
-				{
-					VkImage& image = m_PositionAndMetallicImages[i];
-					VkDeviceMemory& imageMemory = m_PositionAndMetallicImagesMemory[i];
-					VkImageView& imageView = m_PositionAndMetallicImageViews[i];
-					image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
-						VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, colorImageUsage, 
-						colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
-					if (image == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create position/metallic image (function Renderer::CreateImage in function World::SwapchainCreateCallback)!");
-					}
-					imageMemory = m_Renderer.AllocateImageMemory(image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-					if (imageMemory == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to allocate position/metallic image memory (function Renderer::AllocateImageMemory in function World::SwapchainCreateCallback)");
-					}
-					imageView = m_Renderer.CreateImageView(image, VK_IMAGE_VIEW_TYPE_2D, m_ColorImageResourcesFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-					if (imageView == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create world position/metallic image view (function Renderer::CreateImageView in function World::Initialize)");
-					}
-				}
-				{
-					VkImage& image = m_NormalAndRougnessImages[i];
-					VkDeviceMemory& imageMemory = m_NormalAndRougnessImagesMemory[i];
-					VkImageView& imageView = m_NormalAndRougnessImageViews[i];
-					image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
-						VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, colorImageUsage, 
-						colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
-					if (image == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create normal/roughness image (function Renderer::CreateImage in function World::SwapchainCreateCallback)!");
-					}
-					imageMemory = m_Renderer.AllocateImageMemory(image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-					if (imageMemory == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to allocate normal/roughness image memory (function Renderer::AllocateImageMemory in function World::Initialize)");
-					}
-					imageView = m_Renderer.CreateImageView(image, VK_IMAGE_VIEW_TYPE_2D, m_ColorImageResourcesFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-					if (imageView == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create world normal/roughness image view (function Renderer::CreateImageView in function World::SwapchainCreateCallback)");
-					}
-				}
-				{
-					VkImage& image = m_DepthImages[i];
-					VkDeviceMemory& imageMemory = m_DepthImagesMemory[i];
-					VkImageView& imageView = m_DepthImageViews[i];
-					image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, depthFormat, imageExtent, 1, 1, 
-						VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
-							VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_SHARING_MODE_EXCLUSIVE, 1, &m_Renderer.m_GraphicsQueueFamilyIndex);
-					if (image == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create world depth image (function Renderer::CreateImage in function World::SwapchainCreateCallback)!");
-					}
-					imageMemory = m_Renderer.AllocateImageMemory(image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-					if (imageMemory == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to allocate world depth image memory (function Renderer::AllocateImageMemory in function World::SwapchainCreateCallback)!");
-					}
-					imageView = m_Renderer.CreateImageView(image, VK_IMAGE_VIEW_TYPE_2D, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
-					if (imageView == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create world depth image view (function Renderer::CreateImageView in function World::SwapchainCreateCallback)!");
-					}
-				}
-
-				VkDescriptorImageInfo descriptorImageInfos[descriptor_count] {
-					{
-						.sampler = m_ColorResourceImageSampler,
-						.imageView = m_DiffuseImageViews[i],
-						.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-					},
-					{
-						.sampler = m_ColorResourceImageSampler,
-						.imageView = m_PositionAndMetallicImageViews[i],
-						.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-					},
-					{
-						.sampler = m_ColorResourceImageSampler,
-						.imageView = m_NormalAndRougnessImageViews[i],
-						.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-					},
-				};
-
-				VkWriteDescriptorSet descriptorWrites[descriptor_count];
-				for (uint32_t j = 0; j < descriptor_count; j++) {
-					descriptorWrites[j] 
-						= Renderer::GetDescriptorWrite(nullptr, j, m_RenderPBRImagesDescriptorSets[i], 
-							VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &descriptorImageInfos[j], nullptr);
-				}
-
-				m_Renderer.UpdateDescriptorSets(descriptor_count, descriptorWrites);
-
-				static constexpr uint32_t image_count = descriptor_count;
-
-				VkImage colorImages[image_count] {
-					m_DiffuseImages[i],
-					m_PositionAndMetallicImages[i],
-					m_NormalAndRougnessImages[i],	
-				};	
-
-				VkImageMemoryBarrier memoryBarriers[image_count];
-
-				for (size_t j = 0; j < image_count; j++) {
-					memoryBarriers[j] = {
-						.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-						.pNext = nullptr,
-						.srcAccessMask = 0,
-						.dstAccessMask = 0,
-						.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-						.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-						.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-						.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-						.image = colorImages[j],
-						.subresourceRange {
-							.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-							.baseMipLevel = 0,
-							.levelCount = 1,
-							.baseArrayLayer = 0,
-							.layerCount = 1,
-						},
-					};
-				}
-				vkCmdPipelineBarrier(commandBuffer->m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-					VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, image_count, memoryBarriers);
-			}
-			m_DirectionalLight.SwapchainCreateCallback(imageCount, commandBuffer->m_CommandBuffer);
-			VkResult vkRes = vkEndCommandBuffer(commandBuffer->m_CommandBuffer);
-			if (vkRes != VK_SUCCESS) {
-				CriticalError(ErrorOrigin::Vulkan, 
-					"failed to end command buffer (function vkEndCommandBuffer in function World::SwapchainCreateCallback)!", 
-					vkRes);
-			}
-			commandBuffer->m_Flags = Renderer::CommandBufferFlag_FreeAfterSubmit;
 		}
+
+		void SwapchainCreateCallback(VkExtent2D swapchainExtent, Vec2_T<uint32_t> renderResolution, float aspectRatio, uint32_t imageCount);	
 
 		void LogicUpdate() {
 			for (Creature& creature : m_Bodies) {
@@ -6855,55 +5766,7 @@ void main() {
 					0, 0, nullptr, 0, nullptr, image_count, memoryBarriers);
 			}
 		}
-
-		void Render(const Renderer::DrawData& drawData) const {
-			RenderWorld(drawData);
-			/*
-			if (m_DebugRenderDatas.m_Size) {
-				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugPipeline);
-				vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugPipelineLayout,
-					0, 1, &m_CameraMatricesDescriptorSet, 0, nullptr);
-				for (const DebugRenderData& data : m_DebugRenderDatas) {
-					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
-						VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &data.m_Transform);
-					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
-						VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16, &data.m_WireColor);
-					vkCmdBindVertexBuffers(drawData.m_CommandBuffer, 0, 1, data.m_MeshData.m_VertexBuffers, 
-						data.m_MeshData.m_VertexBufferOffsets);
-					vkCmdBindIndexBuffer(drawData.m_CommandBuffer, data.m_MeshData.m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-					vkCmdDrawIndexed(drawData.m_CommandBuffer, data.m_MeshData.m_IndexCount, 1, 0, 0, 0);
-				}
-
-			}
-			*/
-		}
-
-		void RemoveRenderDatas(uint64_t objectID) {
-			auto end = m_RenderDatas.end();
-			for (auto iter = m_RenderDatas.begin(); iter != end;) {
-				if (iter->m_ObjectID == objectID) {
-					iter = m_RenderDatas.Erase(iter);
-					continue;
-				}
-				++iter;
-			}
-		}
-
-		Chunk* GetChunk(Vec2_T<uint32_t> chunkMatrixCoords) {
-			uint32_t index = chunkMatrixCoords.x * m_ChunkMatrixSize.y + chunkMatrixCoords.y;
-			if (index >= m_ChunkMatrix.Size()) {
-				return nullptr;
-			}
-			return &m_ChunkMatrix[index];
-		}
-
-		Vec2_T<bool> BoundsCheck(Vec2_T<uint32_t> chunkMatrixCoords) {
-			return { chunkMatrixCoords.x >= m_ChunkMatrixSize.x, chunkMatrixCoords.y >= m_ChunkMatrixSize.y };
-		}
-
 	};
-
-	typedef World::UnidirectionalLight UnidirectionalLight;
 
 	enum EngineModeBits {
 		EngineMode_Initialized = 1,
@@ -6929,6 +5792,7 @@ void main() {
 		World m_World;
 		Renderer m_Renderer;
 		TextRenderer m_TextRenderer;
+		AssetManager m_AssetManager;
 
 		StaticMesh m_StaticQuadMesh;
 		StaticMesh m_StaticQuadMesh2D;
@@ -6986,15 +5850,59 @@ void main() {
 
 	public:
 
-		Engine(EngineMode mode, const char* appName, GLFWwindow* window, size_t maxUIWindows) :
+		Engine(EngineMode mode, const String& projectName, GLFWwindow* window, size_t maxUIWindows) :
 				m_Mode(UpdateEngineInstance(this, mode)),
 				m_UI(m_Renderer, m_TextRenderer, maxUIWindows),
-				m_Renderer(appName, VK_MAKE_API_VERSION(0, 1, 0, 0), window, RendererCriticalErrorCallback, SwapchainCreateCallback),
+				m_Renderer(projectName.CString(), VK_MAKE_API_VERSION(0, 1, 0, 0), window, RendererCriticalErrorCallback, SwapchainCreateCallback),
 				m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
 				m_StaticQuadMesh(m_Renderer),
 				m_StaticQuadMesh2D(m_Renderer),
-				m_World(m_Renderer)
+				m_World(m_Renderer),
+				m_AssetManager(projectName)
 		{
+
+			FILE* metafileStream = fopen("project.meta", "r");
+			if (!metafileStream) {
+				metafileStream = fopen("project.meta", "w");
+				if (fwrite(projectName.CString(), sizeof(char), projectName.Length(), metafileStream) != projectName.Length() ||
+					!fwrite("\n", sizeof(char), 1, metafileStream)) {
+					PrintError(ErrorOrigin::FileWriting, 
+						"failed to write to project metafile (function fwrite in Engine constructor)!");
+				}
+			}
+			else {
+				String line{};
+				FileHandler::GetLine(metafileStream, line);
+				if (line != projectName) {
+					PrintWarning("loading meta data from a different project (in Engine constructor)!");
+				}
+				if (FileHandler::Skip(metafileStream, Array<char, 1> { '[' }) != EOF) {
+					char c = FileHandler::SkipLine(metafileStream);
+					if (c == EOF) {
+						PrintError(ErrorOrigin::FileParsing, 
+							"missing ']' when loading project metadata (in Engine constructor)");
+					}
+					line.Clear();
+					while (true) {
+						if (FileHandler::GetLine(metafileStream, line) == EOF) {
+							PrintError(ErrorOrigin::FileParsing, 
+								"missing ']' when loading project metadata (in Engine constructor)");
+						}
+						if (line[0] == ']') {
+							break;
+						}
+						FILE* assetMetafs = fopen(line.CString(), "r");
+						if (!assetMetafs) {
+							PrintError(ErrorOrigin::FileParsing, 
+								"failed to open asset metafile (function fopen in Engine construcor)!");
+						}
+						line.Clear();
+					}
+				}
+			}
+
+			fclose(metafileStream);
+
 			Input input(window);
 
 			if (!m_StaticQuadMesh.CreateBuffers(quad_vertex_count, quad_vertices, quad_index_count, quad_indices)) {
@@ -7041,13 +5949,46 @@ void main() {
 			m_Renderer.DestroySampler(FontAtlas::s_Sampler);
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
-		}	
+		}
+
+		bool LoadAsset(FILE* fileStream) {
+			if (!fileStream) {
+				return false;
+			}
+			uint64_t ID;
+			uint32_t type;
+			if (fscanf(fileStream, "ID:%uType:%u\n", &ID) != 2) {
+				PrintError(ErrorOrigin::FileParsing,
+					"invalid meta data format (in function LoadAsset)!");
+				return false;
+			}
+			String assetFileName{};
+			FileHandler::GetLine(fileStream, assetFileName);
+			switch ((MetafileType)type) {
+				case MetafileType::Mesh: {
+					MeshMetafile& file = m_MeshMetafiles.EmplaceBack(ID, assetFileName, m_Renderer);
+					if (!LoadMesh(assetFileName, file.m_Mesh)) {
+						PrintError(ErrorOrigin::FileParsing,
+							"failed to load mesh asset (function LoadMesh in function LoadAsset)!");
+						return false;
+					}
+					break;
+				}
+				case MetafileType::Texture:
+					break;
+				default:
+					PrintError(ErrorOrigin::FileParsing, 
+						"invalid metafile type (in function LoadAsset)!");
+					return false;
+			}
+			return true;
+		}
+
+	public:
 
 		Vec2_T<uint32_t> GetSwapchainResolution() {
 			return { m_Renderer.m_SwapchainExtent.width, m_Renderer.m_SwapchainExtent.height };
-		}	
-
-	public:
+		}
 
 		UI& GetUI() {
 			return m_UI;

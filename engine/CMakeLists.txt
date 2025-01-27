@@ -22,6 +22,7 @@ add_library(engine STATIC
 	src/renderer.cpp
 	src/text_renderer.cpp
 	src/engine.cpp
+	src/builtin_pipelines.cpp
 
 	src/imgui/imgui.cpp
 	src/imgui/imgui_draw.cpp
