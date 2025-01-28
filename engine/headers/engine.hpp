@@ -5116,13 +5116,96 @@ outColor = texture(image, inUV);
 	class AssetManager {
 	public:
 
+		Renderer& m_Renderer;
+
 		String m_ProjectName;
 
 		DynamicArray<MeshMetafile> m_MeshMetafiles{};
 		DynamicArray<TextureMetafile> m_TextureMetafiles{};
 		
-		AssetManager(const String& projectName) 
-			: m_ProjectName(projectName) {}
+		AssetManager(const String& projectName, Renderer& renderer) 
+			: m_Renderer(renderer), m_ProjectName(projectName) {
+
+			FILE* metafile = fopen("project.meta", "r");
+			if (!metafile) {
+				metafile = fopen("project.meta", "w");
+				if (fwrite(projectName.CString(), sizeof(char), projectName.Length(), metafile) != projectName.Length() ||
+					!fwrite("\n", sizeof(char), 1, metafile)) {
+					PrintError(ErrorOrigin::FileWriting, 
+						"failed to write to project metafile (function fwrite in Engine constructor)!");
+				}
+			}
+			else {
+				String line{};
+				FileHandler::GetLine(metafile, line);
+				if (line != projectName) {
+					PrintWarning("loading meta data from a different project (in Engine constructor)!");
+				}
+				if (FileHandler::Skip(metafile, Array<char, 1> { '[' }) != EOF) {
+					char c = FileHandler::SkipLine(metafile);
+					if (c == EOF) {
+						PrintError(ErrorOrigin::FileParsing, 
+							"missing ']' when loading project metadata (in Engine constructor)");
+					}
+					line.Clear();
+					while (true) {
+						if (FileHandler::GetLine(metafile, line) == EOF) {
+							PrintError(ErrorOrigin::FileParsing, 
+								"missing ']' when loading project metadata (in Engine constructor)");
+						}
+						if (line[0] == ']') {
+							break;
+						}
+						FILE* assetMetafile = fopen(line.CString(), "r");
+						if (!assetMetafile) {
+							PrintError(ErrorOrigin::FileParsing, 
+								"failed to open asset metafile (function fopen in Engine construcor)!");
+						}
+						if (!LoadAsset(assetMetafile)) {
+							PrintError(ErrorOrigin::FileParsing,
+								"failed to load asset (function AssetManager::LoadAsset in AssetManager constructor)!");
+							fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
+								"metafile that failed to load: {}", line.CString());
+						}
+						line.Clear();
+					}
+				}
+			}
+			fclose(metafile);
+		}
+
+		bool LoadAsset(FILE* metafile) {
+			if (!metafile) {
+				return false;
+			}
+			uint64_t ID;
+			uint32_t type;
+			if (fscanf(metafile, "ID:%uType:%u\n", &ID) != 2) {
+				PrintError(ErrorOrigin::FileParsing,
+					"invalid meta data format (in function LoadAsset)!");
+				return false;
+			}
+			String assetFileName{};
+			FileHandler::GetLine(metafile, assetFileName);
+			switch ((MetafileType)type) {
+				case MetafileType::Mesh: {
+					MeshMetafile& file = m_MeshMetafiles.EmplaceBack(ID, assetFileName, m_Renderer);
+					if (!LoadMesh(assetFileName, file.m_Mesh)) {
+						PrintError(ErrorOrigin::FileParsing,
+							"failed to load mesh asset (function LoadMesh in function LoadAsset)!");
+						return false;
+					}
+					break;
+				}
+				case MetafileType::Texture:
+					break;
+				default:
+					PrintError(ErrorOrigin::FileParsing, 
+						"invalid metafile type (in function LoadAsset)!");
+					return false;
+			}
+			return true;
+		}
 	};
 
 	class World {
@@ -5853,55 +5936,13 @@ outColor = texture(image, inUV);
 		Engine(EngineMode mode, const String& projectName, GLFWwindow* window, size_t maxUIWindows) :
 				m_Mode(UpdateEngineInstance(this, mode)),
 				m_UI(m_Renderer, m_TextRenderer, maxUIWindows),
+				m_World(m_Renderer),
 				m_Renderer(projectName.CString(), VK_MAKE_API_VERSION(0, 1, 0, 0), window, RendererCriticalErrorCallback, SwapchainCreateCallback),
 				m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
+				m_AssetManager(projectName, m_Renderer),
 				m_StaticQuadMesh(m_Renderer),
-				m_StaticQuadMesh2D(m_Renderer),
-				m_World(m_Renderer),
-				m_AssetManager(projectName)
+				m_StaticQuadMesh2D(m_Renderer)
 		{
-
-			FILE* metafileStream = fopen("project.meta", "r");
-			if (!metafileStream) {
-				metafileStream = fopen("project.meta", "w");
-				if (fwrite(projectName.CString(), sizeof(char), projectName.Length(), metafileStream) != projectName.Length() ||
-					!fwrite("\n", sizeof(char), 1, metafileStream)) {
-					PrintError(ErrorOrigin::FileWriting, 
-						"failed to write to project metafile (function fwrite in Engine constructor)!");
-				}
-			}
-			else {
-				String line{};
-				FileHandler::GetLine(metafileStream, line);
-				if (line != projectName) {
-					PrintWarning("loading meta data from a different project (in Engine constructor)!");
-				}
-				if (FileHandler::Skip(metafileStream, Array<char, 1> { '[' }) != EOF) {
-					char c = FileHandler::SkipLine(metafileStream);
-					if (c == EOF) {
-						PrintError(ErrorOrigin::FileParsing, 
-							"missing ']' when loading project metadata (in Engine constructor)");
-					}
-					line.Clear();
-					while (true) {
-						if (FileHandler::GetLine(metafileStream, line) == EOF) {
-							PrintError(ErrorOrigin::FileParsing, 
-								"missing ']' when loading project metadata (in Engine constructor)");
-						}
-						if (line[0] == ']') {
-							break;
-						}
-						FILE* assetMetafs = fopen(line.CString(), "r");
-						if (!assetMetafs) {
-							PrintError(ErrorOrigin::FileParsing, 
-								"failed to open asset metafile (function fopen in Engine construcor)!");
-						}
-						line.Clear();
-					}
-				}
-			}
-
-			fclose(metafileStream);
 
 			Input input(window);
 
@@ -5949,39 +5990,6 @@ outColor = texture(image, inUV);
 			m_Renderer.DestroySampler(FontAtlas::s_Sampler);
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
-		}
-
-		bool LoadAsset(FILE* fileStream) {
-			if (!fileStream) {
-				return false;
-			}
-			uint64_t ID;
-			uint32_t type;
-			if (fscanf(fileStream, "ID:%uType:%u\n", &ID) != 2) {
-				PrintError(ErrorOrigin::FileParsing,
-					"invalid meta data format (in function LoadAsset)!");
-				return false;
-			}
-			String assetFileName{};
-			FileHandler::GetLine(fileStream, assetFileName);
-			switch ((MetafileType)type) {
-				case MetafileType::Mesh: {
-					MeshMetafile& file = m_MeshMetafiles.EmplaceBack(ID, assetFileName, m_Renderer);
-					if (!LoadMesh(assetFileName, file.m_Mesh)) {
-						PrintError(ErrorOrigin::FileParsing,
-							"failed to load mesh asset (function LoadMesh in function LoadAsset)!");
-						return false;
-					}
-					break;
-				}
-				case MetafileType::Texture:
-					break;
-				default:
-					PrintError(ErrorOrigin::FileParsing, 
-						"invalid metafile type (in function LoadAsset)!");
-					return false;
-			}
-			return true;
 		}
 
 	public:
