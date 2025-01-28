@@ -37,18 +37,19 @@ namespace engine {
 
 	enum class ErrorOrigin {
 		Uncategorized = 0,
-		Engine = 1,
-		Renderer = 2,
-		TextRenderer = 3,
-		UI = 4,
-		OutOfMemory = 5,
-		NullDereference = 6,
-		IndexOutOfBounds = 7,
-		Vulkan = 8,
-		Stb = 9,
-		FileParsing = 10,
-		FileWriting = 11,
-		GameLogic = 12,
+		Engine,
+		Renderer,
+		TextRenderer,
+		UI,
+		AssetManager,
+		OutOfMemory,
+		NullDereference,
+		IndexOutOfBounds,
+		Vulkan,
+		Stb,
+		FileParsing,
+		FileWriting,
+		GameLogic,
 		MaxEnum,
 	};
 
@@ -59,6 +60,7 @@ namespace engine {
 			"Renderer",
 			"TextRenderer",
 			"UI",
+			"AssetManager"
 			"OutOfMemory",
 			"NullDereference",
 			"IndexOutOfBounds",
@@ -868,8 +870,18 @@ namespace engine {
 			return m_Data[index];
 		}
 
-		String& operator +=(char c) {
+		String& operator+=(char c) {
 			return Push(c);
+		}
+
+		friend String operator+(const String& a, const char* b) {
+			String result{};
+			uint32_t bLength = strlen(b);
+			result.Reserve(a.m_Length + bLength);
+			memcpy(result.m_Data, a.m_Data, a.m_Length * sizeof(char));
+			memcpy(result.m_Data + a.m_Length, b, bLength * sizeof(char));
+			result.m_Length = a.m_Length + bLength;
+			return result;
 		}
 
 		uint64_t operator()() const {
@@ -5059,7 +5071,8 @@ outColor = texture(image, inUV);
 				for (VkDescriptorSetLayout& layout : setLayouts) {
 					layout = m_World.m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout;
 				}
-				if (!renderer.AllocateDescriptorSets(nullptr, m_ShadowMapDescriptorPool, imageCount, setLayouts.Data(), m_ShadowMapDescriptorSets.Data())) {
+				if (!renderer.AllocateDescriptorSets(nullptr, m_ShadowMapDescriptorPool, imageCount, 
+						setLayouts.Data(), m_ShadowMapDescriptorSets.Data())) {
 					CriticalError(ErrorOrigin::Renderer, 
 						"failed to allocate descriptor sets for directional light (function Renderer::AllocateDescriptorSets in function World::DirectionalLight::SwapchainCreateCallback)!");
 				}
@@ -5075,8 +5088,10 @@ outColor = texture(image, inUV);
 						.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 					};
 					VkWriteDescriptorSet descriptorWrites[2] {
-						Renderer::GetDescriptorWrite(nullptr, 0, m_ShadowMapDescriptorSets[i], VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr),
-						Renderer::GetDescriptorWrite(nullptr, 1, m_ShadowMapDescriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &descriptorBufferInfo),
+						Renderer::GetDescriptorWrite(nullptr, 0, m_ShadowMapDescriptorSets[i], 
+							VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr),
+						Renderer::GetDescriptorWrite(nullptr, 1, m_ShadowMapDescriptorSets[i], 
+							VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &descriptorBufferInfo),
 					};
 					renderer.UpdateDescriptorSets(2, descriptorWrites);
 				}
@@ -5121,33 +5136,113 @@ outColor = texture(image, inUV);
 		return true;
 	}
 
-	struct MeshMetadata {
+	class Metadata {
+
+	public:
+
+		enum class Type {
+			Mesh = 1,
+			Texture = 2,
+			MaxEnum = 3,
+		};
+
+		union Data_U {
+
+			int m_None;
+			StaticMesh m_Mesh;
+			StaticTexture m_Texture;
+
+			Data_U(Renderer& renderer, Type type) {
+				switch (type) {
+					case Type::Mesh:
+						new(&m_Mesh) StaticMesh(renderer);
+						break;
+					case Type::Texture:
+						new(&m_Texture) StaticMesh(renderer);
+						break;
+					default:
+						m_None = -1;
+						PrintError(ErrorOrigin::AssetManager,
+							"invalid metadata type (in Metadata constructor)!");
+						break;
+				}
+			}
+
+			~Data_U() {}
+		};
 
 		const uint64_t m_ID;
-		StaticMesh m_Mesh;
 
-		MeshMetadata(uint64_t ID, Renderer& renderer) : m_ID(ID), m_Mesh(renderer) {}
+	private:
 
-		bool Loaded() const {
-			return !m_Mesh.IsNull();
+		Data_U u_Data;
+		Type m_Type;
+
+	public:
+
+		Metadata(uint64_t ID, Type type, Renderer& renderer) 
+			: m_ID(ID), m_Type(type), u_Data(renderer, type) {}
+
+		bool IsNull() const {
+			switch (m_Type) {
+				case Type::Mesh:
+					return !u_Data.m_Mesh.IsNull();
+				case Type::Texture:
+					return !u_Data.m_Texture.IsNull();
+				default:
+					return false;
+			}
 		}
-	};
 
-	class TextureMetadata {
+		Type Type() {
+			return m_Type;
+		}
 
-		const uint64_t m_ID;
-		StaticTexture m_Texture;
-		VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
-		VkDescriptorSet m_DescriptorSet = VK_NULL_HANDLE;
+		bool Load(const Obj& obj) {
+			assert(m_Type == Type::Mesh);
+			DynamicArray<Vertex> vertices;
+			DynamicArray<uint32_t> indices;
+			if (!obj.GetMesh(Vertex::SetPosition, Vertex::SetUV, Vertex::SetNormal, 
+				vertices, indices)) {
+				PrintError(ErrorOrigin::AssetManager,
+					"failed to get construct mesh from obj (function Obj::GetMesh in function Metadata::Load)!");
+				return false;
+			}
+			if (!u_Data.m_Mesh.CreateBuffers(vertices.Size(), vertices.Data(), indices.Size(), indices.Data())) {
+				PrintError(ErrorOrigin::Renderer,
+					"failed to create static mesh (function Obj::GetMesh in function Metadata::Load)!");
+				return false;
+			}
+			return true;
+		}
 
-		TextureMetadata(uint64_t ID, Renderer& renderer) 
-			: m_ID(ID), m_Texture(renderer) {}
-	};
+		void Deload() {
+			switch (m_Type) {
+				case Type::Mesh:
+					u_Data.m_Mesh.Terminate();
+					break;
+				case Type::Texture:
+					u_Data.m_Texture.Terminate();
+					break;
+				default:
+					break;
+			}
+		}
 
-	enum class MetafileType {
-		Mesh = 1,
-		Texture = 2,
-		MaxEnum = 3,
+		bool GetMeshData(MeshData& out) {
+			if (m_Type != Type::Mesh) {
+				PrintError(ErrorOrigin::AssetManager,
+					"attempting to get mesh data from metadata of non-mesh type (in function Metadata::GetMeshData)!");
+				return false;
+			}
+			if (u_Data.m_Mesh.IsNull()) {
+				PrintError(ErrorOrigin::AssetManager,
+					"attempting to get mesh data from metadata that's null (int function Metadata::GetMeshData)!");
+				return false;
+			}
+			out = u_Data.m_Mesh.GetMeshData();
+			return true;
+		}
 	};
 
 	class AssetManager {
@@ -5157,15 +5252,14 @@ outColor = texture(image, inUV);
 
 		String m_ProjectName;
 
-		Dictionary<MeshMetadata> m_MeshMetadata{};
-		Dictionary<TextureMetadata> m_TextureMetadata{};
+		Dictionary<Metadata> m_Metadata{};
 		
 		AssetManager(const String& projectName, Renderer& renderer) 
 			: m_Renderer(renderer), m_ProjectName(projectName) {
-
-			FILE* metafile = fopen("project.meta", "r");
+			String projectFileName = projectName + ".meta";
+			FILE* metafile = fopen(projectFileName.CString(), "r");
 			if (!metafile) {
-				metafile = fopen("project.meta", "w");
+				metafile = fopen(projectFileName.CString(), "w");
 				if (fwrite(projectName.CString(), sizeof(char), projectName.Length(), metafile) != projectName.Length() ||
 					!fwrite("\n", sizeof(char), 1, metafile)) {
 					PrintError(ErrorOrigin::FileWriting, 
@@ -5211,6 +5305,57 @@ outColor = texture(image, inUV);
 			fclose(metafile);
 		}
 
+		bool LoadAsset(const String& fileName, MeshData& outMeshData) {
+			auto data = m_Metadata.Find(fileName.CString());
+			if (data) {
+				if (data->Type() != Metadata::Type::Mesh) {
+					PrintError(ErrorOrigin::AssetManager,
+						"attempting to load mesh from a file that isn't a mesh (in function AssetManager::LoadAsset)!");
+					return false;
+				}
+				if (!data->IsNull()) {
+					if (!data->GetMeshData(outMeshData)) {
+						PrintError(ErrorOrigin::AssetManager,
+							"failed to get mesh data from metadata (function Metadata::GetMeshData in function AssetManager::LoadAsset)!");
+						return false;
+					}
+					return true;
+				}
+				MeshFileType type = GetMeshFileType(fileName);
+				if (type == MeshFileType::Unrecognized) {
+					PrintError(ErrorOrigin::AssetManager,
+						"attempting to load mesh asset of unknown type (function GetMeshFileType in function AssetManager::LoadAsset)!");
+					return false;
+				}
+				if (type == MeshFileType::Obj) {
+					FILE* fileStream = fopen(fileName.CString(), "r");
+					if (!fileStream) {
+						PrintError(ErrorOrigin::AssetManager,
+							"failed to open mesh asset file (function fopen in function AssetManager::LoadAsset)!");
+						return false;
+					}
+					Obj obj{};
+					bool res = obj.Load(fileStream);
+					fclose(fileStream);
+					if (!res) {
+						PrintError(ErrorOrigin::Engine,
+							"failed to load obj file (function Obj::Load in function AssetManager::LoadAsset)!");
+						return false;
+					}
+					if (!data->Load(obj)) {
+						PrintError(ErrorOrigin::AssetManager,
+							"failed to load mesh asset from metadata (function Metadata::Load in function AssetManager::LoadAsset)!");
+						return false;
+					}
+					assert(data->GetMeshData(outMeshData));
+					return true;
+				}
+			}
+			return false;
+		}
+
+	private:
+
 		bool LoadMetadata(FILE* metafile) {
 			if (!metafile) {
 				return false;
@@ -5224,16 +5369,7 @@ outColor = texture(image, inUV);
 			}
 			String assetFileName{};
 			FileHandler::GetLine(metafile, assetFileName);
-			switch ((MetafileType)type) {
-				case MetafileType::Mesh:
-					return m_MeshMetadata.Emplace(assetFileName.CString(), ID, m_Renderer);
-				case MetafileType::Texture:
-					break;
-				default:
-					PrintError(ErrorOrigin::FileParsing, 
-						"invalid metafile type (in function LoadAsset)!");
-					return false;
-			}
+			m_Metadata.Emplace(assetFileName.CString(), ID, (Metadata::Type)type, m_Renderer);
 			return true;
 		}
 	};
