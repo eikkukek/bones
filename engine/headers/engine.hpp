@@ -872,7 +872,7 @@ namespace engine {
 			return Push(c);
 		}
 
-		uint64_t operator()() {
+		uint64_t operator()() const {
 			if (!m_Length) {
 				return 0;
 			}
@@ -1129,6 +1129,33 @@ namespace engine {
 				Reserve(m_Capacity * 2);
 			}
 			uint64_t hash = String::Hash()(key);
+			uint32_t index = hash % m_Capacity;
+			uint8_t& bucketSize = m_BucketSizes[index];
+			KeyBucket& keyBucket = m_KeyBuckets[index];
+			ValueBucket& valueBucket = m_ValueBuckets[index];
+			if (bucketSize) {
+				for (uint32_t i = 0; i < bucketSize; i++) {
+					if (key == keyBucket[i]) {
+						return nullptr;
+					}
+				}
+				PrintError(ErrorOrigin::UI, "bad hash (in function UI::Dictionary::Emplace)!");
+				if (bucketSize >= max_bucket_size) {
+					PrintError(ErrorOrigin::UI, "bucket was full (in function UI::Dictionary::Emplace)!");
+					return nullptr;
+				}
+			}
+			++m_Size;
+			keyBucket[bucketSize] = key;
+			return new(&valueBucket[bucketSize++]) ValueType(std::forward<Args>(args)...);
+		}
+
+		template<typename... Args>
+		ValueType* Emplace(const String& key, Args&&... args) {
+			if ((float)m_Size / m_Capacity > 0.9f) {
+				Reserve(m_Capacity * 2);
+			}
+			uint64_t hash = key();
 			uint32_t index = hash % m_Capacity;
 			uint8_t& bucketSize = m_BucketSizes[index];
 			KeyBucket& keyBucket = m_KeyBuckets[index];
@@ -2297,6 +2324,10 @@ namespace engine {
 
 		StaticMesh(const StaticMesh&) = delete;
 
+		bool IsNull() const {
+			return !m_VertexBuffer.m_BufferSize || !m_IndexBuffer.m_BufferSize;
+		}
+
 		MeshData GetMeshData() const {
 			constexpr static VkDeviceSize offset = 0;
 			MeshData data {
@@ -2317,7 +2348,7 @@ namespace engine {
 
 		template<typename VertexType>
 		bool CreateBuffers(uint32_t vertexCount, const VertexType* pVertices, uint32_t indexCount, const uint32_t* pIndices) {
-			if (m_VertexBuffer.m_BufferSize || m_IndexBuffer.m_BufferSize) {
+			if (!IsNull()) {
 				PrintError(ErrorOrigin::Renderer, 
 				"attempting to create vertex and index buffers when the buffers have already been created (in function StaticMesh::CreateBuffers)!");
 				return false;
@@ -5090,21 +5121,27 @@ outColor = texture(image, inUV);
 		return true;
 	}
 
-	struct MeshMetafile {
+	struct MeshMetadata {
 
 		const uint64_t m_ID;
-		String m_FileName{};
 		StaticMesh m_Mesh;
 
-		MeshMetafile(uint64_t ID, const String& filename, Renderer& renderer) : m_ID(ID), m_FileName(filename), m_Mesh(renderer) {}
+		MeshMetadata(uint64_t ID, Renderer& renderer) : m_ID(ID), m_Mesh(renderer) {}
+
+		bool Loaded() const {
+			return !m_Mesh.IsNull();
+		}
 	};
 
-	class TextureMetafile {
+	class TextureMetadata {
+
+		const uint64_t m_ID;
 		StaticTexture m_Texture;
 		VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
 		VkDescriptorSet m_DescriptorSet = VK_NULL_HANDLE;
 
-		TextureMetafile(Renderer& renderer) : m_Texture(renderer) {}
+		TextureMetadata(uint64_t ID, Renderer& renderer) 
+			: m_ID(ID), m_Texture(renderer) {}
 	};
 
 	enum class MetafileType {
@@ -5120,8 +5157,8 @@ outColor = texture(image, inUV);
 
 		String m_ProjectName;
 
-		DynamicArray<MeshMetafile> m_MeshMetafiles{};
-		DynamicArray<TextureMetafile> m_TextureMetafiles{};
+		Dictionary<MeshMetadata> m_MeshMetadata{};
+		Dictionary<TextureMetadata> m_TextureMetadata{};
 		
 		AssetManager(const String& projectName, Renderer& renderer) 
 			: m_Renderer(renderer), m_ProjectName(projectName) {
@@ -5161,9 +5198,9 @@ outColor = texture(image, inUV);
 							PrintError(ErrorOrigin::FileParsing, 
 								"failed to open asset metafile (function fopen in Engine construcor)!");
 						}
-						if (!LoadAsset(assetMetafile)) {
+						if (!LoadMetadata(assetMetafile)) {
 							PrintError(ErrorOrigin::FileParsing,
-								"failed to load asset (function AssetManager::LoadAsset in AssetManager constructor)!");
+								"failed to load metadata (function AssetManager::LoadMetadata in AssetManager constructor)!");
 							fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
 								"metafile that failed to load: {}", line.CString());
 						}
@@ -5174,7 +5211,7 @@ outColor = texture(image, inUV);
 			fclose(metafile);
 		}
 
-		bool LoadAsset(FILE* metafile) {
+		bool LoadMetadata(FILE* metafile) {
 			if (!metafile) {
 				return false;
 			}
@@ -5188,15 +5225,8 @@ outColor = texture(image, inUV);
 			String assetFileName{};
 			FileHandler::GetLine(metafile, assetFileName);
 			switch ((MetafileType)type) {
-				case MetafileType::Mesh: {
-					MeshMetafile& file = m_MeshMetafiles.EmplaceBack(ID, assetFileName, m_Renderer);
-					if (!LoadMesh(assetFileName, file.m_Mesh)) {
-						PrintError(ErrorOrigin::FileParsing,
-							"failed to load mesh asset (function LoadMesh in function LoadAsset)!");
-						return false;
-					}
-					break;
-				}
+				case MetafileType::Mesh:
+					return m_MeshMetadata.Emplace(assetFileName.CString(), ID, m_Renderer);
 				case MetafileType::Texture:
 					break;
 				default:
