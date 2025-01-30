@@ -1122,6 +1122,19 @@ namespace engine {
 			return false;
 		}
 
+		ValueType* Find(const String& key) const {
+			uint64_t hash = key();
+			uint32_t index = hash % m_Capacity;
+			uint8_t bucketSize = m_BucketSizes[index];
+			KeyBucket& keyBucket = m_KeyBuckets[index];
+			for (uint32_t i = 0; i < bucketSize; i++) {
+				if (key == keyBucket[i]) {
+					return &m_ValueBuckets[index][i];
+				}
+			}
+			return nullptr;
+		}
+
 		ValueType* Find(const char* key) const {
 			uint64_t hash = String::Hash()(key);
 			uint32_t index = hash % m_Capacity;
@@ -1133,6 +1146,33 @@ namespace engine {
 				}
 			}
 			return nullptr;
+		}
+
+		template<typename... Args>
+		ValueType* Emplace(const String& key, Args&&... args) {
+			if ((float)m_Size / m_Capacity > 0.9f) {
+				Reserve(m_Capacity * 2);
+			}
+			uint64_t hash = key();
+			uint32_t index = hash % m_Capacity;
+			uint8_t& bucketSize = m_BucketSizes[index];
+			KeyBucket& keyBucket = m_KeyBuckets[index];
+			ValueBucket& valueBucket = m_ValueBuckets[index];
+			if (bucketSize) {
+				for (uint32_t i = 0; i < bucketSize; i++) {
+					if (key == keyBucket[i]) {
+						return nullptr;
+					}
+				}
+				PrintError(ErrorOrigin::UI, "bad hash (in function UI::Dictionary::Emplace)!");
+				if (bucketSize >= max_bucket_size) {
+					PrintError(ErrorOrigin::UI, "bucket was full (in function UI::Dictionary::Emplace)!");
+					return nullptr;
+				}
+			}
+			++m_Size;
+			keyBucket[bucketSize] = key;
+			return new(&valueBucket[bucketSize++]) ValueType(std::forward<Args>(args)...);
 		}
 
 		template<typename... Args>
@@ -1162,8 +1202,7 @@ namespace engine {
 			return new(&valueBucket[bucketSize++]) ValueType(std::forward<Args>(args)...);
 		}
 
-		template<typename... Args>
-		ValueType* Emplace(const String& key, Args&&... args) {
+		ValueType* Insert(const String& key, const ValueType& value) {
 			if ((float)m_Size / m_Capacity > 0.9f) {
 				Reserve(m_Capacity * 2);
 			}
@@ -1178,15 +1217,15 @@ namespace engine {
 						return nullptr;
 					}
 				}
-				PrintError(ErrorOrigin::UI, "bad hash (in function UI::Dictionary::Emplace)!");
+				PrintError(ErrorOrigin::UI, "bad hash (in function UI::Dictionary::Insert)!");
 				if (bucketSize >= max_bucket_size) {
-					PrintError(ErrorOrigin::UI, "bucket was full (in function UI::Dictionary::Emplace)!");
+					PrintError(ErrorOrigin::UI, "bucket was full (in function UI::Dictionary::Insert)!");
 					return nullptr;
 				}
 			}
 			++m_Size;
 			keyBucket[bucketSize] = key;
-			return new(&valueBucket[bucketSize++]) ValueType(std::forward<Args>(args)...);
+			return &(valueBucket[bucketSize++] = value);
 		}
 
 		ValueType* Insert(const char* key, const ValueType& value) {
@@ -5194,7 +5233,7 @@ outColor = texture(image, inUV);
 			}
 		}
 
-		Type Type() {
+		Type GetType() {
 			return m_Type;
 		}
 
@@ -5246,14 +5285,16 @@ outColor = texture(image, inUV);
 	};
 
 	class AssetManager {
-	public:
+
+		friend class Engine;
+
+	private:
 
 		Renderer& m_Renderer;
-
 		String m_ProjectName;
+		uint64_t m_NextMetaID;
+		Dictionary<Metadata> m_Metadatas{};
 
-		Dictionary<Metadata> m_Metadata{};
-		
 		AssetManager(const String& projectName, Renderer& renderer) 
 			: m_Renderer(renderer), m_ProjectName(projectName) {
 			String projectFileName = projectName + ".meta";
@@ -5278,8 +5319,8 @@ outColor = texture(image, inUV);
 						PrintError(ErrorOrigin::FileParsing, 
 							"missing ']' when loading project metadata (in Engine constructor)");
 					}
-					line.Clear();
 					while (true) {
+						line.Clear();
 						if (FileHandler::GetLine(metafile, line) == EOF) {
 							PrintError(ErrorOrigin::FileParsing, 
 								"missing ']' when loading project metadata (in Engine constructor)");
@@ -5292,23 +5333,27 @@ outColor = texture(image, inUV);
 							PrintError(ErrorOrigin::FileParsing, 
 								"failed to open asset metafile (function fopen in Engine construcor)!");
 						}
-						if (!LoadMetadata(assetMetafile)) {
+						uint64_t ID;
+						if (!LoadMetadata(assetMetafile, ID)) {
 							PrintError(ErrorOrigin::FileParsing,
 								"failed to load metadata (function AssetManager::LoadMetadata in AssetManager constructor)!");
 							fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
 								"metafile that failed to load: {}", line.CString());
+							continue;
 						}
-						line.Clear();
+						m_NextMetaID = Max(m_NextMetaID, ID + 1);
 					}
 				}
 			}
 			fclose(metafile);
 		}
 
+	public:
+
 		bool LoadAsset(const String& fileName, MeshData& outMeshData) {
-			auto data = m_Metadata.Find(fileName.CString());
+			auto data = m_Metadatas.Find(fileName);
 			if (data) {
-				if (data->Type() != Metadata::Type::Mesh) {
+				if (data->GetType() != Metadata::Type::Mesh) {
 					PrintError(ErrorOrigin::AssetManager,
 						"attempting to load mesh from a file that isn't a mesh (in function AssetManager::LoadAsset)!");
 					return false;
@@ -5320,43 +5365,46 @@ outColor = texture(image, inUV);
 						return false;
 					}
 					return true;
-				}
-				MeshFileType type = GetMeshFileType(fileName);
-				if (type == MeshFileType::Unrecognized) {
+				}	
+			}
+			if (!data) {
+				data = m_Metadatas.Emplace(fileName, m_NextMetaID++, Metadata::Type::Mesh, m_Renderer);
+			}
+			MeshFileType type = GetMeshFileType(fileName);
+			if (type == MeshFileType::Unrecognized) {
+				PrintError(ErrorOrigin::AssetManager,
+					"attempting to load mesh asset of unknown type (function GetMeshFileType in function AssetManager::LoadAsset)!");
+				return false;
+			}
+			if (type == MeshFileType::Obj) {
+				FILE* fileStream = fopen(fileName.CString(), "r");
+				if (!fileStream) {
 					PrintError(ErrorOrigin::AssetManager,
-						"attempting to load mesh asset of unknown type (function GetMeshFileType in function AssetManager::LoadAsset)!");
+						"failed to open mesh asset file (function fopen in function AssetManager::LoadAsset)!");
 					return false;
 				}
-				if (type == MeshFileType::Obj) {
-					FILE* fileStream = fopen(fileName.CString(), "r");
-					if (!fileStream) {
-						PrintError(ErrorOrigin::AssetManager,
-							"failed to open mesh asset file (function fopen in function AssetManager::LoadAsset)!");
-						return false;
-					}
-					Obj obj{};
-					bool res = obj.Load(fileStream);
-					fclose(fileStream);
-					if (!res) {
-						PrintError(ErrorOrigin::Engine,
-							"failed to load obj file (function Obj::Load in function AssetManager::LoadAsset)!");
-						return false;
-					}
-					if (!data->Load(obj)) {
-						PrintError(ErrorOrigin::AssetManager,
-							"failed to load mesh asset from metadata (function Metadata::Load in function AssetManager::LoadAsset)!");
-						return false;
-					}
-					assert(data->GetMeshData(outMeshData));
-					return true;
+				Obj obj{};
+				bool res = obj.Load(fileStream);
+				fclose(fileStream);
+				if (!res) {
+					PrintError(ErrorOrigin::Engine,
+						"failed to load obj file (function Obj::Load in function AssetManager::LoadAsset)!");
+					return false;
 				}
+				if (!data->Load(obj)) {
+					PrintError(ErrorOrigin::AssetManager,
+						"failed to load mesh asset from metadata (function Metadata::Load in function AssetManager::LoadAsset)!");
+					return false;
+				}
+				assert(data->GetMeshData(outMeshData));
+				return true;
 			}
 			return false;
 		}
 
 	private:
 
-		bool LoadMetadata(FILE* metafile) {
+		bool LoadMetadata(FILE* metafile, uint64_t& outID) {
 			if (!metafile) {
 				return false;
 			}
@@ -5369,7 +5417,7 @@ outColor = texture(image, inUV);
 			}
 			String assetFileName{};
 			FileHandler::GetLine(metafile, assetFileName);
-			m_Metadata.Emplace(assetFileName.CString(), ID, (Metadata::Type)type, m_Renderer);
+			m_Metadatas.Emplace(assetFileName, ID, (Metadata::Type)type, m_Renderer);
 			return true;
 		}
 	};
