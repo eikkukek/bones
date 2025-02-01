@@ -100,7 +100,11 @@ namespace engine {
 
 		constexpr inline bool operator==(const Vec2_T& other) const noexcept = default;
 
-		constexpr inline const T& operator[](size_t index) const {
+		constexpr inline T& operator[](size_t index) {
+			return index == 0 ? x : y;
+		}
+
+		constexpr inline T operator[](size_t index) const {
 			return index == 0 ? x : y;
 		}
 	};
@@ -127,27 +131,27 @@ namespace engine {
 
 		static constexpr inline size_t size = 3;
 
-		static constexpr const Vec3_T Right(T num = Cast(1)) {
+		static constexpr Vec3_T Right(T num = Cast(1)) {
 			return Vec3_T(num, Cast(0), Cast(0));
 		}
 
-		static constexpr const Vec3_T Left(T num = Cast(1)) {
+		static constexpr Vec3_T Left(T num = Cast(1)) {
 			return Vec3_T(-num, Cast(0), Cast(0));
 		}
 
-		static constexpr const Vec3_T Up(T num = Cast(1)) {
+		static constexpr Vec3_T Up(T num = Cast(1)) {
 			return Vec3_T(Cast(0), num, Cast(0));
 		}
 
-		static constexpr const Vec3_T Down(T num = Cast(1)) {
+		static constexpr Vec3_T Down(T num = Cast(1)) {
 			return Vec3_T(Cast(0), -num, Cast(0));
 		}
 
-		static constexpr const Vec3_T Forward(T num = Cast(1)) {
+		static constexpr Vec3_T Forward(T num = Cast(1)) {
 			return Vec3_T(Cast(0), Cast(0), num);
 		}
 
-		static constexpr const Vec3_T Backward(T num = Cast(1)) {
+		static constexpr Vec3_T Backward(T num = Cast(1)) {
 			return Vec3_T(Cast(0), Cast(0), -num);
 		}
 
@@ -158,6 +162,27 @@ namespace engine {
 		constexpr inline Vec3_T(const Vec2_T<T>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(0)) {}
 
 		constexpr inline Vec3_T(const Vec4_T<T>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(other.z)) {}
+
+		template<typename U>
+		Vec3_T& RotateX(U radians) {
+			y = y * cos(radians) - z * sin(radians);
+			z = y * sin(radians) + z * cos(radians);
+			return *this;
+		}
+
+		template<typename U>
+		Vec3_T& RotateY(U radians) {
+			x = x * cos(radians) + z * sin(radians);
+			z = -x * sin(radians) + z * cos(radians);
+			return *this;
+		}
+
+		template<typename U>
+		Vec3_T& RotateZ(U radians) {
+			x = x * cos(radians) - y * sin(radians);
+			y = x * sin(radians) + y * cos(radians);
+			return *this;
+		}
 
 		constexpr inline T SqrMagnitude() const noexcept { 
 			return x * x + y * y + z * z; 
@@ -439,6 +464,32 @@ namespace engine {
 				a[0].y * a[1].w * a[2].z * a[3].x;
 		}
 
+		static constexpr inline Mat4_T Look(const Vec3_T<T>& eyePosition, const Vec3_T<T>& forward, const Vec3_T<T>& upDirection = Vec3_T<T>::Up()) {
+			Vec3_T<T> pos = eyePosition;
+			pos.y = -pos.y;
+			Vec3_T<T> front = forward.Normalized();
+			Vec3_T<T> right = Cross(upDirection, front).Normalized();
+			Vec3_T<T> up = Cross(front, right).Normalized();
+			Mat4_T result{};
+			result[0].x = right.x;
+			result[1].x = right.y;
+			result[2].x = right.z;
+			result[0].y = up.x;
+			result[1].y = up.y;
+			result[2].y = up.z;
+			result[0].z = front.x;
+			result[1].z = front.y;
+			result[2].z = front.z;
+			pos = -pos;
+			result[3] = {
+				Dot(right, pos),
+				Dot(up, pos),
+				Dot(front, pos),
+				Cast(1),
+			};
+			return result;
+		}
+
 		static constexpr inline Mat4_T LookAt(const Vec3_T<T>& eyePosition, const Vec3_T<T>& upDirection, const Vec3_T<T>& lookAtPosition) noexcept {
 			Vec3_T<T> pos = eyePosition;
 			pos.y = -pos.y;
@@ -662,7 +713,7 @@ namespace engine {
 
 		if (det == 0.0f) {
 			fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold, 
-				"attempting to invert non-invertible 4x4 matrix (in function engine::Invert)!");
+				"attempting to invert non-invertible 4x4 matrix (in function engine::Invert)!\n");
 			return Mat4_T<T>(1);
 		}
 
@@ -771,6 +822,7 @@ namespace engine {
 			);
 		}
 
+		Quaternion_T operator*(const Quaternion_T& other) const noexcept { return Multiply(*this, other); }
 		Quaternion_T operator+(const Quaternion_T& other) const noexcept { return Quaternion_T(x + other.x, y + other.y, z + other.z, w + other.w); }
 		Quaternion_T operator*(T scalar) const noexcept { return Quaternion_T(x * scalar, y * scalar, z * scalar, w * scalar); }
 		constexpr inline bool operator==(const Quaternion_T& other) const noexcept { return x == other.x && y == other.y && z == other.z && w == other.w; }
