@@ -54,13 +54,13 @@ namespace engine {
 	};
 
 	static const char* ErrorOriginString(ErrorOrigin origin) {
-		const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
+		static const char* strings[static_cast<size_t>(ErrorOrigin::MaxEnum)] {
 			"Uncategorized",
 			"Engine",
 			"Renderer",
 			"TextRenderer",
 			"UI",
-			"AssetManager"
+			"AssetManager",
 			"OutOfMemory",
 			"NullDereference",
 			"IndexOutOfBounds",
@@ -80,7 +80,7 @@ namespace engine {
 
 	inline void PrintError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS) {
 		fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
-			"Engine called an error!\nError origin: {}s\nError: {}\n", ErrorOriginString(origin), err);
+			"Engine called an error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
 		if (vkErr != VK_SUCCESS) {
 			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "Vulkan error code: {}\n", (int)vkErr);
 		}
@@ -754,7 +754,7 @@ namespace engine {
 			other.m_Capacity = 0;
 		}
 
-		String(const char* str) noexcept {
+		String(const char* str) noexcept : m_Data(nullptr), m_Length(0), m_Capacity(0) {
 			uint32_t len = strlen(str);
 			if (len < small_string_buffer_size) {
 				m_Data = m_SmallStringBuffer;
@@ -833,6 +833,7 @@ namespace engine {
 				Reserve(m_Capacity ? m_Capacity * 2 : 15);
 			}
 			m_Data[m_Length++] = c;
+			m_Data[m_Length] = '\0';
 			return *this;
 		}
 
@@ -881,6 +882,7 @@ namespace engine {
 			memcpy(result.m_Data, a.m_Data, a.m_Length * sizeof(char));
 			memcpy(result.m_Data + a.m_Length, b, bLength * sizeof(char));
 			result.m_Length = a.m_Length + bLength;
+			result.m_Data[result.m_Length] = '\0';
 			return result;
 		}
 
@@ -1252,6 +1254,29 @@ namespace engine {
 			++m_Size;
 			keyBucket[bucketSize] = key;
 			return &(valueBucket[bucketSize++] = value);
+		}
+
+		bool Erase(const String& key) {
+			uint64_t hash = key();
+			uint32_t index = hash % m_Capacity;
+			uint8_t& bucketSize = m_BucketSizes[index];
+			KeyBucket& keyBucket = m_KeyBuckets[index];
+			ValueBucket& valueBucket = m_ValueBuckets[index];
+			if (bucketSize) {
+				for (uint32_t i = 0; i < bucketSize; i++) {
+					if (key == keyBucket[i]) {
+						for (uint32_t j = i; j < bucketSize - 1; j++) {
+							keyBucket[i].~String();
+							valueBucket[i].~T();
+							new(&keyBucket[i]) String(std::move(keyBucket[i + 1]));
+							new(&valueBucket[i]) T(std::move(valueBucket[i + 1]));
+						}
+						--bucketSize;
+						return true;
+					}
+				}
+			}
+			return false;
 		}
 
 		Iterator begin() {
@@ -2918,6 +2943,9 @@ namespace engine {
 		};
 
 	private:
+
+		static inline DynamicArray<GLFWcursorposfun> s_CursorPositionCallbacks;
+		static inline DynamicArray<GLFWscrollfun> s_ScrollCallbacks;
 		
 		static constexpr size_t key_count = static_cast<size_t>(Key::MaxEnum) + 1;
 		static constexpr size_t mouse_button_count = static_cast<size_t>(MouseButton::MaxEnum) + 1;
@@ -2938,8 +2966,84 @@ namespace engine {
 
 		static inline DynamicArray<unsigned int> s_TextInput{};
 
+		static inline Vec2_T<float> s_ContentScale { 1, 1 };
+
 		static inline Vec2_T<double> s_CursorPosition{};
 		static inline Vec2_T<double> s_DeltaCursorPosition{};
+
+		static inline Vec2_T<double> s_DeltaScrollOffset{};
+
+	public:
+
+		static bool AddCursorPositionCallback(GLFWcursorposfun function) {
+			if (!function) {
+				return false;
+			}
+			s_CursorPositionCallbacks.PushBack(function);
+			return true;
+		}
+
+		static bool RemoveCursorPositionCallback(GLFWcursorposfun function) {
+			auto iter = s_CursorPositionCallbacks.begin();
+			auto end = s_CursorPositionCallbacks.end();
+			for (; iter != end; iter++) {
+				if (*iter == function) {
+					s_CursorPositionCallbacks.Erase(iter);
+					return true;
+				}
+			}
+			return false;
+		}
+
+		static bool WasKeyPressed(Key key) {
+			return s_PressedKeys[static_cast<size_t>(key)];
+		}
+
+		static bool WasKeyReleased(Key key) {
+			return s_ReleasedKeys[static_cast<size_t>(key)];
+		}
+
+		static bool WasKeyHeld(Key key) {
+			return s_HeldKeys[static_cast<size_t>(key)];
+		}
+
+		static float ReadKeyValue(Key key) {
+			return s_KeyValues[static_cast<size_t>(key)];
+		}
+
+		static bool WasMouseButtonPressed(MouseButton button) {
+			return s_PressedMouseButtons[static_cast<size_t>(button)];
+		}
+
+		static bool WasMouseButtonReleased(MouseButton button) {
+			return s_ReleasedMouseButtons[static_cast<size_t>(button)];
+		}
+
+		static bool WasMouseButtonHeld(MouseButton button) {
+			return s_HeldMouseButtons[static_cast<size_t>(button)];
+		}
+
+		static const DynamicArray<unsigned int>& GetTextInput() {
+			return s_TextInput;
+		}
+
+		static Vec2_T<float> GetContentScale() {
+			return s_ContentScale;
+		}
+
+		static Vec2_T<double> GetDeltaMousePosition() {
+			return s_DeltaCursorPosition;
+		}
+
+		static Vec2_T<double> GetScaledDeltaMousePosition() {
+			return { s_DeltaCursorPosition.x / s_ContentScale.x, s_DeltaCursorPosition.y / s_ContentScale.y };
+		}
+
+		static Vec2_T<double> GetDeltaScrollOffset() {
+			return s_DeltaScrollOffset;
+		}
+
+	private:
 
 		static void KeyCallback(GLFWwindow*, int key, int scancode, int action, int mods) {
 			if (key < 0) {
@@ -2975,6 +3079,19 @@ namespace engine {
 			s_TextInput.PushBack(c);
 		}
 
+		static void CursorPositionCallback(GLFWwindow* window, double xPos, double yPos) {
+			Vec2_T<double> pos = { xPos, yPos };
+			s_DeltaCursorPosition = pos - s_CursorPosition;
+			s_CursorPosition = pos;
+			for (auto function : s_CursorPositionCallbacks) {
+				function(window, xPos, yPos);
+			}
+		}
+
+		static void ScrollCallback(GLFWwindow*, double xOffset, double yOffset) {
+			s_DeltaScrollOffset = { xOffset, yOffset };
+		}
+
 		static void ResetInput() {
 			for (Key* iter = s_ActiveKeys.begin(); iter != s_ActiveKeys.end();) {
 				size_t index = (size_t)*iter;
@@ -3000,6 +3117,8 @@ namespace engine {
 				s_PressedMouseButtons[index] = s_ReleasedMouseButtons[index] = false;
 			}
 			s_TextInput.Resize(0);
+			s_DeltaCursorPosition = 0.0;
+			s_DeltaScrollOffset = 0.0;
 		};
 
 		Input(GLFWwindow* pGLFWwindow) {
@@ -3009,41 +3128,11 @@ namespace engine {
 			glfwSetKeyCallback(pGLFWwindow, KeyCallback);
 			glfwSetMouseButtonCallback(pGLFWwindow, MouseButtonCallback);
 			glfwSetCharCallback(pGLFWwindow, CharacterCallback);
+			glfwSetCursorPosCallback(pGLFWwindow, CursorPositionCallback);
+			glfwSetScrollCallback(pGLFWwindow, ScrollCallback);
+			GLFWmonitor* pMonitor = glfwGetPrimaryMonitor();
+			glfwGetMonitorContentScale(pMonitor, &s_ContentScale.x, &s_ContentScale.y);
 		};
-
-	public:
-
-		static bool WasKeyPressed(Key key) {
-			return s_PressedKeys[static_cast<size_t>(key)];
-		}
-
-		static bool WasKeyReleased(Key key) {
-			return s_ReleasedKeys[static_cast<size_t>(key)];
-		}
-
-		static bool WasKeyHeld(Key key) {
-			return s_HeldKeys[static_cast<size_t>(key)];
-		}
-
-		static float ReadKeyValue(Key key) {
-			return s_KeyValues[static_cast<size_t>(key)];
-		}
-
-		static bool WasMouseButtonPressed(MouseButton button) {
-			return s_PressedMouseButtons[static_cast<size_t>(button)];
-		}
-
-		static bool WasMouseButtonReleased(MouseButton button) {
-			return s_ReleasedMouseButtons[static_cast<size_t>(button)];
-		}
-
-		static bool WasMouseButtonHeld(MouseButton button) {
-			return s_HeldMouseButtons[static_cast<size_t>(button)];
-		}
-
-		static const DynamicArray<unsigned int>& GetTextInput() {
-			return s_TextInput;
-		}
 	};
 
 	class Time {
@@ -3141,9 +3230,11 @@ namespace engine {
 	
 		friend class PersistentReference<T>;
 			
-	protected:
+	private:
 
 		DynamicArray<PersistentReference<T>*> m_PersistentReferences;
+
+	protected:
 
 		PersistentReferenceHolder() : m_PersistentReferences() {
 			m_PersistentReferences.Reserve(4);
@@ -3164,7 +3255,7 @@ namespace engine {
 			}
 		}
 
-	private:
+	public:
 
 		bool AddPersistentReference(PersistentReference<T>* reference) {
 			if (reference) {
@@ -4181,7 +4272,7 @@ outColor = texture(image, inUV);
 
 			assert(s_GLFWwindows.Size() == s_UIs.Size());
 
-			glfwSetCursorPosCallback(pGLFWwindow, 
+			Input::AddCursorPositionCallback(
 				[](GLFWwindow* pGLFWWindow, double xPos, double yPos) {
 					UI* pUI = FindUI(pGLFWWindow);
 					if (!pUI) {
@@ -4689,7 +4780,30 @@ outColor = texture(image, inUV);
 
 	class World;
 
-	class RayTarget : private PersistentReferenceHolder<RayTarget> {
+	enum WorldRenderDataFlagBits {
+		WorldRenderDataFlag_NoSave = 1,
+	};
+
+	typedef uint32_t WorldRenderDataFlags;
+
+	struct WorldRenderData : PersistentReferenceHolder<WorldRenderData> {
+
+		WorldRenderDataFlags m_FLags;
+		const uint64_t m_ObjectID;
+
+		VkDescriptorSet m_AlbedoTextureDescriptorSet = VK_NULL_HANDLE;
+		Mat4 m_Transform{};
+		MeshData m_MeshData{};
+
+		WorldRenderData(uint64_t objectID, WorldRenderDataFlags flags, const Mat4& transform, const MeshData& meshData) noexcept
+			: PersistentReferenceHolder<WorldRenderData>(), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
+
+		WorldRenderData(const WorldRenderData&) = delete;
+
+		WorldRenderData(WorldRenderData&& other) noexcept = default;
+	};
+
+	class RayTarget : public PersistentReferenceHolder<RayTarget> {
 
 		friend class World;
 		friend class DynamicArray<RayTarget>;
@@ -4726,6 +4840,10 @@ outColor = texture(image, inUV);
 			return m_LogicMesh.AABBCheck(ray);
 		}
 
+		Box<float> GetBoundingBox() const {
+			return m_LogicMesh.GetBoundingBox();
+		}
+
 		bool RayCheck(const Ray& ray, RayHitInfo& outHitInfo) const {
 			return m_LogicMesh.IsRayHit(ray, outHitInfo);
 		}
@@ -4736,7 +4854,7 @@ outColor = texture(image, inUV);
 		}
 	};
 
-	class Obstacle : private PersistentReferenceHolder<Obstacle> {
+	class Obstacle : public PersistentReferenceHolder<Obstacle> {
 
 		friend class World;
 		friend class Area;
@@ -4750,10 +4868,6 @@ outColor = texture(image, inUV);
 			Collider::CreateInfo m_ColliderInfo{};
 		};
 
-		Box<float> GetBoundingBox() const {
-			return m_Collider.GetBoundingBox();
-		}
-
 	private:
 
 		uint64_t m_ObjectID;
@@ -4762,9 +4876,16 @@ outColor = texture(image, inUV);
 		Vec3 m_Velocity;
 		Collider m_Collider;
 
+		Mat4 m_Transform;
+		DynamicArray<PersistentReference<WorldRenderData>> m_RenderDatas{};
+		DynamicArray<Mat4> m_Transforms{};
+
 		Obstacle(uint64_t objectID, const CreateInfo& info) noexcept 
 			: PersistentReferenceHolder<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position),
-				m_YRotation(info.m_YRotation), m_Collider(m_Position, m_YRotation, m_Velocity, info.m_ColliderInfo) {}
+				m_YRotation(info.m_YRotation), m_Collider(m_Position, m_YRotation, m_Velocity, info.m_ColliderInfo),
+				m_Transform(Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4()) {
+			m_Transform[3] = Vec4(m_Position, 1.0f);
+		}
 
 		Obstacle(const Obstacle&) = delete;
 
@@ -4775,35 +4896,122 @@ outColor = texture(image, inUV);
 		bool Collides(const Collider& collider, Vec3& outColliderPushBack) const {
 			return Collider::ColliderToStaticColliderCollides(collider, m_Collider, outColliderPushBack);
 		}
+
+	public:
+
+		Box<float> GetBoundingBox() const {
+			return m_Collider.GetBoundingBox();
+		}
+
+		const Vec3& GetPosition() const {
+			return m_Position;
+		}
+
+		void SetPosition(const Vec3& position) {
+			m_Position = position;
+			UpdateTransforms();
+		}
+
+		float GetYRotation() const {
+			return m_YRotation;
+		}
+
+		void SetYRotation(float yRotation) {
+			m_YRotation = yRotation;
+			UpdateTransforms();
+		}
+
+		void SetPositionAndYRotation(const Vec3& position, float yRotation) {
+			m_Position = position;
+			m_YRotation = yRotation;
+			UpdateTransforms();
+		}
+
+	private:
+
+		WorldRenderData& AddRenderData(WorldRenderData& renderData, const Mat4& transform) {
+			auto& data = m_RenderDatas.EmplaceBack(renderData);
+			m_Transforms.PushBack(transform);
+			(*data).m_Transform = m_Transform * transform;
+			return renderData;
+		}
+
+		bool RemoveRenderData(WorldRenderData& renderData) {
+			uint32_t index = 0;
+			uint32_t renderDataCount = m_RenderDatas.Size();
+			for (; index < renderDataCount; index++) {
+				auto& ref = m_RenderDatas[index];
+				assert(!ref.IsNull());
+				if ((*ref).m_ObjectID == renderData.m_ObjectID) {
+					break;
+				}
+			}
+			if (index == renderDataCount) {
+				return false;
+			}
+			m_RenderDatas.Erase(m_RenderDatas.begin() + index);
+			m_Transforms.Erase(m_Transforms.begin() + index);
+			return true;
+		}
+
+		void UpdateTransforms() {
+			m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
+			m_Transform[3] = Vec4(m_Position, 1.0f);
+			uint32_t renderDataCount = m_RenderDatas.Size();
+			assert(renderDataCount == m_Transforms.Size());
+			for (uint32_t i = 0; i < renderDataCount; i++) {
+				auto& ref = m_RenderDatas[i];
+				assert(!ref.IsNull());
+				(*ref).m_Transform = m_Transform * m_Transforms[i];
+			}
+		}
 	};
 
-	class Area : private PersistentReferenceHolder<Area> {
+	enum AreaFlagBits {
+		AreaFlag_NoSave = 1,
+	};
+
+	typedef uint32_t AreaFlags;
+
+	class Area : public PersistentReferenceHolder<Area> {
 
 		friend class World;
 		friend class DynamicArray<Area>;
 
 	public:
 
-		uint64_t& m_NextObjectID;
 		const uint64_t m_ObjectID;
 
 	private:
+
+		uint64_t& m_NextObjectID;
 
 		Box<float> m_BoundingBox{};
 		DynamicArray<Obstacle> m_Obstacles{};
 		DynamicArray<RayTarget> m_RayTargets{};
 		
-		Area(uint64_t& nextObjectID, uint64_t objectID) noexcept
-			: m_NextObjectID(nextObjectID), m_ObjectID(objectID) {}
+		Area(AreaFlags flags, uint64_t objectID, uint64_t& nextObjectID) noexcept
+			: m_ObjectID(objectID), m_NextObjectID(nextObjectID) {}
+
+		void UpdateBoundingBox(const Box<float>& subBoundingBox) {
+			for (uint32_t i = 0; i < 3; i++) {
+				m_BoundingBox.m_Min[i] = Min(subBoundingBox.m_Min[i], m_BoundingBox.m_Min[i]);
+				m_BoundingBox.m_Max[i] = Max(subBoundingBox.m_Max[i], m_BoundingBox.m_Max[i]);
+			}
+		}
 
 	public:
 
 		PersistentReference<Obstacle> AddObstacle(const Obstacle::CreateInfo& info) {
-			return m_Obstacles.EmplaceBack(m_NextObjectID++, info);
+			Obstacle& obstacle = m_Obstacles.EmplaceBack(m_NextObjectID++, info);
+			UpdateBoundingBox(obstacle.GetBoundingBox());
+			return obstacle;
 		}
 
 		PersistentReference<RayTarget> AddRayTarget(const RayTarget::CreateInfo& info) {
-			return m_RayTargets.EmplaceBack(m_NextObjectID++, info);
+			RayTarget& rayTarget = m_RayTargets.EmplaceBack(m_NextObjectID++, info);
+			UpdateBoundingBox(rayTarget.GetBoundingBox());
+			return rayTarget;
 		}
 
 		bool IsPointInside(const Vec3& point) const {
@@ -4834,7 +5042,7 @@ outColor = texture(image, inUV);
 		}
 	};
 
-	class Body : private PersistentReferenceHolder<Body> {
+	class Body : public PersistentReferenceHolder<Body> {
 
 		friend class World;
 		friend class DynamicArray<Body>;
@@ -4842,23 +5050,32 @@ outColor = texture(image, inUV);
 	private:	
 
 		const uint64_t m_ObjectID;
-		const PersistentReference<Area> m_Area;
+		PersistentReference<Area> m_Area;
 		Vec3 m_Position;
 		Vec3 m_Velocity;
 		float m_YRotation;
 		float m_Height;
 		Collider m_Collider;
 
-		Body(uint64_t objectID, const Vec3& position, float height, Area& area, const Collider::CreateInfo& colliderInfo)
-			: PersistentReferenceHolder<Body>(), m_Area(area), m_Position(position), m_Velocity(0), m_ObjectID(objectID),
-				m_Height(height), m_Collider(m_Position, m_YRotation, m_Velocity, colliderInfo) {
+		Mat4 m_Transform;
+		DynamicArray<PersistentReference<WorldRenderData>> m_RenderDatas{};
+		DynamicArray<Mat4> m_Transforms{};
+
+		Body(uint64_t objectID, const Vec3& position, float height, Area* area, const Collider::CreateInfo& colliderInfo)
+			: PersistentReferenceHolder<Body>(), m_Area(), m_Position(position), m_Velocity(0), 
+				m_YRotation(0), m_ObjectID(objectID),
+				m_Height(height), m_Collider(m_Position, m_YRotation, m_Velocity, colliderInfo),
+				m_Transform(Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4()){
+			if (area) {
+				m_Area = *area;
+			}
 		}
 
 		Body(const Body&) = delete;
 
 		Body(Body&& other) noexcept 
 			: m_ObjectID(other.m_ObjectID), m_Area(other.m_Area), m_Position(other.m_Position), m_YRotation(other.m_YRotation),
-				m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}
+				m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}	
 
 	public:	
 
@@ -4872,28 +5089,97 @@ outColor = texture(image, inUV);
 					"area was null when attempting to move body (in function World::Body::Move)!");
 				return;
 			}
-			m_Position += position - m_Position;
-			Vec3 pushBack;
-			if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
-				m_Position += pushBack;
-			}
-		}
-
-		void SetYRotation(float rot) {
-			m_YRotation = rot;
-			if (m_Area.IsNull()) {
-				PrintError(ErrorOrigin::GameLogic,
-					"area was null when attempting to rotate body (in function World::Body::SetYRotation)!");
+			if (position == m_Position) {
 				return;
 			}
+			m_Position = position;
 			Vec3 pushBack;
 			if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
 				m_Position += pushBack;
 			}
+			UpdateTransforms();
+		}
+
+		float GetYRotation() const {
+			return m_YRotation;
+		}
+
+		void Rotate(float yRotation) {
+			if (m_Area.IsNull()) {
+				PrintError(ErrorOrigin::GameLogic,
+					"area was null when attempting to move body (in function World::Body::Move)!");
+				return;
+			}
+			if (yRotation == m_YRotation) {
+				return;
+			}
+			m_YRotation = yRotation;
+			Vec3 pushBack;
+			if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
+				m_Position += pushBack;
+			}
+			UpdateTransforms();
+		}
+
+		void MoveAndRotate(const Vec3& position, float yRotation) {
+			if (m_Area.IsNull()) {
+				PrintError(ErrorOrigin::GameLogic,
+					"area was null when attempting to move body (in function World::Body::Move)!");
+				return;
+			}
+			if (position == m_Position && yRotation == m_YRotation) {
+				return;
+			}
+			m_Position = position;
+			m_YRotation = yRotation;
+			Vec3 pushBack;
+			if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
+				m_Position += pushBack;
+			}
+			UpdateTransforms();
 		}
 
 		const Collider& GetCollider()  const {
 			return m_Collider;
+		}
+
+	private:
+
+		WorldRenderData& AddRenderData(WorldRenderData& renderData, const Mat4& transform) {
+			auto& ref = m_RenderDatas.EmplaceBack(renderData);
+			m_Transforms.PushBack(transform);
+			(*ref).m_Transform = m_Transform * transform;
+			return renderData;
+		}
+
+		bool RemoveRenderData(WorldRenderData& renderData) {
+			uint32_t index = 0;
+			uint32_t renderDataCount = m_RenderDatas.Size();
+			for (; index < renderDataCount; index++) {
+				auto& ref = m_RenderDatas.EmplaceBack(renderData);
+				assert(!ref.IsNull());
+				if ((*ref).m_ObjectID == renderData.m_ObjectID) {
+					break;
+				}
+			}
+			if (index == renderDataCount) {
+				return false;
+			}
+			m_RenderDatas.Erase(m_RenderDatas.begin() + index);
+			m_Transforms.Erase(m_Transforms.begin() + index);
+			return true;
+		}
+
+		void UpdateTransforms() {
+			m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
+			m_Transform[3] = Vec4(m_Position, 1.0f);
+			uint32_t renderDataCount = m_RenderDatas.Size();
+			assert(renderDataCount == m_Transforms.Size());
+			for (uint32_t i = 0; i < renderDataCount; i++) {
+				auto& ref = m_RenderDatas[i];
+				assert(!ref.IsNull());
+				(*ref).m_Transform = m_Transform * m_Transforms[i];
+			}
 		}
 	};
 
@@ -4975,6 +5261,10 @@ outColor = texture(image, inUV);
 			return *(FragmentBufferDirectional*)(m_FragmentMap);
 		}
 
+		VkDeviceSize GetFragmentBufferSize() const {
+			return m_Type == Type::Directional ? sizeof(FragmentBufferDirectional) : sizeof(FragmentBufferSpot);
+		}
+
 	public:
 
 		void SetViewMatrix(const Mat4& matrix) {
@@ -4990,155 +5280,10 @@ outColor = texture(image, inUV);
 
 		void DepthDraw(const Renderer::DrawData& drawData) const;
 
-		VkDeviceSize FragmentBufferSize() const {
-			return m_Type == Type::Directional ? sizeof(FragmentBufferDirectional) : sizeof(FragmentBufferSpot);
-		}
-
-		void SwapchainCreateCallback(uint32_t imageCount, VkCommandBuffer commandBuffer) {
-
-			Renderer& renderer = m_World.m_Renderer;
-
-			if (m_FragmentBuffer.IsNull()) {
-				if (!m_FragmentBuffer.Create(FragmentBufferSize(), 
-						VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create buffer for directional light (function Renderer::Buffer::Create in function World::DirectionalLight::SwapchainCreateCallback)!");
-				}
-				if (!m_FragmentBuffer.MapMemory(0, m_FragmentBuffer.m_BufferSize, (void**)&m_FragmentMap)) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to map buffer memory for directional light (function Renderer::Buffer::MapMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
-				}
-			}
-
-			if (m_DepthImageViews.Size() != imageCount) {
-				if (m_DepthImages.Size() < imageCount) {
-
-					size_t oldImageCount = m_DepthImages.Size();
-
-					m_DepthImages.Resize(imageCount);
-					m_DepthImagesMemory.Resize(imageCount);
-					m_DepthImageViews.Resize(imageCount);
-
-					VkExtent3D extent = { m_ShadowMapResolution.x, m_ShadowMapResolution.y, 1 };
-
-					for (size_t i = oldImageCount; i < imageCount; i++) {
-						VkImage& image = m_DepthImages[i];
-						VkDeviceMemory& memory = m_DepthImagesMemory[i];
-						VkImageView& imageView = m_DepthImageViews[i];
-						image = renderer.CreateImage(VK_IMAGE_TYPE_2D, renderer.m_DepthOnlyFormat, 
-							extent, 1, 1, VK_SAMPLE_COUNT_1_BIT, 
-							VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
-							VK_SHARING_MODE_EXCLUSIVE, 1, &renderer.m_GraphicsQueueFamilyIndex);
-						if (image == VK_NULL_HANDLE) {
-							CriticalError(ErrorOrigin::Renderer, 
-								"failed to create depth image for directional light (function Renderer::CreateImage in function World::DirectionalLight::SwapchainCreateCallback)!");
-						}
-						memory = renderer.AllocateImageMemory(image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-						if (memory == VK_NULL_HANDLE) {
-							CriticalError(ErrorOrigin::Renderer, 
-								"failed to allocate depth image memory for directional light (function Renderer::AllocateImageMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
-						}
-						imageView = renderer.CreateImageView(image, VK_IMAGE_VIEW_TYPE_2D, renderer.m_DepthOnlyFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
-						if (imageView == VK_NULL_HANDLE) {
-							CriticalError(ErrorOrigin::Renderer, 
-								"failed to create depth image view for directional light (function Renderer::AllocateImageMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
-						}
-
-						VkImageMemoryBarrier memoryBarrier = {
-							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-							.pNext = nullptr,
-							.srcAccessMask = 0,
-							.dstAccessMask = 0,
-							.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-							.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.image = image,
-							.subresourceRange {
-								.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-								.baseMipLevel = 0,
-								.levelCount = 1,
-								.baseArrayLayer = 0,
-								.layerCount = 1,
-							},
-						};
-
-						vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-							VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &memoryBarrier);
-					}	
-				}
-				else {
-					for (size_t i = imageCount; i < m_DepthImages.Size(); i++) {
-						renderer.DestroyImageView(m_DepthImageViews[i]);
-						renderer.DestroyImage(m_DepthImages[i]);
-						renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
-					}
-					m_DepthImages.Resize(imageCount);
-					m_DepthImagesMemory.Resize(imageCount);
-					m_DepthImageViews.Resize(imageCount);
-				}
-				if (m_ShadowMapSampler == VK_NULL_HANDLE) {
-					VkSamplerCreateInfo samplerInfo = Renderer::GetDefaultSamplerInfo();
-					samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-					m_ShadowMapSampler = renderer.CreateSampler(samplerInfo);
-					if (m_ShadowMapSampler == VK_NULL_HANDLE) {
-						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create shadow map sampler for directional light (function Renderer::CreateSampler in function World::DirectionalLight::SwapchainCreateCallback)!");
-					}
-				}
-				if (m_ShadowMapDescriptorPool != VK_NULL_HANDLE) {
-					renderer.DestroyDescriptorPool(m_ShadowMapDescriptorPool);
-				}
-				DynamicArray<VkDescriptorPoolSize> poolSizes(2 * imageCount);
-				for (uint32_t i = 0; i < poolSizes.Size();) {
-					poolSizes[i++] = {
-						.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-						.descriptorCount = 1,
-					};
-					poolSizes[i++] = {
-						.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-						.descriptorCount = 1,
-					};
-				}
-				m_ShadowMapDescriptorPool = renderer.CreateDescriptorPool(0, imageCount, poolSizes.Size(), poolSizes.Data());
-				if (m_ShadowMapDescriptorPool == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create descriptor pool for directional light (function Renderer::CreateDescriptorPool in function World::DirectionalLight::SwapchainCreateCallback)!");
-				}
-				m_ShadowMapDescriptorSets.Resize(imageCount);
-				DynamicArray<VkDescriptorSetLayout> setLayouts(imageCount);
-				for (VkDescriptorSetLayout& layout : setLayouts) {
-					layout = m_World.m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout;
-				}
-				if (!renderer.AllocateDescriptorSets(nullptr, m_ShadowMapDescriptorPool, imageCount, 
-						setLayouts.Data(), m_ShadowMapDescriptorSets.Data())) {
-					CriticalError(ErrorOrigin::Renderer, 
-						"failed to allocate descriptor sets for directional light (function Renderer::AllocateDescriptorSets in function World::DirectionalLight::SwapchainCreateCallback)!");
-				}
-				VkDescriptorBufferInfo descriptorBufferInfo {
-					.buffer = m_FragmentBuffer.m_Buffer,
-					.offset = 0,
-					.range = FragmentBufferSize(),
-				};
-				for (uint32_t i = 0; i < imageCount; i++) {
-					VkDescriptorImageInfo imageInfo {
-						.sampler = m_ShadowMapSampler,
-						.imageView = m_DepthImageViews[i],
-						.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-					};
-					VkWriteDescriptorSet descriptorWrites[2] {
-						Renderer::GetDescriptorWrite(nullptr, 0, m_ShadowMapDescriptorSets[i], 
-							VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr),
-						Renderer::GetDescriptorWrite(nullptr, 1, m_ShadowMapDescriptorSets[i], 
-							VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &descriptorBufferInfo),
-					};
-					renderer.UpdateDescriptorSets(2, descriptorWrites);
-				}
-			}	
-		}
+		void SwapchainCreateCallback(uint32_t imageCount, VkCommandBuffer commandBuffer);
 	};
 
-	bool LoadMesh(const String& fileName, StaticMesh& outMesh) {
+	inline bool LoadMesh(const String& fileName, StaticMesh& outMesh) {
 		FILE* fileStream = fopen(fileName.CString(), "r");
 		if (!fileStream) {
 			PrintError(ErrorOrigin::FileParsing, 
@@ -5176,7 +5321,6 @@ outColor = texture(image, inUV);
 	}
 
 	class Metadata {
-
 	public:
 
 		enum class Type {
@@ -5197,7 +5341,23 @@ outColor = texture(image, inUV);
 						new(&m_Mesh) StaticMesh(renderer);
 						break;
 					case Type::Texture:
-						new(&m_Texture) StaticMesh(renderer);
+						new(&m_Texture) StaticTexture(renderer);
+						break;
+					default:
+						m_None = -1;
+						PrintError(ErrorOrigin::AssetManager,
+							"invalid metadata type (in Metadata constructor)!");
+						break;
+				}
+			}
+
+			Data_U(Data_U&& other, Type type) {
+				switch (type) {
+					case Type::Mesh:
+						new(&m_Mesh) StaticMesh(std::move(other.m_Mesh));
+						break;
+					case Type::Texture:
+						new(&m_Texture) StaticTexture(std::move(other.m_Texture));
 						break;
 					default:
 						m_None = -1;
@@ -5214,13 +5374,17 @@ outColor = texture(image, inUV);
 
 	private:
 
-		Data_U u_Data;
 		Type m_Type;
+		Data_U u_Data;
 
 	public:
 
 		Metadata(uint64_t ID, Type type, Renderer& renderer) 
 			: m_ID(ID), m_Type(type), u_Data(renderer, type) {}
+
+		Metadata(const Metadata&) = delete;
+
+		Metadata(Metadata&& other) : m_ID(other.m_ID), m_Type(other.m_Type), u_Data(std::move(other.u_Data), m_Type) {}
 
 		bool IsNull() const {
 			switch (m_Type) {
@@ -5304,26 +5468,26 @@ outColor = texture(image, inUV);
 				if (fwrite(projectName.CString(), sizeof(char), projectName.Length(), metafile) != projectName.Length() ||
 					!fwrite("\n", sizeof(char), 1, metafile)) {
 					PrintError(ErrorOrigin::FileWriting, 
-						"failed to write to project metafile (function fwrite in Engine constructor)!");
+						"failed to write to project metafile (function fwrite in AssetManager constructor)!");
 				}
 			}
 			else {
 				String line{};
 				FileHandler::GetLine(metafile, line);
 				if (line != projectName) {
-					PrintWarning("loading meta data from a different project (in Engine constructor)!");
+					PrintWarning("loading meta data from a different project (in AssetManager constructor)!");
 				}
 				if (FileHandler::Skip(metafile, Array<char, 1> { '[' }) != EOF) {
 					char c = FileHandler::SkipLine(metafile);
 					if (c == EOF) {
 						PrintError(ErrorOrigin::FileParsing, 
-							"missing ']' when loading project metadata (in Engine constructor)");
+							"missing ']' when loading project metadata (in AssetManager constructor)");
 					}
 					while (true) {
 						line.Clear();
 						if (FileHandler::GetLine(metafile, line) == EOF) {
 							PrintError(ErrorOrigin::FileParsing, 
-								"missing ']' when loading project metadata (in Engine constructor)");
+								"missing ']' when loading project metadata (in AssetManager constructor)");
 						}
 						if (line[0] == ']') {
 							break;
@@ -5331,7 +5495,8 @@ outColor = texture(image, inUV);
 						FILE* assetMetafile = fopen(line.CString(), "r");
 						if (!assetMetafile) {
 							PrintError(ErrorOrigin::FileParsing, 
-								"failed to open asset metafile (function fopen in Engine construcor)!");
+								"failed to open metafile (function fopen in AssetManager construcor)!");
+							continue;
 						}
 						uint64_t ID;
 						if (!LoadMetadata(assetMetafile, ID)) {
@@ -5346,6 +5511,23 @@ outColor = texture(image, inUV);
 				}
 			}
 			fclose(metafile);
+		}
+
+		bool LoadMetadata(FILE* metafile, uint64_t& outID) {
+			if (!metafile) {
+				return false;
+			}
+			uint64_t ID;
+			uint32_t type;
+			if (fscanf(metafile, "ID:%uType:%u\n", &ID) != 2) {
+				PrintError(ErrorOrigin::FileParsing,
+					"invalid metadata file (in function LoadMetadata)!");
+				return false;
+			}
+			String assetFileName{};
+			FileHandler::GetLine(metafile, assetFileName);
+			m_Metadatas.Emplace(assetFileName, ID, (Metadata::Type)type, m_Renderer);
+			return true;
 		}
 
 	public:
@@ -5365,10 +5547,10 @@ outColor = texture(image, inUV);
 						return false;
 					}
 					return true;
-				}	
+				}
 			}
 			if (!data) {
-				data = m_Metadatas.Emplace(fileName, m_NextMetaID++, Metadata::Type::Mesh, m_Renderer);
+				data = m_Metadatas.Emplace(fileName, m_NextMetaID++, Metadata::Type::Mesh, m_Renderer);	
 			}
 			MeshFileType type = GetMeshFileType(fileName);
 			if (type == MeshFileType::Unrecognized) {
@@ -5381,6 +5563,7 @@ outColor = texture(image, inUV);
 				if (!fileStream) {
 					PrintError(ErrorOrigin::AssetManager,
 						"failed to open mesh asset file (function fopen in function AssetManager::LoadAsset)!");
+					m_Metadatas.Erase(fileName);
 					return false;
 				}
 				Obj obj{};
@@ -5389,37 +5572,20 @@ outColor = texture(image, inUV);
 				if (!res) {
 					PrintError(ErrorOrigin::Engine,
 						"failed to load obj file (function Obj::Load in function AssetManager::LoadAsset)!");
+					m_Metadatas.Erase(fileName);
 					return false;
 				}
 				if (!data->Load(obj)) {
 					PrintError(ErrorOrigin::AssetManager,
 						"failed to load mesh asset from metadata (function Metadata::Load in function AssetManager::LoadAsset)!");
+					m_Metadatas.Erase(fileName);
 					return false;
 				}
 				assert(data->GetMeshData(outMeshData));
 				return true;
 			}
 			return false;
-		}
-
-	private:
-
-		bool LoadMetadata(FILE* metafile, uint64_t& outID) {
-			if (!metafile) {
-				return false;
-			}
-			uint64_t ID;
-			uint32_t type;
-			if (fscanf(metafile, "ID:%uType:%u\n", &ID) != 2) {
-				PrintError(ErrorOrigin::FileParsing,
-					"invalid meta data format (in function LoadAsset)!");
-				return false;
-			}
-			String assetFileName{};
-			FileHandler::GetLine(metafile, assetFileName);
-			m_Metadatas.Emplace(assetFileName, ID, (Metadata::Type)type, m_Renderer);
-			return true;
-		}
+		}	
 	};
 
 	class World {
@@ -5430,40 +5596,10 @@ outColor = texture(image, inUV);
 	public:
 
 		class Entity {
+		public:
 			virtual void Update(World& world) = 0;
 			virtual void Terminate() = 0;
 		};
-
-		enum RenderDataFlagBits {
-			RenderDataFlag_NoSave = 1,
-		};
-
-		typedef uint32_t RenderDataFlags;
-
-		struct RenderData : PersistentReferenceHolder<RenderData> {
-
-			friend class World;
-
-		private:
-
-			RenderDataFlags m_FLags;
-
-		public:
-
-			const uint64_t m_ObjectID;
-
-			VkDescriptorSet m_AlbedoTextureDescriptorSet = VK_NULL_HANDLE;
-			Mat4 m_Transform{};
-			MeshData m_MeshData{};
-
-			RenderData(uint64_t objectID, RenderDataFlags flags, const Mat4& transform, const MeshData& meshData) noexcept 
-				: PersistentReferenceHolder<RenderData>(), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
-
-			RenderData(const RenderData&) = delete;
-
-			RenderData(RenderData&& other) noexcept = default;
-
-		};	
 
 		struct TextureMap {
 
@@ -5484,8 +5620,13 @@ outColor = texture(image, inUV);
 			Mat4 m_View;
 		};
 
+		static constexpr float default_camera_fov = pi / 4.0f;
+		static constexpr float default_camera_near = 0.1f;
+		static constexpr float default_camera_far = 100.0f;
+
 	public:
 
+		AssetManager& m_AssetManager;
 		Renderer& m_Renderer;
 
 	private:
@@ -5494,28 +5635,32 @@ outColor = texture(image, inUV);
 
 		uint64_t m_NextObjectID{};
 		VkDescriptorSet m_NullTextureDescriptorSet{};
+		DynamicArray<Entity*> m_Entities{};
 		DynamicArray<Area> m_Areas{};
 		DynamicArray<Body> m_Bodies{};
-		uint64_t m_CameraFollowObjectID = UINT64_MAX;
+		float m_EditorCameraSensitivity = pi / 2;
+		float m_EditorCameraSpeed = 5.0f;
+		static constexpr float editor_min_camera_speed = 1.0f;
+		static constexpr float editor_max_camera_speed = 20.0f;
+		Vec3 m_EditorCameraPosition{};
+		Vec2 m_EditorCameraRotations{};
+
 		CameraMatricesBuffer* m_CameraMatricesMap = nullptr;
-
-		VkFormat m_ColorImageResourcesFormat{};
-
 		DynamicArray<VkImageView> m_DiffuseImageViews{};
 		DynamicArray<VkImageView> m_PositionAndMetallicImageViews{};
 		DynamicArray<VkImageView> m_NormalAndRougnessImageViews{};
 		DynamicArray<VkImageView> m_DepthImageViews{};
 		pipelines::World m_Pipelines{};
-		DynamicArray<RenderData> m_RenderDatas{};
+		CameraMatricesBuffer m_EditorCamera{};
+		CameraMatricesBuffer m_GameCamera{};
+		DynamicArray<WorldRenderData> m_RenderDatas{};
 		VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
 		DynamicArray<VkDescriptorSet> m_RenderPBRImagesDescriptorSets{};
 		UnidirectionalLight m_DirectionalLight;
 		MeshData m_StaticQuadMeshDataPBR{};
 	
 		VkDescriptorSet m_DefaultAlbedoDescriptorSet{};
-		const float m_CameraFov = pi / 4.0f;
-		const float m_CameraNear = 0.1f;
-		const float m_CameraFar = 100.0f;
+		VkFormat m_ColorImageResourcesFormat{};
 		DynamicArray<VkImage> m_DiffuseImages{};
 		DynamicArray<VkImage> m_PositionAndMetallicImages{};
 		DynamicArray<VkImage> m_NormalAndRougnessImages{};
@@ -5532,8 +5677,8 @@ outColor = texture(image, inUV);
 		StaticTexture m_DefaultAlbedoTexture;
 		VkImageView m_DefaultAlbedoImageView = VK_NULL_HANDLE;
 
-		World(Renderer& renderer) 
-			: m_Renderer(renderer), m_DirectionalLight(*this, m_NextObjectID++, UnidirectionalLight::Type::Directional, { 1024, 1024 }), 
+		World(AssetManager& assetManager, Renderer& renderer) 
+			: m_AssetManager(assetManager), m_Renderer(renderer), m_DirectionalLight(*this, m_NextObjectID++, UnidirectionalLight::Type::Directional, { 1024, 1024 }), 
 				m_CameraMatricesBuffer(m_Renderer), m_DefaultAlbedoTexture(m_Renderer) {}
 
 		World(const World&) = delete;
@@ -5573,152 +5718,48 @@ outColor = texture(image, inUV);
 
 	public:
 
-		Area& LoadArea(const DynamicArray<Obstacle::CreateInfo>& staticObstacleInfos, const DynamicArray<RayTarget::CreateInfo>& rayTargetInfos) {
-			return m_Areas.EmplaceBack(*this, m_NextObjectID++, staticObstacleInfos, rayTargetInfos);
+		void SetGameCameraView(const Mat4& matrix) {
+			m_GameCamera.m_View = matrix;
 		}
 
-	private:
-
-		int LoadStaticMesh(FILE* fileStream, StaticMeshFile** outFile, Mat4& outTransform) {
-			assert(outFile);
-			if (FileHandler::Skip(fileStream, Array<char, 2>{ '\n', ' ' }) == EOF) {
-				return EOF;
-			}
-			String string{};
-			FileHandler::GetLine(fileStream, string);
-			*outFile = m_StaticMeshFiles.Find(string.CString());
-			if (!*outFile) {
-				auto sm = m_StaticMeshFiles.Emplace(string.CString(), m_Renderer);
-				*outFile = sm;
-				if (!sm->LoadMesh(string)) {
-					PrintError(ErrorOrigin::FileParsing, 
-						"failed to load static mesh (function World::StaticMeshFile::LoadMesh in function World::LoadStaticMesh)!");
-				}
-			}
-			if (fscanf(fileStream, "%f%f%f%f %f%f%f%f %f%f%f%f %f%f%f%f",
-					&outTransform[0][0], &outTransform[0][1], &outTransform[0][2], &outTransform[0][3],
-					&outTransform[1][0], &outTransform[1][1], &outTransform[1][2], &outTransform[1][3],
-					&outTransform[2][0], &outTransform[2][1], &outTransform[2][2], &outTransform[2][3],
-					&outTransform[3][0], &outTransform[3][1], &outTransform[3][2], &outTransform[3][3])
-				!= 16) {
-				PrintError(ErrorOrigin::FileParsing, 
-					"failed to parse static mesh transform (function fscanf in function World::LoadStaticMesh)!");
-				return 1;
-			}
-			return 0;
+		Area& AddArea(AreaFlags flags) {
+			return m_Areas.EmplaceBack(flags, m_NextObjectID++, m_NextObjectID);
 		}
 
-		bool LoadObstacle(Area& area, FILE* fileStream) {
-			Obstacle::CreateInfo createInfo{};
-			int res = fscanf(fileStream, "{%f%f%f%f\n",
-				&createInfo.m_Position.x, &createInfo.m_Position.y, &createInfo.m_Position.z,
-				&createInfo.m_YRotation);
-			if (res != 4) {
-				PrintError(ErrorOrigin::FileParsing, 
-					"failed to parse obstacle (function fscanf in function World::LoadObstacle)!");
-				return false;
-			}
-			if (!Collider::CreateInfo::FromFile(fileStream, createInfo.m_ColliderInfo)) {
-				PrintError(ErrorOrigin::FileParsing, 
-					"failed to parse collider for obstacle (in function Collider::CreateInfo::FromFile in function World::LoadObstacle)!");
-				return false;
-			}
-			PersistentReference<Obstacle> obstacle = area.AddObstacle(createInfo);
-			while (true) {
-				char c = FileHandler::Skip(fileStream, Array<char, 2> { '}', '{' });
-				if (c == EOF) {
-					PrintError(ErrorOrigin::FileParsing, 
-						"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
-					return false;
-				}
-				if (c == '{') {
-					while (true) {
-						if (c == EOF) {
-							PrintError(ErrorOrigin::FileParsing, 
-								"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
-							return false;
-						}
-						if (FileHandler::Skip(fileStream, Array<char, 2> { '\n', ' ' }) == EOF) {
-							PrintError(ErrorOrigin::FileParsing, 
-								"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
-							return false;
-						}
-						char buf[3];
-						buf[0] = fgetc(fileStream);
-						buf[1] = fgetc(fileStream);
-						buf[2] = '\0';
-						if (!strcmp(buf, "SM")) {
-							StaticMeshFile* sm;
-							Mat4 transform;
-							res = LoadStaticMesh(fileStream, &sm, transform);
-							if (res == EOF) {
-								PrintError(ErrorOrigin::FileParsing, 
-									"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
-								return false;
-							}
-							else if (res) {
-								PrintError(ErrorOrigin::FileParsing, 
-									"failed to load static mesh (function World::LoadStaticMesh in function World::LoadObstacle)!");
-								return false;
-							}
-							assert(sm);
-							AddRenderData(0, *obstacle, transform, sm->m_Mesh.GetMeshData());
-						}
-					}	
-				}
-			}
-			return true;
+		Entity* AddEntity(Entity* entity) {
+			assert(entity);
+			m_Entities.PushBack(entity);
+			return entity;
 		}
 
-		Tuple<bool, PersistentReference<Area>> LoadArea(FILE* fileStream) {
-			if (!fileStream) {
-				PrintError(ErrorOrigin::FileParsing, 
-					"attempting to load area with file stream that's null (in function World::LoadArea)!");
-				return { false };
-			}
-			Area& area = m_Areas.EmplaceBack();
-			uint32_t obstacleCount, rayTargetCount;
-			if (fscanf(fileStream, "O count=%u R count=%u", &obstacleCount, &rayTargetCount) != 2) {
-				PrintError(ErrorOrigin::FileParsing,
-					"failed to load area from file stream due to invalid format t(in function World::LoadArea)");
-				return { false };
-			}
-			while (true) {
-				char c = fgetc(fileStream);
-				switch (c) {
-					case 'O':
-						LoadObstacle(area, fileStream);
-						break;
-					case 'R':
-						break;
-					default:
-						continue;
+		bool RemoveEntity(Entity* entity) {
+			assert(entity);
+			auto iter = m_Entities.begin();
+			auto end = m_Entities.end();
+			for (; iter != end; iter++) {
+				if (*iter == entity) {
+					break;
 				}
 			}
-			return { true, area };
+			if (iter != end) {
+				entity->Terminate();
+				m_Entities.Erase(iter);
+				return true;
+			}
+			return false;
 		}
 
-		void Unload() {
-			m_Bodies.Clear();
-			m_RenderDatas.Clear();
-			m_Areas.Clear();
-		};
-
-	public:
-
-		Body& AddBody(const Vec3& position, float height, const Collider::CreateInfo& colliderInfo) {
-			for (const Area& area : m_Areas) {
+		PersistentReference<Body> AddBody(const Vec3& position, float height, const Collider::CreateInfo& colliderInfo) {
+			for (Area& area : m_Areas) {
 				if (area.IsPointInside(position)) {
-					return m_Bodies.EmplaceBack(m_NextObjectID++, area, height, &area, colliderInfo);
+					return m_Bodies.EmplaceBack(m_NextObjectID++, position, height, &area, colliderInfo);
 				}
 			}
+			return m_Bodies.EmplaceBack(m_NextObjectID++, position, height, nullptr, colliderInfo);
 		}
 
 		bool RemoveBody(Body& body) {
 			RemoveRenderDatas(body.m_ObjectID);
-			if (m_CameraFollowObjectID == body.m_ObjectID) {
-					m_CameraFollowObjectID = UINT64_MAX;
-			}
 			return m_Bodies.Erase(&body);
 		}
 
@@ -5756,120 +5797,93 @@ outColor = texture(image, inUV);
 			return true;
 		}
 
-		void DestroyTextureMap(const TextureMap& map) {
+		void DestroyTextureMap(const TextureMap& map) const {
 			m_Renderer.DestroyDescriptorPool(map.m_DescriptorPool);
 			m_Renderer.DestroyImageView(map.m_ImageView);
 		}
 
-		PersistentReference<RenderData> AddRenderData(RenderDataFlags flags, const Body& body, 
+		PersistentReference<WorldRenderData> AddRenderData(WorldRenderDataFlags flags, Body& body,
 				const Mat4& transform, const MeshData& meshData) {
-			return m_RenderDatas.EmplaceBack(body.m_ObjectID, flags, transform, meshData);
+			return body.AddRenderData(m_RenderDatas.EmplaceBack(body.m_ObjectID, flags, Mat4(), meshData), transform);
 		}
 
-		PersistentReference<RenderData> AddRenderData(RenderDataFlags flags, const RayTarget& rayTarget, 
+		PersistentReference<WorldRenderData> AddRenderData(WorldRenderDataFlags flags, const RayTarget& rayTarget,
 				const Mat4& transform, const MeshData& meshData) {
 			return m_RenderDatas.EmplaceBack(rayTarget.m_ObjectID, flags, transform, meshData);
 		}
 		
-		PersistentReference<RenderData> AddRenderData(RenderDataFlags flags, const Obstacle& obstacle, 
+		PersistentReference<WorldRenderData> AddRenderData(WorldRenderDataFlags flags, Obstacle& obstacle,
 				const Mat4& transform, const MeshData& meshData) {
-			return m_RenderDatas.EmplaceBack(obstacle.m_ObjectID, flags, transform, meshData);
+			return obstacle.AddRenderData(m_RenderDatas.EmplaceBack(obstacle.m_ObjectID, flags, Mat4(), meshData), transform);
 		}
 
 	private:
 
-		void RemoveRenderDatas(uint64_t objectID) {
-			auto end = m_RenderDatas.end();
-			for (auto iter = m_RenderDatas.begin(); iter != end;) {
-				if (iter->m_ObjectID == objectID) {
-					iter = m_RenderDatas.Erase(iter);
-					continue;
-				}
-				++iter;
-			}
-		}
-
-		void SwapchainCreateCallback(VkExtent2D swapchainExtent, Vec2_T<uint32_t> renderResolution, float aspectRatio, uint32_t imageCount);	
-
 		void LogicUpdate() {
-			for (Creature& creature : m_Bodies) {
-				Vec3 movementVector = creature.GetMovementVector();
-				if (movementVector == Vec3(0.0f, movementVector.y, 0.0f)) {
-					continue;
-				}
-				Vec3 newPos = creature.m_Position + movementVector;
-				const Chunk* curChunk = creature.m_Chunk;
-				assert(curChunk);
-				if (!curChunk->IsPointInside(newPos)) {
-					Vec2_T<uint32_t> newChunkMatrixCoords {
-						curChunk->m_ChunkMatrixCoords.x + (newPos.x >= curChunk->m_BoundingRect.m_Max.x ? 1
-							: newPos.x <= curChunk->m_BoundingRect.m_Min.x ? -1 : 0),
+			for (Entity* entity : m_Entities) {
+				entity->Update(*this);
+			}
+		}
+ 
+		void EditorUpdate() {
+			using Key = Input::Key;
+			using MouseButton = Input::MouseButton;
 
-						curChunk->m_ChunkMatrixCoords.y + (newPos.z >= curChunk->m_BoundingRect.m_Max.y ? 1
-							: newPos.z <= curChunk->m_BoundingRect.m_Min.y ? -1 : 0),
-					};
-					Vec2_T<bool> outsideBounds = BoundsCheck(newChunkMatrixCoords);
-					if (outsideBounds.x && outsideBounds.y) {
-						continue;
-					}
-					else if (outsideBounds.x) {
-						newPos.x -= movementVector.x;
-						newChunkMatrixCoords.x = curChunk->m_ChunkMatrixCoords.x;
-					}
-					else if (outsideBounds.y) {
-						newPos.z -= movementVector.z;
-						newChunkMatrixCoords.y = curChunk->m_ChunkMatrixCoords.y;
-					}
-					const Chunk* newChunk = GetChunk(newChunkMatrixCoords);
-					if (newChunk != creature.m_Chunk) {
-						creature.m_Chunk = newChunk;
-						assert(creature.m_Chunk);
-						if (creature.m_Chunk->m_BoundingRect.m_Min.x == newPos.x) {
-							newPos.x += 0.01f;
-						}
-						else if (creature.m_Chunk->m_BoundingRect.m_Max.x == newPos.x) {
-							newPos.x -= 0.01f;
-						}
-						if (creature.m_Chunk->m_BoundingRect.m_Min.y == newPos.z) {
-							newPos.z += 0.01f;
-						}
-						else if (creature.m_Chunk->m_BoundingRect.m_Max.y == newPos.z) {
-							newPos.z -= 0.01f;
-						}
-						fmt::print("chunk change to coords ({}, {})\n",
-							creature.m_Chunk->m_ChunkMatrixCoords.x, creature.m_Chunk->m_ChunkMatrixCoords.y);
-					}
+			Vec2 deltaScrollOffset = Input::GetDeltaScrollOffset();
+			if (deltaScrollOffset != 0.0f) {
+				m_EditorCameraSpeed = Clamp(m_EditorCameraSpeed + 1000 * deltaScrollOffset.y * Time::DeltaTime(), editor_min_camera_speed, editor_max_camera_speed);
+			}
+
+			Vec3 movementVector {
+				Input::ReadKeyValue(Key::D) - Input::ReadKeyValue(Key::A),
+				Input::ReadKeyValue(Key::Space) - Input::ReadKeyValue(Key::LeftShift),
+				Input::ReadKeyValue(Key::W) - Input::ReadKeyValue(Key::S),
+			};
+
+			bool mouseHeld = Input::WasMouseButtonHeld(MouseButton::Right);
+			bool moved = movementVector != 0.0f;
+
+			if (mouseHeld || moved) {
+				if (mouseHeld) {
+					Vec2_T<double> deltaCursorPos = Input::GetScaledDeltaMousePosition();
+					m_EditorCameraRotations += Vec2(deltaCursorPos.x, -deltaCursorPos.y) * (m_EditorCameraSensitivity * Time::DeltaTime());
+					m_EditorCameraRotations.x = fmod(m_EditorCameraRotations.x, 2 * pi);
+					m_EditorCameraRotations.y = fmod(m_EditorCameraRotations.y, 2 * pi);
 				}
-				creature.Move(newPos);
-				if (m_CameraFollowObjectID == creature.m_ObjectID) {
-					if (creature.m_CameraFollowCallback) {
-						Vec3 eye;
-						Vec3 lookAt;
-						creature.m_CameraFollowCallback(creature, eye, lookAt, 1, &m_DirectionalLight);
-						m_CameraMatricesMap->m_View = Mat4::LookAt(eye, Vec3::Up(), lookAt);
-					}
+				Quaternion rot = Quaternion::AxisRotation(Vec3::Right(), m_EditorCameraRotations.y) * Quaternion::AxisRotation(Vec3::Up(), m_EditorCameraRotations.x);
+				Mat4 rotMat = rot.AsMat4();
+				if (moved) {
+					float frameSpeed = m_EditorCameraSpeed * Time::DeltaTime();
+					float y = -movementVector.y * frameSpeed / 2;
+					movementVector.y = 0.0f;
+					movementVector = movementVector.Normalized() * frameSpeed;
+					movementVector = rotMat * movementVector;
+					m_EditorCameraPosition += movementVector + Vec3::Up(y);
 				}
+				Vec3 front = rotMat * Vec3::Forward();
+				Vec3 up = rotMat * Vec3::Up();
+				Vec3 right = Cross(up, front).Normalized();
+				m_EditorCamera.m_View[0].x = right.x;
+				m_EditorCamera.m_View[1].x = right.y;
+				m_EditorCamera.m_View[2].x = right.z;
+				m_EditorCamera.m_View[0].y = up.x;
+				m_EditorCamera.m_View[1].y = up.y;
+				m_EditorCamera.m_View[2].y = up.z;
+				m_EditorCamera.m_View[0].z = front.x;
+				m_EditorCamera.m_View[1].z = front.y;
+				m_EditorCamera.m_View[2].z = front.z;
+				Vec3 negPos = -m_EditorCameraPosition;
+				m_EditorCamera.m_View[3] = {
+					Dot(right, negPos),
+					Dot(up, negPos),
+					Dot(front, negPos),
+					1.0f,
+				};
 			}
 		}
 
-		void SetViewportToRenderResolution(const Renderer::DrawData& drawData) const {
-			const VkRect2D scissor {
-				.offset { 0, 0 },
-				.extent { m_RenderResolution.x, m_RenderResolution.y },
-			};
-			vkCmdSetScissor(drawData.m_CommandBuffer, 0, 1, &scissor);
-			const VkViewport viewport {
-				.x = 0,
-				.y = 0,
-				.width = (float)m_RenderResolution.x,
-				.height = (float)m_RenderResolution.y,
-				.minDepth = 0.0f,
-				.maxDepth = 1.0f,
-			};
-			vkCmdSetViewport(drawData.m_CommandBuffer, 0, 1, &viewport);
-		}
-
-		void RenderWorld(const Renderer::DrawData& drawData) const {
+		void RenderWorld(const Renderer::DrawData& drawData, bool inEditorMode) const {
+			*m_CameraMatricesMap = inEditorMode ? m_EditorCamera : m_GameCamera;
 			{
 
 				SetViewportToRenderResolution(drawData);
@@ -5938,7 +5952,7 @@ outColor = texture(image, inUV);
 					m_CameraMatricesDescriptorSet,
 					VK_NULL_HANDLE,
 				};
-				for (const RenderData& data : m_RenderDatas) {
+				for (const WorldRenderData& data : m_RenderDatas) {
 					if (data.m_AlbedoTextureDescriptorSet == VK_NULL_HANDLE) {
 						descriptorSets[1] = m_DefaultAlbedoDescriptorSet;
 					}
@@ -6063,13 +6077,147 @@ outColor = texture(image, inUV);
 					0, 0, nullptr, 0, nullptr, image_count, memoryBarriers);
 			}
 		}
+
+		bool LoadObstacle(Area& area, FILE* fileStream) {
+			Obstacle::CreateInfo createInfo{};
+			int res = fscanf(fileStream, "{%f%f%f%f\n",
+				&createInfo.m_Position.x, &createInfo.m_Position.y, &createInfo.m_Position.z,
+				&createInfo.m_YRotation);
+			if (res != 4) {
+				PrintError(ErrorOrigin::FileParsing, 
+					"failed to parse obstacle (function fscanf in function World::LoadObstacle)!");
+				return false;
+			}
+			if (!Collider::CreateInfo::FromFile(fileStream, createInfo.m_ColliderInfo)) {
+				PrintError(ErrorOrigin::FileParsing, 
+					"failed to parse collider for obstacle (in function Collider::CreateInfo::FromFile in function World::LoadObstacle)!");
+				return false;
+			}
+			PersistentReference<Obstacle> obstacle = area.AddObstacle(createInfo);
+			while (true) {
+				char c = FileHandler::Skip(fileStream, Array<char, 2> { '}', '{' });
+				if (c == EOF) {
+					PrintError(ErrorOrigin::FileParsing, 
+						"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
+					return false;
+				}
+				if (c == '{') {
+					while (true) {
+						if (c == EOF) {
+							PrintError(ErrorOrigin::FileParsing, 
+								"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
+							return false;
+						}
+						if (FileHandler::Skip(fileStream, Array<char, 2> { '\n', ' ' }) == EOF) {
+							PrintError(ErrorOrigin::FileParsing, 
+								"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
+							return false;
+						}
+						char buf[3];
+						buf[0] = fgetc(fileStream);
+						buf[1] = fgetc(fileStream);
+						buf[2] = '\0';
+						if (!strcmp(buf, "SM")) {
+							MeshData meshData;
+							Mat4 transform;
+							if (FileHandler::SkipLine(fileStream) == EOF) {
+								PrintError(ErrorOrigin::FileParsing, 
+									"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
+								return false;
+							}
+							String line;
+							if (FileHandler::GetLine(fileStream, line) == EOF) {
+								PrintError(ErrorOrigin::FileParsing,
+									"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
+								return false;
+							}
+							if (!m_AssetManager.LoadAsset(line, meshData)) {
+								PrintError(ErrorOrigin::FileParsing,
+									"failed to load mesh for obstacle (function AssetManager::LoadAsset in function World::LoadObstacle)!");
+								return false;
+							}
+							if (fscanf(fileStream, "%f%f%f%f %f%f%f%f %f%f%f%f %f%f%f%f",
+									&transform[0][0], &transform[0][1], &transform[0][2], &transform[0][3],
+									&transform[1][0], &transform[1][1], &transform[1][2], &transform[1][3],
+									&transform[2][0], &transform[2][1], &transform[2][2], &transform[2][3],
+									&transform[3][0], &transform[3][1], &transform[3][2], &transform[3][3])
+									!= 16) {
+								PrintError(ErrorOrigin::FileParsing, 
+									"failed to parse transform (function fscanf in function World::LoadObstacle)!");
+							}
+							AddRenderData(0, *obstacle, transform, meshData);
+						}
+					}	
+				}
+			}
+			return true;
+		}
+
+		Tuple<bool, PersistentReference<Area>> LoadArea(FILE* fileStream) {
+			if (!fileStream) {
+				PrintError(ErrorOrigin::FileParsing, 
+					"attempting to load area with file stream that's null (in function World::LoadArea)!");
+				return { false };
+			}
+			Area& area = m_Areas.EmplaceBack(0, m_NextObjectID++, m_NextObjectID);
+			uint32_t obstacleCount, rayTargetCount;
+			if (fscanf(fileStream, "O count=%u R count=%u", &obstacleCount, &rayTargetCount) != 2) {
+				PrintError(ErrorOrigin::FileParsing,
+					"failed to load area from file stream due to invalid format t(in function World::LoadArea)");
+				return { false };
+			}
+			while (true) {
+				char c = fgetc(fileStream);
+				switch (c) {
+					case 'O':
+						LoadObstacle(area, fileStream);
+						break;
+					case 'R':
+						break;
+					default:
+						continue;
+				}
+			}
+			return { true, area };
+		}
+
+
+		void RemoveRenderDatas(uint64_t objectID) {
+			auto end = m_RenderDatas.end();
+			for (auto iter = m_RenderDatas.begin(); iter != end;) {
+				if (iter->m_ObjectID == objectID) {
+					iter = m_RenderDatas.Erase(iter);
+					continue;
+				}
+				++iter;
+			}
+		}
+
+		void SwapchainCreateCallback(VkExtent2D swapchainExtent, Vec2_T<uint32_t> renderResolution, float aspectRatio, uint32_t imageCount);
+
+		void SetViewportToRenderResolution(const Renderer::DrawData& drawData) const {
+			const VkRect2D scissor {
+				.offset { 0, 0 },
+				.extent { m_RenderResolution.x, m_RenderResolution.y },
+			};
+			vkCmdSetScissor(drawData.m_CommandBuffer, 0, 1, &scissor);
+			const VkViewport viewport {
+				.x = 0,
+				.y = 0,
+				.width = (float)m_RenderResolution.x,
+				.height = (float)m_RenderResolution.y,
+				.minDepth = 0.0f,
+				.maxDepth = 1.0f,
+			};
+			vkCmdSetViewport(drawData.m_CommandBuffer, 0, 1, &viewport);
+		}	
 	};
 
 	enum EngineModeBits {
 		EngineMode_Initialized = 1,
 		EngineMode_Play = 2,
-		EngineMode_Game = 4,
-		EngineMode_Editor = 8,
+		EngineMode_Editor = 4,
+		EngineMode_Game = 8,
 	};
 
 	typedef uint32_t EngineMode;
@@ -6150,7 +6298,7 @@ outColor = texture(image, inUV);
 		Engine(EngineMode mode, const String& projectName, GLFWwindow* window, size_t maxUIWindows) :
 				m_Mode(UpdateEngineInstance(this, mode)),
 				m_UI(m_Renderer, m_TextRenderer, maxUIWindows),
-				m_World(m_Renderer),
+				m_World(m_AssetManager, m_Renderer),
 				m_Renderer(projectName.CString(), VK_MAKE_API_VERSION(0, 1, 0, 0), window, RendererCriticalErrorCallback, SwapchainCreateCallback),
 				m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
 				m_AssetManager(projectName, m_Renderer),
@@ -6224,6 +6372,10 @@ outColor = texture(image, inUV);
 			return m_TextRenderer;
 		}
 
+		World& GetWorld() {
+			return m_World;
+		}
+
 		const StaticMesh& GetQuadMesh() const {
 			return m_StaticQuadMesh;
 		}
@@ -6237,13 +6389,6 @@ outColor = texture(image, inUV);
 			}
 		}
 
-		World& LoadWorld(Vec2_T<uint32_t> worldDimensions, Vec2_T<uint32_t> chunkMatrixSize, 
-				uint32_t groundCount, World::Ground::CreateInfo groundInfos[], uint32_t obstacleCount, World::Obstacle::CreateInfo obstacleInfos[]) {
-			m_World.Unload();
-			m_World.Load(worldDimensions, chunkMatrixSize, groundCount, groundInfos, obstacleCount, obstacleInfos);
-			return m_World;
-		}
-
 		bool Loop() {
 
 			Time::BeginFrame();
@@ -6254,13 +6399,13 @@ outColor = texture(image, inUV);
 				m_World.LogicUpdate();
 				m_UI.UILoop();
 			}
-
-			if (m_Mode & EngineMode_Editor) {
+			else if (m_Mode & EngineMode_Editor) {
+				m_World.EditorUpdate();
 			}
 
 			Renderer::DrawData drawData;
 			if (m_Renderer.BeginFrame(drawData)) {
-				m_World.RenderWorld(drawData);
+				m_World.RenderWorld(drawData, !(m_Mode & EngineMode_Play) && m_Mode & EngineMode_Editor);
 				m_UI.RenderUI(drawData);
 				m_Renderer.EndFrame(0, nullptr);
 			}
@@ -6335,6 +6480,4 @@ outColor = texture(image, inUV);
 		}
 
 	};
-
-	typedef World::Body Body;
 }
