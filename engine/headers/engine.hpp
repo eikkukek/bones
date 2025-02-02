@@ -9,6 +9,8 @@
 #include "fmt/color.h"
 #include "vulkan/vulkan_core.h"
 #include "imgui.h"
+#include "imgui_impl_vulkan.h"
+#include "imgui_impl_glfw.h"
 #include <assert.h>
 #include <cstdio>
 #include <cstdlib>
@@ -42,6 +44,7 @@ namespace engine {
 		TextRenderer,
 		UI,
 		AssetManager,
+		Editor,
 		OutOfMemory,
 		NullDereference,
 		IndexOutOfBounds,
@@ -61,6 +64,7 @@ namespace engine {
 			"TextRenderer",
 			"UI",
 			"AssetManager",
+			"Editor",
 			"OutOfMemory",
 			"NullDereference",
 			"IndexOutOfBounds",
@@ -5588,6 +5592,145 @@ outColor = texture(image, inUV);
 		}	
 	};
 
+	class Editor {
+
+		friend class Engine;
+
+	public:
+
+		Renderer& m_Renderer;
+
+	private:
+
+		ImGuiContext* m_ImGuiContext;
+		VkDescriptorPool m_ImGuiDescriptorPool;
+		VkFormat m_ImGuiColorAttachmentFormat;
+
+		Editor(Renderer& renderer) : m_Renderer(renderer) {}
+
+		Editor(const Editor&) = delete;
+
+		Editor(Editor&&) = delete;
+
+		static constexpr void CheckVkResult(VkResult vkRes) {
+			if (vkRes != VK_SUCCESS) {
+				PrintError(ErrorOrigin::Vulkan,
+					"ImGui produced a vulkan error!", 
+					vkRes);
+			}
+		}
+
+		void Initialize(GLFWwindow* glfwWindow) {
+			IMGUI_CHECKVERSION();
+
+			m_ImGuiContext = ImGui::CreateContext();
+
+			ImGuiIO& io = ImGui::GetIO();
+			io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+
+			VkDescriptorPoolSize descriptorPoolSize {
+				.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				.descriptorCount = 1,
+			};
+
+			m_ImGuiDescriptorPool = m_Renderer.CreateDescriptorPool(VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, 1, 1, &descriptorPoolSize);
+
+			if (m_ImGuiDescriptorPool == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create descriptor pool for ImGui (function Renderer::CreateDescriptorPool in function Editor::Initialize)!");
+			}
+
+			m_ImGuiColorAttachmentFormat = m_Renderer.m_SwapchainSurfaceFormat.format;
+
+			ImGui_ImplVulkan_InitInfo ImGuiVulkanInitInfo {
+				.Instance = m_Renderer.m_VulkanInstance,
+				.PhysicalDevice = m_Renderer.m_Gpu,
+				.Device = m_Renderer.m_VulkanDevice,
+				.QueueFamily = m_Renderer.m_GraphicsQueueFamilyIndex,
+				.Queue = m_Renderer.m_GraphicsQueue,
+				.DescriptorPool = m_ImGuiDescriptorPool,
+				.RenderPass = nullptr,
+				.MinImageCount = m_Renderer.m_FramesInFlight,
+				.ImageCount = m_Renderer.m_FramesInFlight,
+				.MSAASamples = VK_SAMPLE_COUNT_1_BIT,
+				.PipelineCache = nullptr,
+				.Subpass = 0,
+				.UseDynamicRendering = true,
+				.PipelineRenderingCreateInfo {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+					.pNext = nullptr,
+					.viewMask = 0,
+					.colorAttachmentCount = 1,
+					.pColorAttachmentFormats = &m_ImGuiColorAttachmentFormat,
+					.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
+					.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+				},
+				.Allocator = m_Renderer.m_VulkanAllocationCallbacks,
+				.CheckVkResultFn = CheckVkResult,
+				.MinAllocationSize = 1024U * 1024U,
+			};
+
+			if (!ImGui_ImplGlfw_InitForVulkan(glfwWindow, true)) {
+				CriticalError(ErrorOrigin::Editor,
+					"failed to initialize ImGui (function ImGui_ImplGlfw_InitForVulkan in function Editor::Initialize)!");
+			}
+			if (!ImGui_ImplVulkan_Init(&ImGuiVulkanInitInfo)) {
+				CriticalError(ErrorOrigin::Editor,
+					"failed to initialize ImGui (function ImGui_ImplVulkan_Init in function Editor::Initialize)!");
+			}
+			if (!ImGui_ImplVulkan_CreateFontsTexture()) {
+				CriticalError(ErrorOrigin::Editor,
+					"failed to initialize ImGui (function ImGui_ImplVulkan_CreateFontsTexture in function Editor::Initialize)!");
+			}
+		}
+
+		void Terminate() {
+			ImGui_ImplVulkan_Shutdown();
+			ImGui_ImplGlfw_Shutdown();
+			ImGui::DestroyContext(m_ImGuiContext);
+			m_ImGuiContext = nullptr;
+			m_Renderer.DestroyDescriptorPool(m_ImGuiDescriptorPool);
+			m_ImGuiDescriptorPool = nullptr;
+		}
+
+		void NewFrame() {
+			ImGui_ImplVulkan_NewFrame();
+			ImGui_ImplGlfw_NewFrame();
+			ImGui::NewFrame();
+		}
+
+		void Render(const Renderer::DrawData& drawData) {
+			VkRenderingAttachmentInfo colorAttachmentInfo {
+				.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
+				.pNext = nullptr,
+				.imageView = drawData.m_SwapchainImageView,
+				.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				.resolveMode = VK_RESOLVE_MODE_NONE,
+				.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+				.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+				.clearValue { .color { .uint32 { 0, 0, 0, 0 } } },
+			};
+
+			VkRenderingInfo renderingInfo {
+				.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
+				.layerCount = 1,
+				.viewMask = 0,
+				.colorAttachmentCount = 1,
+				.pColorAttachments = &colorAttachmentInfo,
+				.pDepthAttachment = nullptr,
+				.pStencilAttachment = nullptr,
+			};
+
+			vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
+			ImGui::Render();
+			ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), drawData.m_CommandBuffer);
+			vkCmdEndRendering(drawData.m_CommandBuffer);
+		}
+	};
+
 	class World {
 
 		friend class Engine;
@@ -6217,7 +6360,7 @@ outColor = texture(image, inUV);
 		EngineMode_Initialized = 1,
 		EngineMode_Play = 2,
 		EngineMode_Editor = 4,
-		EngineMode_Game = 8,
+		EngineMode_Release = 8,
 	};
 
 	typedef uint32_t EngineMode;
@@ -6238,6 +6381,7 @@ outColor = texture(image, inUV);
 		Renderer m_Renderer;
 		TextRenderer m_TextRenderer;
 		AssetManager m_AssetManager;
+		Editor m_Editor;
 
 		StaticMesh m_StaticQuadMesh;
 		StaticMesh m_StaticQuadMesh2D;
@@ -6295,18 +6439,19 @@ outColor = texture(image, inUV);
 
 	public:
 
-		Engine(EngineMode mode, const String& projectName, GLFWwindow* window, size_t maxUIWindows) :
+		Engine(EngineMode mode, const String& projectName, GLFWwindow* glfwWindow, size_t maxUIWindows) :
 				m_Mode(UpdateEngineInstance(this, mode)),
 				m_UI(m_Renderer, m_TextRenderer, maxUIWindows),
 				m_World(m_AssetManager, m_Renderer),
-				m_Renderer(projectName.CString(), VK_MAKE_API_VERSION(0, 1, 0, 0), window, RendererCriticalErrorCallback, SwapchainCreateCallback),
+				m_Renderer(projectName.CString(), VK_MAKE_API_VERSION(0, 1, 0, 0), glfwWindow, RendererCriticalErrorCallback, SwapchainCreateCallback),
 				m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
 				m_AssetManager(projectName, m_Renderer),
+				m_Editor(m_Renderer),
 				m_StaticQuadMesh(m_Renderer),
 				m_StaticQuadMesh2D(m_Renderer)
 		{
 
-			Input input(window);
+			Input input(glfwWindow);
 
 			if (!m_StaticQuadMesh.CreateBuffers(quad_vertex_count, quad_vertices, quad_index_count, quad_indices)) {
 				CriticalError(ErrorOrigin::Engine, 
@@ -6339,6 +6484,7 @@ outColor = texture(image, inUV);
 
 			m_World.Initialize(m_StaticQuadMesh2D);
 			m_UI.Initialize(m_StaticQuadMesh2D);
+			m_Editor.Initialize(glfwWindow);
 		}
 
 		Engine(const Engine&) = delete;
@@ -6349,6 +6495,7 @@ outColor = texture(image, inUV);
 			m_StaticQuadMesh.Terminate();
 			m_StaticQuadMesh2D.Terminate();
 			m_UI.Terminate();
+			m_Editor.Terminate();
 			m_Renderer.DestroySampler(FontAtlas::s_Sampler);
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
@@ -6395,18 +6542,29 @@ outColor = texture(image, inUV);
 
 			glfwPollEvents();
 
+			bool editorMode = m_Mode & EngineMode_Editor;
+
+			if (editorMode) {
+				m_Editor.NewFrame();
+				ImGui::Begin("test");
+				ImGui::End();
+			}
+
 			if (m_Mode & EngineMode_Play) {
 				m_World.LogicUpdate();
 				m_UI.UILoop();
 			}
-			else if (m_Mode & EngineMode_Editor) {
+			else if (editorMode) {
 				m_World.EditorUpdate();
 			}
 
 			Renderer::DrawData drawData;
 			if (m_Renderer.BeginFrame(drawData)) {
-				m_World.RenderWorld(drawData, !(m_Mode & EngineMode_Play) && m_Mode & EngineMode_Editor);
+				m_World.RenderWorld(drawData, !(m_Mode & EngineMode_Play) && editorMode);
 				m_UI.RenderUI(drawData);
+				if (editorMode) {
+					m_Editor.Render(drawData);
+				}
 				m_Renderer.EndFrame(0, nullptr);
 			}
 
