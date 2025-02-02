@@ -155,7 +155,7 @@ int main() {
 
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
 
-	Engine engine(engine::EngineMode_Play, "Test", pWindow, 1000);
+	Engine engine(engine::EngineMode_Editor, "Test", pWindow, 1000);
 	Renderer& renderer = engine.GetRenderer();
 	TextRenderer textRenderer = engine.GetTextRenderer();
 
