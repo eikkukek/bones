@@ -95,6 +95,31 @@ namespace engine {
 			"Engine called a warning:\n {}\n", warn);
 	}
 
+	template<typename T>
+	struct Optional {
+	private:
+
+		T m_Value;
+		bool m_HasValue;
+
+	public:
+
+		Optional() : m_HasValue(false) {}
+		Optional(const T& value) : m_Value(value), m_HasValue(true) {}
+
+		bool HasValue() {
+			return m_HasValue;
+		}
+
+		T& GetValue() {
+			if (!m_HasValue) {
+				PrintError(ErrorOrigin::Engine,
+					"attempting to get value from optional that doesn't have a value (in function Optional::GetValue)!");
+			}
+			return m_Value;
+		}
+	};
+
 	template<typename T, size_t size_T>
 	class Array {
 	public:
@@ -782,8 +807,9 @@ namespace engine {
 			else {
 				Reserve(m_Length * 2);
 			}
+			uint32_t index = 0;
 			for (; begin != end; begin++) {
-				m_Data[begin] = buf[begin];
+				m_Data[index++] = buf[begin];
 			}
 			m_Data[m_Length] = '\0';
 		}
@@ -937,6 +963,43 @@ namespace engine {
 			}
 		};
 	};
+
+	template<typename T>
+	String IntToString(T value) {
+		static_assert(std::is_integral<T>());
+		if constexpr (std::is_unsigned<T>()) {
+			char buffer[21];
+			uint64_t uint = value;
+			buffer[20] = '0' + uint % 10;
+			uint32_t i = 20;
+			while (uint /= 10) {
+				buffer[--i] = '0' + uint % 10;
+			}
+			return String(buffer, i, 21);
+		}
+		else {
+			if (value < 0) {
+				int64_t absInt = abs(value);
+				char buffer[21];
+				buffer[20] = '0' + absInt % 10;
+				uint32_t i = 20;
+				while (absInt /= 10) {
+					buffer[--i] = '0' + absInt % 10;
+				}
+				buffer[--i] = '-';
+				return String(buffer, i, 21);
+			}
+			char buffer[20];
+			int64_t absInt = value;
+			buffer[19] = '0' + absInt % 10;
+			uint32_t i = 19;
+			while (absInt /= 10) {
+				buffer[--i] = '0' + absInt % 10;
+			}
+			return String(buffer, i, 20);
+		}
+		return {};
+	}
 
 	template<typename T, typename U>
 	struct Tuple {
@@ -4872,9 +4935,10 @@ outColor = texture(image, inUV);
 			Collider::CreateInfo m_ColliderInfo{};
 		};
 
+		uint64_t m_ObjectID;
+
 	private:
 
-		uint64_t m_ObjectID;
 		Vec3 m_Position;
 		float m_YRotation;
 		Vec3 m_Velocity;
@@ -4980,6 +5044,8 @@ outColor = texture(image, inUV);
 	class Area : public PersistentReferenceHolder<Area> {
 
 		friend class World;
+		friend class Editor;
+
 		friend class DynamicArray<Area>;
 
 	public:
@@ -5592,148 +5658,13 @@ outColor = texture(image, inUV);
 		}	
 	};
 
-	class Editor {
-
-		friend class Engine;
-
-	public:
-
-		Renderer& m_Renderer;
-
-	private:
-
-		ImGuiContext* m_ImGuiContext;
-		VkDescriptorPool m_ImGuiDescriptorPool;
-		VkFormat m_ImGuiColorAttachmentFormat;
-
-		Editor(Renderer& renderer) : m_Renderer(renderer) {}
-
-		Editor(const Editor&) = delete;
-
-		Editor(Editor&&) = delete;
-
-		static constexpr void CheckVkResult(VkResult vkRes) {
-			if (vkRes != VK_SUCCESS) {
-				PrintError(ErrorOrigin::Vulkan,
-					"ImGui produced a vulkan error!", 
-					vkRes);
-			}
-		}
-
-		void Initialize(GLFWwindow* glfwWindow) {
-			IMGUI_CHECKVERSION();
-
-			m_ImGuiContext = ImGui::CreateContext();
-
-			ImGuiIO& io = ImGui::GetIO();
-			io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-
-			VkDescriptorPoolSize descriptorPoolSize {
-				.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-				.descriptorCount = 1,
-			};
-
-			m_ImGuiDescriptorPool = m_Renderer.CreateDescriptorPool(VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, 1, 1, &descriptorPoolSize);
-
-			if (m_ImGuiDescriptorPool == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to create descriptor pool for ImGui (function Renderer::CreateDescriptorPool in function Editor::Initialize)!");
-			}
-
-			m_ImGuiColorAttachmentFormat = m_Renderer.m_SwapchainSurfaceFormat.format;
-
-			ImGui_ImplVulkan_InitInfo ImGuiVulkanInitInfo {
-				.Instance = m_Renderer.m_VulkanInstance,
-				.PhysicalDevice = m_Renderer.m_Gpu,
-				.Device = m_Renderer.m_VulkanDevice,
-				.QueueFamily = m_Renderer.m_GraphicsQueueFamilyIndex,
-				.Queue = m_Renderer.m_GraphicsQueue,
-				.DescriptorPool = m_ImGuiDescriptorPool,
-				.RenderPass = nullptr,
-				.MinImageCount = m_Renderer.m_FramesInFlight,
-				.ImageCount = m_Renderer.m_FramesInFlight,
-				.MSAASamples = VK_SAMPLE_COUNT_1_BIT,
-				.PipelineCache = nullptr,
-				.Subpass = 0,
-				.UseDynamicRendering = true,
-				.PipelineRenderingCreateInfo {
-					.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-					.pNext = nullptr,
-					.viewMask = 0,
-					.colorAttachmentCount = 1,
-					.pColorAttachmentFormats = &m_ImGuiColorAttachmentFormat,
-					.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
-					.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
-				},
-				.Allocator = m_Renderer.m_VulkanAllocationCallbacks,
-				.CheckVkResultFn = CheckVkResult,
-				.MinAllocationSize = 1024U * 1024U,
-			};
-
-			if (!ImGui_ImplGlfw_InitForVulkan(glfwWindow, true)) {
-				CriticalError(ErrorOrigin::Editor,
-					"failed to initialize ImGui (function ImGui_ImplGlfw_InitForVulkan in function Editor::Initialize)!");
-			}
-			if (!ImGui_ImplVulkan_Init(&ImGuiVulkanInitInfo)) {
-				CriticalError(ErrorOrigin::Editor,
-					"failed to initialize ImGui (function ImGui_ImplVulkan_Init in function Editor::Initialize)!");
-			}
-			if (!ImGui_ImplVulkan_CreateFontsTexture()) {
-				CriticalError(ErrorOrigin::Editor,
-					"failed to initialize ImGui (function ImGui_ImplVulkan_CreateFontsTexture in function Editor::Initialize)!");
-			}
-		}
-
-		void Terminate() {
-			ImGui_ImplVulkan_Shutdown();
-			ImGui_ImplGlfw_Shutdown();
-			ImGui::DestroyContext(m_ImGuiContext);
-			m_ImGuiContext = nullptr;
-			m_Renderer.DestroyDescriptorPool(m_ImGuiDescriptorPool);
-			m_ImGuiDescriptorPool = nullptr;
-		}
-
-		void NewFrame() {
-			ImGui_ImplVulkan_NewFrame();
-			ImGui_ImplGlfw_NewFrame();
-			ImGui::NewFrame();
-		}
-
-		void Render(const Renderer::DrawData& drawData) {
-			VkRenderingAttachmentInfo colorAttachmentInfo {
-				.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
-				.pNext = nullptr,
-				.imageView = drawData.m_SwapchainImageView,
-				.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-				.resolveMode = VK_RESOLVE_MODE_NONE,
-				.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-				.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-				.clearValue { .color { .uint32 { 0, 0, 0, 0 } } },
-			};
-
-			VkRenderingInfo renderingInfo {
-				.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-				.pNext = nullptr,
-				.flags = 0,
-				.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
-				.layerCount = 1,
-				.viewMask = 0,
-				.colorAttachmentCount = 1,
-				.pColorAttachments = &colorAttachmentInfo,
-				.pDepthAttachment = nullptr,
-				.pStencilAttachment = nullptr,
-			};
-
-			vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
-			ImGui::Render();
-			ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), drawData.m_CommandBuffer);
-			vkCmdEndRendering(drawData.m_CommandBuffer);
-		}
-	};
+	class Editor;
 
 	class World {
 
 		friend class Engine;
+		friend class Editor;
+
 		friend class UnidirectionalLight;
 
 	public:
@@ -5865,7 +5796,7 @@ outColor = texture(image, inUV);
 			m_GameCamera.m_View = matrix;
 		}
 
-		Area& AddArea(AreaFlags flags) {
+		PersistentReference<Area> AddArea(AreaFlags flags) {
 			return m_Areas.EmplaceBack(flags, m_NextObjectID++, m_NextObjectID);
 		}
 
@@ -6356,6 +6287,223 @@ outColor = texture(image, inUV);
 		}	
 	};
 
+	class Editor {
+
+		friend class Engine;
+
+	public:
+
+		World& m_World;
+		Renderer& m_Renderer;
+
+	private:
+
+		GLFWwindow* const m_GLFWwindow;
+
+		PersistentReference<Area> m_InspectedArea{};
+
+		ImGuiContext* m_ImGuiContext = nullptr;
+		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
+		VkFormat m_ImGuiColorAttachmentFormat = VK_FORMAT_UNDEFINED;
+
+		Editor(World& world, Renderer& renderer, GLFWwindow* glfwWindow) 
+			: m_World(world), m_Renderer(renderer), m_GLFWwindow(glfwWindow) {}
+
+		Editor(const Editor&) = delete;
+
+		Editor(Editor&&) = delete;
+
+		static constexpr void CheckVkResult(VkResult vkRes) {
+			if (vkRes != VK_SUCCESS) {
+				PrintError(ErrorOrigin::Vulkan,
+					"ImGui produced a vulkan error!", 
+					vkRes);
+			}
+		}
+
+	public:
+
+		static void AlignedText(const char* text, Optional<float> x_alignment, Optional<float> y_alignment) {
+			ImVec2 avail = ImGui::GetContentRegionAvail();
+			ImVec2 textSize = ImGui::CalcTextSize(text);
+			ImVec2 currentCursorPos = ImGui::GetCursorPos();
+			if (x_alignment.HasValue()) {
+				float off = (avail.x - textSize.x) * x_alignment.GetValue();
+				if (off > 0.0f) {
+					ImGui::SetCursorPosX(currentCursorPos.x + off);
+				}
+			}
+			if (y_alignment.HasValue()) {
+				float off = (avail.y - textSize.y) * y_alignment.GetValue();
+				if (off > 0.0f) {
+					ImGui::SetCursorPosY(currentCursorPos.y + off);
+				}
+			}
+			ImGui::Text("%s", text);
+			ImGui::SetCursorPos(currentCursorPos);
+		}
+
+	private:
+
+		void Initialize(GLFWwindow* glfwWindow) {
+			IMGUI_CHECKVERSION();
+
+			m_ImGuiContext = ImGui::CreateContext();
+
+			ImGuiIO& io = ImGui::GetIO();
+			io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+
+			VkDescriptorPoolSize descriptorPoolSize {
+				.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				.descriptorCount = 1,
+			};
+
+			m_ImGuiDescriptorPool = m_Renderer.CreateDescriptorPool(VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, 1, 1, &descriptorPoolSize);
+
+			if (m_ImGuiDescriptorPool == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create descriptor pool for ImGui (function Renderer::CreateDescriptorPool in function Editor::Initialize)!");
+			}
+
+			m_ImGuiColorAttachmentFormat = m_Renderer.m_SwapchainSurfaceFormat.format;
+
+			ImGui_ImplVulkan_InitInfo ImGuiVulkanInitInfo {
+				.Instance = m_Renderer.m_VulkanInstance,
+				.PhysicalDevice = m_Renderer.m_Gpu,
+				.Device = m_Renderer.m_VulkanDevice,
+				.QueueFamily = m_Renderer.m_GraphicsQueueFamilyIndex,
+				.Queue = m_Renderer.m_GraphicsQueue,
+				.DescriptorPool = m_ImGuiDescriptorPool,
+				.RenderPass = nullptr,
+				.MinImageCount = m_Renderer.m_FramesInFlight,
+				.ImageCount = m_Renderer.m_FramesInFlight,
+				.MSAASamples = VK_SAMPLE_COUNT_1_BIT,
+				.PipelineCache = nullptr,
+				.Subpass = 0,
+				.UseDynamicRendering = true,
+				.PipelineRenderingCreateInfo {
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+					.pNext = nullptr,
+					.viewMask = 0,
+					.colorAttachmentCount = 1,
+					.pColorAttachmentFormats = &m_ImGuiColorAttachmentFormat,
+					.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
+					.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+				},
+				.Allocator = m_Renderer.m_VulkanAllocationCallbacks,
+				.CheckVkResultFn = CheckVkResult,
+				.MinAllocationSize = 1024U * 1024U,
+			};
+
+			if (!ImGui_ImplGlfw_InitForVulkan(glfwWindow, true)) {
+				CriticalError(ErrorOrigin::Editor,
+					"failed to initialize ImGui (function ImGui_ImplGlfw_InitForVulkan in function Editor::Initialize)!");
+			}
+			if (!ImGui_ImplVulkan_Init(&ImGuiVulkanInitInfo)) {
+				CriticalError(ErrorOrigin::Editor,
+					"failed to initialize ImGui (function ImGui_ImplVulkan_Init in function Editor::Initialize)!");
+			}
+			if (!ImGui_ImplVulkan_CreateFontsTexture()) {
+				CriticalError(ErrorOrigin::Editor,
+					"failed to initialize ImGui (function ImGui_ImplVulkan_CreateFontsTexture in function Editor::Initialize)!");
+			}
+		}
+
+		void Terminate() {
+			ImGui_ImplVulkan_Shutdown();
+			ImGui_ImplGlfw_Shutdown();
+			ImGui::DestroyContext(m_ImGuiContext);
+			m_ImGuiContext = nullptr;
+			m_Renderer.DestroyDescriptorPool(m_ImGuiDescriptorPool);
+			m_ImGuiDescriptorPool = nullptr;
+		}
+
+	public:
+
+		void SetInspectedArea(Area& area) {
+			m_InspectedArea = area;
+		}
+
+	private:
+
+		void NewFrame() {
+			ImGui_ImplVulkan_NewFrame();
+			ImGui_ImplGlfw_NewFrame();
+			ImGui::NewFrame();
+		}
+
+		void Update() {
+
+			IntVec2 glfwWindowSize;
+			glfwGetFramebufferSize(m_GLFWwindow, &glfwWindowSize.x, &glfwWindowSize.y);
+
+			ImGui::SetNextWindowSize(ImVec2(glfwWindowSize.x, glfwWindowSize.y));
+			ImGui::SetNextWindowPos(ImVec2(0, 0));
+
+			ImGuiWindowFlags dockingSpaceWindowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar
+				| ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNavFocus
+				| ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+
+			if (ImGui::Begin("Docking Space", nullptr, dockingSpaceWindowFlags)) {
+				ImGui::PopStyleVar(3);
+				ImGui::DockSpace(ImGui::GetID("MainDockingSpace"), ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+				ImGui::End();
+			}
+
+			if (ImGui::Begin("Area")) {
+				if (m_InspectedArea.IsNull()) {
+					AlignedText("No area selected", 0.5f, 0.5f);
+				}
+				else {
+					Area& area = *m_InspectedArea;
+					if (ImGui::CollapsingHeader("Obstacles", ImGuiTreeNodeFlags_DefaultOpen)) {
+						for (const Obstacle& obstacle : area.m_Obstacles) {
+							ImGui::SetCursorPosX(ImGui::GetStyle().ItemSpacing.x);
+							if (ImGui::Button(IntToString(obstacle.m_ObjectID).CString())) {
+							}
+						}
+					}
+				}
+				ImGui::End();
+			}
+		}
+
+		void Render(const Renderer::DrawData& drawData) {
+			VkRenderingAttachmentInfo colorAttachmentInfo {
+				.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
+				.pNext = nullptr,
+				.imageView = drawData.m_SwapchainImageView,
+				.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				.resolveMode = VK_RESOLVE_MODE_NONE,
+				.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+				.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+				.clearValue { .color { .uint32 { 0, 0, 0, 0 } } },
+			};
+
+			VkRenderingInfo renderingInfo {
+				.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+				.pNext = nullptr,
+				.flags = 0,
+				.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
+				.layerCount = 1,
+				.viewMask = 0,
+				.colorAttachmentCount = 1,
+				.pColorAttachments = &colorAttachmentInfo,
+				.pDepthAttachment = nullptr,
+				.pStencilAttachment = nullptr,
+			};
+
+			vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
+			ImGui::Render();
+			ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), drawData.m_CommandBuffer);
+			vkCmdEndRendering(drawData.m_CommandBuffer);
+		}
+	};
+
 	enum EngineModeBits {
 		EngineMode_Initialized = 1,
 		EngineMode_Play = 2,
@@ -6446,7 +6594,7 @@ outColor = texture(image, inUV);
 				m_Renderer(projectName.CString(), VK_MAKE_API_VERSION(0, 1, 0, 0), glfwWindow, RendererCriticalErrorCallback, SwapchainCreateCallback),
 				m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
 				m_AssetManager(projectName, m_Renderer),
-				m_Editor(m_Renderer),
+				m_Editor(m_World, m_Renderer, glfwWindow),
 				m_StaticQuadMesh(m_Renderer),
 				m_StaticQuadMesh2D(m_Renderer)
 		{
@@ -6523,6 +6671,10 @@ outColor = texture(image, inUV);
 			return m_World;
 		}
 
+		Editor& GetEditor() {
+			return m_Editor;
+		}
+
 		const StaticMesh& GetQuadMesh() const {
 			return m_StaticQuadMesh;
 		}
@@ -6544,18 +6696,18 @@ outColor = texture(image, inUV);
 
 			bool editorMode = m_Mode & EngineMode_Editor;
 
-			if (editorMode) {
-				m_Editor.NewFrame();
-				ImGui::Begin("test");
-				ImGui::End();
-			}
-
 			if (m_Mode & EngineMode_Play) {
 				m_World.LogicUpdate();
 				m_UI.UILoop();
 			}
-			else if (editorMode) {
+
+			if (editorMode) {
+				m_Editor.NewFrame();
+				m_Editor.Update();
+				ImGui::Begin("test");
+				ImGui::End();
 				m_World.EditorUpdate();
+				editorMode = true;
 			}
 
 			Renderer::DrawData drawData;
