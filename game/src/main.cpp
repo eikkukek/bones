@@ -188,13 +188,13 @@ int main() {
 	World::TextureMap textureMap{};
 	assert(world.CreateTextureMap(brickWallTexture, textureMap));
 
-	Area& area = world.AddArea(AreaFlag_NoSave);
+	PersistentReference<Area> area = world.AddArea(AreaFlag_NoSave);
 
 	Engine::GetQuadMesh(quadVertices, quadIndices);
 
 	LogicMesh logicQuadMesh(quadVertices, quadIndices);
 
-	auto obstacle = area.AddObstacle(
+	auto obstacle = (*area).AddObstacle(
 		{
 			.m_Position { 0, 0, 0 },
 			.m_YRotation = pi / 2,
@@ -218,7 +218,7 @@ int main() {
 	groundTransform[2] *= 10;
 	groundTransform[3].y = -1.0f;
 
-	auto ground = area.AddRayTarget(
+	auto ground = (*area).AddRayTarget(
 		{
 			.m_LogicMesh = logicQuadMesh,
 			.m_Transform = groundTransform,
@@ -253,6 +253,10 @@ int main() {
 	world.AddEntity(&player);
 
 	//NPC npc(world, playerMesh);
+
+	Editor& editor = engine.GetEditor();
+
+	editor.SetInspectedArea(*area);
 
 	while (engine.Loop()) {
 		float deltaTime = Time::DeltaTime();
