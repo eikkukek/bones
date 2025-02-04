@@ -195,6 +195,7 @@ int main() {
 	LogicMesh logicQuadMesh(quadVertices, quadIndices);
 
 	auto obstacle = (*area).AddObstacle(
+		"Obstacle",
 		{
 			.m_Position { 0, 0, 0 },
 			.m_YRotation = pi / 2,
