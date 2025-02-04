@@ -834,7 +834,7 @@ namespace engine {
 				m_Data = m_SmallStringBuffer;
 				return *this;
 			}
-			char* temp = (char*)malloc(sizeof(char) * capacity);
+			char* temp = (char*)malloc(capacity * sizeof(char));
 			for (uint32_t i = 0; i < m_Length; i++) {
 				temp[i] = m_Data[i];
 			}
@@ -905,10 +905,21 @@ namespace engine {
 			return Push(c);
 		}
 
+		friend String operator+(const String& a, const String& b) {
+			String result{};
+			uint32_t length = a.m_Length + b.m_Length;
+			result.Reserve(length + 1);
+			memcpy(result.m_Data, a.m_Data, a.m_Length * sizeof(char));
+			memcpy(result.m_Data + a.m_Length, b.m_Data, b.m_Length * sizeof(char));
+			result.m_Length = length;
+			result.m_Data[length] = '\0';
+			return result;
+		}
+
 		friend String operator+(const String& a, const char* b) {
 			String result{};
 			uint32_t bLength = strlen(b);
-			result.Reserve(a.m_Length + bLength);
+			result.Reserve(a.m_Length + bLength + 1);
 			memcpy(result.m_Data, a.m_Data, a.m_Length * sizeof(char));
 			memcpy(result.m_Data + a.m_Length, b, bLength * sizeof(char));
 			result.m_Length = a.m_Length + bLength;
@@ -4935,6 +4946,7 @@ outColor = texture(image, inUV);
 			Collider::CreateInfo m_ColliderInfo{};
 		};
 
+		String m_Name;
 		uint64_t m_ObjectID;
 
 	private:
@@ -4948,8 +4960,8 @@ outColor = texture(image, inUV);
 		DynamicArray<PersistentReference<WorldRenderData>> m_RenderDatas{};
 		DynamicArray<Mat4> m_Transforms{};
 
-		Obstacle(uint64_t objectID, const CreateInfo& info) noexcept 
-			: PersistentReferenceHolder<Obstacle>(), m_ObjectID(objectID), m_Position(info.m_Position),
+		Obstacle(const char* name, uint64_t objectID, const CreateInfo& info) noexcept 
+			: PersistentReferenceHolder<Obstacle>(), m_Name(name), m_ObjectID(objectID), m_Position(info.m_Position),
 				m_YRotation(info.m_YRotation), m_Collider(m_Position, m_YRotation, m_Velocity, info.m_ColliderInfo),
 				m_Transform(Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4()) {
 			m_Transform[3] = Vec4(m_Position, 1.0f);
@@ -5072,8 +5084,8 @@ outColor = texture(image, inUV);
 
 	public:
 
-		PersistentReference<Obstacle> AddObstacle(const Obstacle::CreateInfo& info) {
-			Obstacle& obstacle = m_Obstacles.EmplaceBack(m_NextObjectID++, info);
+		PersistentReference<Obstacle> AddObstacle(const char* name, const Obstacle::CreateInfo& info) {
+			Obstacle& obstacle = m_Obstacles.EmplaceBack(name, m_NextObjectID++, info);
 			UpdateBoundingBox(obstacle.GetBoundingBox());
 			return obstacle;
 		}
@@ -6153,6 +6165,12 @@ outColor = texture(image, inUV);
 		}
 
 		bool LoadObstacle(Area& area, FILE* fileStream) {
+			String name{};
+			if (FileHandler::SkipLine(fileStream) == EOF ||
+				FileHandler::GetLine(fileStream, name) == EOF) {
+				PrintError(ErrorOrigin::FileParsing,
+					"hit end of file when parsing obstacle (in function LoadObstacle)!");
+			}
 			Obstacle::CreateInfo createInfo{};
 			int res = fscanf(fileStream, "{%f%f%f%f\n",
 				&createInfo.m_Position.x, &createInfo.m_Position.y, &createInfo.m_Position.z,
@@ -6167,7 +6185,7 @@ outColor = texture(image, inUV);
 					"failed to parse collider for obstacle (in function Collider::CreateInfo::FromFile in function World::LoadObstacle)!");
 				return false;
 			}
-			PersistentReference<Obstacle> obstacle = area.AddObstacle(createInfo);
+			PersistentReference<Obstacle> obstacle = area.AddObstacle(name.CString(), createInfo);
 			while (true) {
 				char c = FileHandler::Skip(fileStream, Array<char, 2> { '}', '{' });
 				if (c == EOF) {
@@ -6463,7 +6481,7 @@ outColor = texture(image, inUV);
 					if (ImGui::CollapsingHeader("Obstacles", ImGuiTreeNodeFlags_DefaultOpen)) {
 						for (const Obstacle& obstacle : area.m_Obstacles) {
 							ImGui::SetCursorPosX(ImGui::GetStyle().ItemSpacing.x);
-							if (ImGui::Button(IntToString(obstacle.m_ObjectID).CString())) {
+							if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(obstacle.m_ObjectID)).CString())) {
 							}
 						}
 					}
