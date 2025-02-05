@@ -150,10 +150,6 @@ public:
 int main() {
 	using namespace engine;
 
-	for (int value : array) {
-		fmt::print("{}\n", value);
-	}
-
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
