@@ -61,8 +61,6 @@ namespace engine {
 		template<typename U>
 		constexpr inline Vec2_T(const Vec4_T<U>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)) {}
 
-		static constexpr inline T Dot(const Vec2_T& a, const Vec2_T& b) noexcept { return a.x * b.x + a.y * b.y; }
-
 		constexpr inline T SqrMagnitude() const noexcept { return x * x + y * y; }
 
 		constexpr inline T Magnitude() const noexcept { return sqrt(SqrMagnitude()); }
@@ -110,12 +108,15 @@ namespace engine {
 	};
 
 	template<typename T>
+	constexpr inline T Dot(Vec2_T<T> a, Vec2_T<T> b) noexcept { return a.x * b.x + a.y * b.y; }
+
+	template<typename T>
 	Vec2_T<T> Min(Vec2_T<T> a, Vec2_T<T> b) {
 		if (a.SqrMagnitude() < b.SqrMagnitude()) {
 			return a;
 		}
 		return b;
-	}	
+	}
 
 	typedef Vec2_T<float> Vec2;
 	typedef Vec2_T<int> IntVec2;
@@ -153,6 +154,10 @@ namespace engine {
 
 		static constexpr Vec3_T Backward(T num = Cast(1)) {
 			return Vec3_T(Cast(0), Cast(0), -num);
+		}
+
+		static constexpr Vec3_T One(T num = Cast(1)) {
+			return Vec3_T(num, num, num);
 		}
 
 		T x, y, z;
@@ -222,23 +227,28 @@ namespace engine {
 	};
 
 	template<typename T>
-	static constexpr inline Vec3_T<T> Cross(const Vec3_T<T>& a, const Vec3_T<T>& b) noexcept { 
+	constexpr inline Vec3_T<T> Cross(const Vec3_T<T>& a, const Vec3_T<T>& b) noexcept { 
 		return Vec3_T(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x); 
 	}
 
 	template<typename T>
-	static constexpr inline T Dot(const Vec3_T<T>& a, const Vec3_T<T>& b) noexcept { 
+	constexpr inline T Dot(const Vec3_T<T>& a, const Vec3_T<T>& b) noexcept { 
 		return a.x * b.x + a.y * b.y + a.z * b.z; 
 	}
 
 	template<typename T>
-	static constexpr inline void Normalize(Vec3_T<T>& vec) noexcept {
+	constexpr inline void Normalize(Vec3_T<T>& vec) noexcept {
 		T mag = vec.SqrMagnitude();
 		if (mag <= Cast(0.00001)) {
 			vec.x = Cast(0); vec.y = Cast(0); vec.z = Cast(0);
 			return;
 		}
 		vec.x /= mag; vec.y /= mag; vec.z /= mag;
+	}
+
+	template<typename T>
+	constexpr inline float AngleBetween(const Vec3_T<T> a, const Vec3_T<T> b) {
+		return acos(Dot(a, b) / (a.Magnitude() * b.Magnitude()));
 	}
 
 	typedef Vec3_T<float> Vec3;
