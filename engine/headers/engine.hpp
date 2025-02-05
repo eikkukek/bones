@@ -133,6 +133,14 @@ namespace engine {
 			return size_T;
 		}
 
+		constexpr T* Data() {
+			return m_Data;
+		}
+
+		constexpr const T* Data() const {
+			return m_Data;
+		}
+
 		constexpr T& operator[](size_t index) {
 			assert(index < size_T);
 			return m_Data[index];
@@ -1691,6 +1699,14 @@ namespace engine {
 		Vec3_T<T> m_Min{};
 		Vec3_T<T> m_Max{};
 
+		Vec3_T<T> Dimensions() const {
+			return m_Max - m_Min;
+		}
+
+		Vec3_T<T> Middle() const {
+			return m_Min + Dimensions() / 2;
+		}
+
 		bool IsPointInside(const Vec3_T<T>& point) const {
 			return point.x > m_Min.x && point.y > m_Min.y && point.z > m_Min.z &&
 				point.x < m_Max.x && point.y < m_Max.y && point.z < m_Max.z;
@@ -1762,10 +1778,6 @@ namespace engine {
 			return m_Max.x > other.m_Min.x && other.m_Max.x > m_Min.x &&
 				m_Max.y > other.m_Min.y && other.m_Max.y > m_Min.y &&
 				m_Max.z > other.m_Min.z && other.m_Max.z > m_Min.z;
-		}
-
-		Vec3 Dimensions() const {
-			return m_Max - m_Min;
 		}
 	};
 
@@ -1919,25 +1931,24 @@ namespace engine {
 			if (m_Type == Type::Fence) {
 				const Fence& fence = u_Collider.m_Fence;
 				Vec3 pos = m_BodyPosition + m_LocalPosition;
-				Box<float> result {
-					.m_Min { float_max, float_max, pos.y - fence.m_HalfDimensions.y },
-					.m_Max { float_min, float_min, pos.y + fence.m_HalfDimensions.y },
-				};
-				float yRot = m_BodyYRotation + fence.m_YRotation;
+				float yRot = fence.m_YRotation + m_BodyYRotation;
 				Vec2 vecs[4] {
-					pos + Vec2::Right(fence.m_HalfDimensions.x).Rotated(yRot),
-					pos + Vec2::Left(fence.m_HalfDimensions.x).Rotated(yRot),
-					pos + Vec2::Up(fence.m_HalfDimensions.z).Rotated(yRot),
-					pos + Vec2::Down(fence.m_HalfDimensions.z).Rotated(yRot),
+					Vec2(pos.x - fence.m_HalfDimensions.x, pos.z - fence.m_HalfDimensions.z).Rotated(yRot),
+					Vec2(pos.x - fence.m_HalfDimensions.x, pos.z + fence.m_HalfDimensions.z).Rotated(yRot),
+					Vec2(pos.x + fence.m_HalfDimensions.x, pos.z - fence.m_HalfDimensions.z).Rotated(yRot),
+					Vec2(pos.x + fence.m_HalfDimensions.x, pos.z + fence.m_HalfDimensions.z).Rotated(yRot),
+				};
+				Box<float> result { 
+					.m_Min { float_max, pos.y - fence.m_HalfDimensions.y, float_max },
+					.m_Max { float_min, pos.y + fence.m_HalfDimensions.y, float_min },
 				};
 				for (uint32_t i = 0; i < 4; i++) {
-					Vec2& vec = vecs[i];
 					Vec3& min = result.m_Min;
-					min.x = Min(vec.x, min.x);
-					min.z = Min(vec.y, min.z);
+					min.x = Min(vecs[i].x, min.x);
+					min.z = Min(vecs[i].y, min.z);
 					Vec3& max = result.m_Max;
-					max.x = Max(vec.x, max.x);
-					max.z = Max(vec.y, max.z);
+					max.x = Max(vecs[i].x, max.x);
+					max.z = Max(vecs[i].y, max.z);
 				}
 				return result;
 			}
@@ -2134,7 +2145,7 @@ namespace engine {
 
 				static constexpr auto project = [](Vec2 vec, const Line& line) -> Vec2 {
 					vec -= line.m_Origin;
-					float dot = Vec2::Dot(line.m_Direction, vec);
+					float dot = Dot(line.m_Direction, vec);
 					return line.m_Origin + (line.m_Direction * dot);
 				};
 
@@ -3736,17 +3747,17 @@ outColor = texture(image, inUV);
 			IntVec2 m_Min{};
 			IntVec2 m_Max{};
 
-			bool IsPointInside(IntVec2 point) const {
-				return point.x >= m_Min.x && point.y >= m_Min.y 
-					&& point.x <= m_Max.x && point.y <= m_Max.y;
-			}
-
 			IntVec2 Dimensions() const {
 				return m_Max - m_Min;
 			}
 
 			Vec2 Middle() const {
 				return m_Min + Dimensions() / 2;
+			}
+
+			bool IsPointInside(IntVec2 point) const {
+				return point.x >= m_Min.x && point.y >= m_Min.y 
+					&& point.x <= m_Max.x && point.y <= m_Max.y;
 			}
 
 			void CalcTransform(Vec2_T<uint32_t> framebufferSize, Mat4& out) const {
@@ -4983,7 +4994,7 @@ outColor = texture(image, inUV);
 			return m_Collider.GetBoundingBox();
 		}
 
-		const Vec3& GetPosition() const {
+		Vec3 GetPosition() const {
 			return m_Position;
 		}
 
@@ -5910,6 +5921,32 @@ outColor = texture(image, inUV);
 				entity->Update(*this);
 			}
 		}
+
+		void UpdateEditorCamera() {
+			Mat4 rotMat 
+				= (Quaternion::AxisRotation(Vec3::Right(), m_EditorCameraRotations.x) 
+					* Quaternion::AxisRotation(Vec3::Up(), m_EditorCameraRotations.y)).
+					AsMat4();
+			Vec3 front = rotMat * Vec3::Forward();
+			Vec3 up = rotMat * Vec3::Up();
+			Vec3 right = Cross(up, front).Normalized();
+			m_EditorCamera.m_View[0].x = right.x;
+			m_EditorCamera.m_View[1].x = right.y;
+			m_EditorCamera.m_View[2].x = right.z;
+			m_EditorCamera.m_View[0].y = up.x;
+			m_EditorCamera.m_View[1].y = up.y;
+			m_EditorCamera.m_View[2].y = up.z;
+			m_EditorCamera.m_View[0].z = front.x;
+			m_EditorCamera.m_View[1].z = front.y;
+			m_EditorCamera.m_View[2].z = front.z;
+			Vec3 negPos = -m_EditorCameraPosition;
+			m_EditorCamera.m_View[3] = {
+				Dot(right, negPos),
+				Dot(up, negPos),
+				Dot(front, negPos),
+				1.0f,
+			};
+		}
  
 		void EditorUpdate() {
 			using Key = Input::Key;
@@ -5932,12 +5969,14 @@ outColor = texture(image, inUV);
 			if (mouseHeld || moved) {
 				if (mouseHeld) {
 					Vec2_T<double> deltaCursorPos = Input::GetScaledDeltaMousePosition();
-					m_EditorCameraRotations += Vec2(deltaCursorPos.x, -deltaCursorPos.y) * (m_EditorCameraSensitivity * Time::DeltaTime());
+					m_EditorCameraRotations += Vec2(-deltaCursorPos.y, deltaCursorPos.x) * (m_EditorCameraSensitivity * Time::DeltaTime());
 					m_EditorCameraRotations.x = fmod(m_EditorCameraRotations.x, 2 * pi);
 					m_EditorCameraRotations.y = fmod(m_EditorCameraRotations.y, 2 * pi);
 				}
-				Quaternion rot = Quaternion::AxisRotation(Vec3::Right(), m_EditorCameraRotations.y) * Quaternion::AxisRotation(Vec3::Up(), m_EditorCameraRotations.x);
-				Mat4 rotMat = rot.AsMat4();
+				Mat4 rotMat 
+					= (Quaternion::AxisRotation(Vec3::Right(), m_EditorCameraRotations.x) 
+						* Quaternion::AxisRotation(Vec3::Up(), m_EditorCameraRotations.y)).
+						AsMat4();
 				if (moved) {
 					float frameSpeed = m_EditorCameraSpeed * Time::DeltaTime();
 					float y = -movementVector.y * frameSpeed / 2;
@@ -6320,6 +6359,8 @@ outColor = texture(image, inUV);
 
 		PersistentReference<Area> m_InspectedArea{};
 
+		uint32_t m_SelectedObjectIndex = UINT64_MAX;
+
 		ImGuiContext* m_ImGuiContext = nullptr;
 		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
 		VkFormat m_ImGuiColorAttachmentFormat = VK_FORMAT_UNDEFINED;
@@ -6364,6 +6405,7 @@ outColor = texture(image, inUV);
 	private:
 
 		void Initialize(GLFWwindow* glfwWindow) {
+
 			IMGUI_CHECKVERSION();
 
 			m_ImGuiContext = ImGui::CreateContext();
@@ -6452,6 +6494,8 @@ outColor = texture(image, inUV);
 
 		void Update() {
 
+			using MouseButton = Input::MouseButton;
+
 			IntVec2 glfwWindowSize;
 			glfwGetFramebufferSize(m_GLFWwindow, &glfwWindowSize.x, &glfwWindowSize.y);
 
@@ -6477,13 +6521,44 @@ outColor = texture(image, inUV);
 					AlignedText("No area selected", 0.5f, 0.5f);
 				}
 				else {
+					ImGuiStyle& style = ImGui::GetStyle();
 					Area& area = *m_InspectedArea;
+					bool buttonPressed = false;
 					if (ImGui::CollapsingHeader("Obstacles", ImGuiTreeNodeFlags_DefaultOpen)) {
+						uint32_t index = 0;
 						for (const Obstacle& obstacle : area.m_Obstacles) {
-							ImGui::SetCursorPosX(ImGui::GetStyle().ItemSpacing.x);
-							if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(obstacle.m_ObjectID)).CString())) {
+							ImGui::SetCursorPosX(style.ItemSpacing.x);
+							if (m_SelectedObjectIndex == index) {
+								ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonHovered]);
+								if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(obstacle.m_ObjectID)).CString())) {
+									buttonPressed = true;
+									Box<float> boundingBox = obstacle.GetBoundingBox();
+									Vec3 dimensions = boundingBox.Dimensions();
+									Vec3 obstaclePos = obstacle.GetPosition();
+									Vec3 offset = Vec3(0.0f, boundingBox.m_Max.y + dimensions.y, boundingBox.m_Min.z - dimensions.z);
+									m_World.m_EditorCameraPosition = obstaclePos + offset;
+									m_World.m_EditorCameraPosition.y *= -1;
+									Vec3 forward = obstaclePos - m_World.m_EditorCameraPosition;
+									m_World.m_EditorCameraRotations = Vec2(-AngleBetween(Vec3::Forward(), forward), 0.0f);
+									m_World.UpdateEditorCamera();
+								}
+								else if (ImGui::IsItemActive()) {
+									buttonPressed = true;
+								}
+								ImGui::PopStyleColor();
 							}
+							else if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(obstacle.m_ObjectID)).CString())) {
+								buttonPressed = true;
+								m_SelectedObjectIndex = index;
+							}
+							else if (ImGui::IsItemActive()) {
+								buttonPressed = true;
+							}
+							++index;
 						}
+					}
+					if (!buttonPressed && Input::WasMouseButtonPressed(MouseButton::Left)) {
+						m_SelectedObjectIndex = UINT32_MAX;
 					}
 				}
 				ImGui::End();
@@ -6603,6 +6678,138 @@ outColor = texture(image, inUV);
 			1, 3, 0,
 		};
 
+		static constexpr uint32_t box_vertex_count = 24;
+
+		static constexpr Vertex box_vertices[box_vertex_count] {
+			{
+				.m_Position { 1.0f, -1.0f, 1.0f }, 
+				.m_Normal { 0.0f, -1.0f, 0.0f },
+				.m_UV { 1.0f, 0.333333f },
+			},
+			{
+				.m_Position { -1.0f, -1.0f, 1.0f },
+				.m_Normal { 0.0f, -1.0f, 0.0f },
+				.m_UV { 1.0f, 0.666667f },
+			},
+			{
+				.m_Position { -1.0f, -1.0f, -1.0f },
+				.m_Normal { 0.0f, -1.0f, 0.0f },
+				.m_UV { 0.666667f, 0.666667f },
+			},
+			{
+				.m_Position { -1.0f, 1.0f, -1.0f },
+				.m_Normal { 0.0f, 1.0f, 0.0f },
+				.m_UV { 1.0f, 0.333333f },
+			},
+			{
+				.m_Position { -1.0f, 1.0f, 1.0f },
+				.m_Normal { 0.0f, 1.0f, 0.0f },
+				.m_UV { 0.666667f, 0.333333f },
+			},
+			{
+				.m_Position { 1.0f, 1.0f, 1.0f },
+				.m_Normal { 0.0f, 1.0f, 0.0f },
+				.m_UV { 0.666667f, 0.0f },
+			},
+			{
+				.m_Position { 1.0f, 1.0f, -1.0f },
+				.m_Normal { 1.0f, 0.0f, 0.0f },
+				.m_UV { 0.0f, 0.333333f },
+			},
+			{
+				.m_Position { 1.0f, 1.0f, 1.0f },
+				.m_Normal { 1.0f, 0.0f, 0.0f },
+				.m_UV { 0.0f, 0.0f },
+			},
+			{
+				.m_Position { 1.0f, -1.0f, 1.0f },
+				.m_Normal { 1.0f, 0.0f, 0.0f },
+				.m_UV { 0.333333f, 0.0f },
+			},
+			{
+				.m_Position { 1.0f, 1.0f, 1.0f },
+				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_UV { 0.333333f, 0.0f },
+			},
+			{
+				.m_Position { -1.0f, 1.0f, 1.0f },
+				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_UV { 0.666667f, 0.0f },
+			},
+			{
+				.m_Position { -1.0f, -1.0f, 1.0f },
+				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_UV { 0.666667f, 0.333333f },
+			},
+			{
+				.m_Position { -1.0f, -1.0f, 1.0f },
+				.m_Normal { -1.0f, 0.0f, 0.0f },
+				.m_UV { 0.333333f, 0.0f },
+			},
+			{
+				.m_Position { -1.0f, 1.0f, 1.0f },
+				.m_Normal { -1.0f, 0.0f, 0.0f },
+				.m_UV { 0.0f, 1.0f },
+			},
+			{
+				.m_Position { -1.0f, 1.0f, -1.0f },
+				.m_Normal { -1.0f, 0.0f, 0.0f },
+				.m_UV { 0.0f, 0.666667f },
+			},
+			{
+				.m_Position { 1.0f, -1.0f, -1.0f },
+				.m_Normal { 0.0f, 0.0f, -1.0f },
+				.m_UV { 0.333333f, 0.333333f },
+			},
+			{
+				.m_Position { -1.0f, -1.0f, -1.0f },
+				.m_Normal { 0.0f, 0.0f, -1.0f },
+				.m_UV { 0.333333f, 0.666667f },
+			},
+			{
+				.m_Position { -1.0f, 1.0f, -1.0f },
+				.m_Normal { 0.0f, 0.0f, -1.0f },
+				.m_UV { 0.0f, 0.666667f },
+			},
+			{
+				.m_Position { 1.0f, -1.0f, -1.0f },
+				.m_Normal { 0.0f, -1.0f, 0.0f },
+				.m_UV { 0.666667f, 0.333333f },
+			},
+			{
+				.m_Position { 1.0f, 1.0f, -1.0f },
+				.m_Normal { 0.0f, 1.0f, 0.0f },
+				.m_UV { 1.0f, 0.0f },
+			},
+			{
+				.m_Position { 1.0f, -1.0f, -1.0f },
+				.m_Normal { 1.0f, 0.0f, 0.0f },
+				.m_UV { 0.333333f, 0.333333f },
+			},
+			{
+				.m_Position { 1.0f, -1.0f, 1.0f },
+				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_UV { 0.333333f, 0.333333f },
+			},
+			{
+				.m_Position { -1.0f, -1.0f, -1.0f },
+				.m_Normal { -1.0f, 0.0f, 0.0f },
+				.m_UV { 0.333333f, 0.666667f },
+			},
+			{
+				.m_Position { 1.0f, 1.0f, -1.0f },
+				.m_Normal { 0.0f, 0.0f, -1.0f },
+				.m_UV { 0.0f, 0.333333f },
+			},
+		};
+
+		static constexpr uint32_t box_index_count = 36;
+
+		static constexpr uint32_t box_indices[box_index_count] {
+			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+			0, 2, 19, 3, 5, 20, 6, 8, 21, 9, 11, 22, 12, 14, 23, 15, 17,
+		};
+
 	public:
 
 		Engine(EngineMode mode, const String& projectName, GLFWwindow* glfwWindow, size_t maxUIWindows) :
@@ -6706,6 +6913,23 @@ outColor = texture(image, inUV);
 			}
 		}
 
+		static constexpr uint32_t GetBoxVertexCount() {
+			return box_vertex_count;
+		}
+
+		static constexpr uint32_t GetBoxIndexCount() {
+			return box_index_count;
+		}
+
+		static constexpr void GetBoxMesh(Array<Vertex, box_vertex_count>& outVertices, Array<uint32_t, box_index_count>& outIndices) {
+			for (uint32_t i = 0; i < box_vertex_count; i++) {
+				outVertices[i] = box_vertices[i];
+			}
+			for (uint32_t i = 0; i < box_index_count; i++) {
+				outIndices[i] = box_indices[i];
+			}
+		}
+
 		bool Loop() {
 
 			Time::BeginFrame();
@@ -6722,13 +6946,12 @@ outColor = texture(image, inUV);
 			if (editorMode) {
 				m_Editor.NewFrame();
 				m_Editor.Update();
-				ImGui::Begin("test");
-				ImGui::End();
 				m_World.EditorUpdate();
 				editorMode = true;
 			}
 
 			Renderer::DrawData drawData;
+
 			if (m_Renderer.BeginFrame(drawData)) {
 				m_World.RenderWorld(drawData, !(m_Mode & EngineMode_Play) && editorMode);
 				m_UI.RenderUI(drawData);
