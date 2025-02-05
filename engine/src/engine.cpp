@@ -425,7 +425,7 @@ namespace engine {
 		m_DefaultTextureDescriptorPool = m_Renderer.CreateDescriptorPool(0, 1, default_texture_count, default_textures_pool_sizes);
 
 		if (!m_Renderer.AllocateDescriptorSets(nullptr, m_DefaultTextureDescriptorPool,
-				1, &m_Pipelines.m_SingleTextureDescriptorSetLayoutPBR, &m_DefaultAlbedoDescriptorSet)) {
+				1, &m_Pipelines.m_TextureDescriptorSetLayoutPBR, &m_DefaultAlbedoDescriptorSet)) {
 			CriticalError(ErrorOrigin::Renderer, 
 				"failed to allocate default texture descriptor sets for world (function Renderer::AllocateDescriptorSets in function World::Initialize)!");
 		}
