@@ -756,6 +756,248 @@ namespace engine {
 		}
 	};
 
+	template<typename KeyType, typename ValueType>
+	class OrderedArray {
+	private:
+
+		uint32_t m_Size;
+		uint32_t m_Capacity;
+		uint8_t* m_Data;
+
+	public:
+
+		typedef ValueType* ValueIterator;
+		typedef const ValueType* ConstValueIterator;
+
+		typedef KeyType* KeyIterator;
+		typedef const KeyType* ConstKeyIterator;
+
+		OrderedArray() noexcept 
+			: m_Size(0), m_Capacity(0), m_Data(nullptr) {}
+
+		OrderedArray(uint32_t capacity) 
+			: m_Size(0), m_Capacity(0), m_Data(nullptr) {
+			Reserve(capacity);
+		}
+
+		~OrderedArray() {
+			Clear();
+		}
+
+		uint32_t Size() {
+			return m_Size;
+		}
+
+		uint32_t Capacity() {
+			return m_Capacity;
+		}
+
+		OrderedArray& Clear() {
+			if (m_Data) {
+				KeyType* keys = _Keys();
+				ValueType* values = _Values();
+				for (uint32_t i = 0; i < m_Size; i++) {
+					(&keys[i])->~KeyType();
+					(&values[i])->~ValueType();
+				}
+				free(m_Data);
+			}
+			m_Size = 0;
+			m_Capacity = 0;
+			m_Data = nullptr;
+			return* this;
+		}
+
+		OrderedArray& Reserve(uint32_t capacity) {
+			if (capacity <= m_Capacity) {
+				return *this;
+			}
+			uint8_t* temp = (uint8_t*)malloc(capacity * sizeof(KeyType) + capacity * sizeof(ValueType));
+			assert(temp && "allocation failed!");
+			if (m_Data) {
+				KeyType* keys = _Keys();
+				ValueType* values = _Values();
+				KeyType* newKeys = (KeyType*)temp;
+				ValueType* newValues = (ValueType*)(temp + capacity * sizeof(KeyType));
+				for (uint32_t i = 0; i < m_Size; i++) {
+					newKeys[i] = keys[i];
+					newValues[i] = values[i];
+				}
+			}	
+			free(m_Data);
+			m_Data = temp;
+			m_Capacity = capacity;
+			return *this;
+		}
+
+		bool Insert(const KeyType& key, const ValueType& value) {
+			if (!m_Data) {
+				Reserve(4);
+				*_Keys() = key;
+				*_Values() = value;
+				++m_Size;
+				return true;
+			}
+			if (m_Capacity == m_Size) {
+				Reserve(m_Capacity * 2);
+			}
+			int64_t index = _FindNewIndex(key);
+			if (index == -1) {
+				return false;
+			}
+			_InsertToIndex(key, value, index);
+			return true;
+		}
+
+		template<typename... Args>
+		bool Emplace(const KeyType& key, Args&&... args) {
+			if (!m_Data) {
+				Reserve(4);
+				*_Keys = key;
+				new(_Values()) ValueType(std::forward<Args>(args)...);
+				return true;
+			}
+			if (m_Capacity == m_Size) {
+				Reserve(m_Capacity * 2);
+			}
+			int64_t index = _FindNewIndex(key);
+			if (index == -1) {
+				return false;
+			}
+			ValueType value(std::forward<Args>(args)...);
+			_EmplaceToIndex(key, std::move(value), index);
+		}
+
+		bool Contains(const KeyType& key) {
+			return _FindIndex(key) != -1;
+		}
+
+		ValueType* Find(const KeyType& key) {
+			if (!m_Data) {
+				return nullptr;
+			}
+			uint32_t index = _FindIndex(key);
+			if (index == -1) {
+				return nullptr;
+			}
+			return _Values() + index;
+		}
+
+		KeyIterator KeysBegin() {
+			return _Keys();
+		}
+
+		ConstKeyIterator KeysBegin() const {
+			return _Keys();
+		}
+
+		ConstKeyIterator KeysEnd() const {
+			return _Keys() + m_Size;
+		}
+
+		ValueIterator ValuesBegin() {
+			return _Values();
+		}
+
+		ConstValueIterator ValuesBegin() const {
+			return _Values();
+		}
+
+		ConstValueIterator ValuesEnd() const {
+			return _Values() + m_Size;
+		}
+
+		ValueIterator begin() {
+			return ValuesBegin();
+		}
+
+		ConstValueIterator begin() const {
+			return ValuesBegin();
+		}
+
+		ConstValueIterator end() const {
+			return ValuesEnd();
+		}
+
+	private:
+
+		KeyType* _Keys() const {
+			return (KeyType*)m_Data;
+		}
+
+		ValueType* _Values() const {
+			return (ValueType*)(m_Data + m_Capacity * sizeof(KeyType));
+		}
+
+		int64_t _FindIndex(const KeyType& key) {
+			assert(m_Data);
+			KeyType* ptr = _Keys();
+			uint32_t left = 0;
+			uint32_t right = m_Size - 1;
+			uint32_t index = 0;
+			while (left <= right) {
+				index = (left + right) / 2;
+				if (ptr[index] < key) {
+					left = index + 1;
+					continue;
+				}
+				if (key < ptr[index]) {
+					right = index - 1;
+					continue;
+				}
+				return index;
+			}
+			return -1;
+		}
+	
+		int64_t _FindNewIndex(const KeyType& key) {
+			assert(m_Data);
+			KeyType* ptr = _Keys();
+			int64_t left = 0;
+			int64_t right = (int64_t)m_Size - 1;
+			uint32_t index = 0;
+			while (left <= right) {
+				index = (left + right) / 2;
+				if (ptr[index] < key) {
+					left = index + 1;
+					continue;
+				}
+				if (key < ptr[index]) {
+					right = (int64_t)index - 1;
+					continue;
+				}
+				return -1;
+			}
+			return left;
+		}
+
+		void _InsertToIndex(const KeyType& key, const ValueType& value, uint32_t index) {
+			assert(m_Data);
+			KeyType* keys = _Keys();
+			ValueType* values = _Values();
+			for (uint32_t i = m_Size; i > index; i--) {
+				new(&keys[i]) KeyType(std::move(keys[i - 1]));
+				new(&values[i]) ValueType(std::move(values[i - 1]));
+			}
+			new(&keys[index]) KeyType(key);
+			new(&values[index]) ValueType(value);
+			++m_Size;
+		}
+
+		void _EmplaceToIndex(const KeyType& key, ValueType&& value, uint32_t index) {
+			assert(m_Data);
+			KeyType* keys = _Keys();
+			ValueType* values = _Values();
+			for (uint32_t i = m_Size; i > index; i--) {
+				new(&keys[i]) KeyType(std::move(keys[i - 1]));
+				new(&values[i]) ValueType(std::move(values[i - 1]));
+			}
+			new(&keys[index]) KeyType(key);
+			new(&values[index]) ValueType(std::move(value));
+			++m_Size;
+		}
+	};
+
 	class String {
 	private:
 		
@@ -5698,6 +5940,12 @@ outColor = texture(image, inUV);
 			virtual void Terminate() = 0;
 		};
 
+		struct DebugRenderData {
+			MeshData m_MeshData{};
+			Mat4 m_Transform{};
+			Vec4 m_Color{};
+		};
+
 		struct TextureMap {
 
 			friend class World;
@@ -5753,6 +6001,7 @@ outColor = texture(image, inUV);
 		DynamicArray<WorldRenderData> m_RenderDatas{};
 		VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
 		DynamicArray<VkDescriptorSet> m_RenderPBRImagesDescriptorSets{};
+		DynamicArray<DebugRenderData> m_WireRenderDatas{};
 		UnidirectionalLight m_DirectionalLight;
 		MeshData m_StaticQuadMeshDataPBR{};
 	
@@ -5878,7 +6127,7 @@ outColor = texture(image, inUV);
 				return false;
 			}
 			if (!m_Renderer.AllocateDescriptorSets(nullptr, out.m_DescriptorPool, 1, 
-					&m_Pipelines.m_SingleTextureDescriptorSetLayoutPBR, &out.m_DescriptorSet)) {
+					&m_Pipelines.m_TextureDescriptorSetLayoutPBR, &out.m_DescriptorSet)) {
 				PrintError(ErrorOrigin::Renderer,
 					"failed to allocate descriptor set for texture map (function Renderer::AllocateDescriptorSets in function World::CreateTextureMap)!");
 				return false;
@@ -5912,6 +6161,10 @@ outColor = texture(image, inUV);
 		PersistentReference<WorldRenderData> AddRenderData(WorldRenderDataFlags flags, Obstacle& obstacle,
 				const Mat4& transform, const MeshData& meshData) {
 			return obstacle.AddRenderData(m_RenderDatas.EmplaceBack(obstacle.m_ObjectID, flags, Mat4(), meshData), transform);
+		}
+
+		void RenderWireMesh(const MeshData& mesh, const Mat4& transform, const Vec4& wireColor) {
+			m_WireRenderDatas.EmplaceBack(mesh, transform, wireColor);
 		}
 
 	private:
@@ -5973,18 +6226,17 @@ outColor = texture(image, inUV);
 					m_EditorCameraRotations.x = fmod(m_EditorCameraRotations.x, 2 * pi);
 					m_EditorCameraRotations.y = fmod(m_EditorCameraRotations.y, 2 * pi);
 				}
-				Mat4 rotMat 
-					= (Quaternion::AxisRotation(Vec3::Right(), m_EditorCameraRotations.x) 
-						* Quaternion::AxisRotation(Vec3::Up(), m_EditorCameraRotations.y)).
-						AsMat4();
+				Quaternion rightRot = Quaternion::AxisRotation(Vec3::Right(), m_EditorCameraRotations.x);
+				Quaternion upRot = Quaternion::AxisRotation(Vec3::Up(), m_EditorCameraRotations.y);
 				if (moved) {
 					float frameSpeed = m_EditorCameraSpeed * Time::DeltaTime();
 					float y = -movementVector.y * frameSpeed / 2;
 					movementVector.y = 0.0f;
 					movementVector = movementVector.Normalized() * frameSpeed;
-					movementVector = rotMat * movementVector;
+					movementVector = upRot.AsMat4() * movementVector;
 					m_EditorCameraPosition += movementVector + Vec3::Up(y);
 				}
+				Mat4 rotMat = (rightRot * upRot).AsMat4();
 				Vec3 front = rotMat * Vec3::Forward();
 				Vec3 up = rotMat * Vec3::Up();
 				Vec3 right = Cross(up, front).Normalized();
@@ -6007,8 +6259,10 @@ outColor = texture(image, inUV);
 			}
 		}
 
-		void RenderWorld(const Renderer::DrawData& drawData, bool inEditorMode) const {
+		void RenderWorld(const Renderer::DrawData& drawData, bool inEditorMode) {
+
 			*m_CameraMatricesMap = inEditorMode ? m_EditorCamera : m_GameCamera;
+
 			{
 
 				SetViewportToRenderResolution(drawData);
@@ -6105,30 +6359,7 @@ outColor = texture(image, inUV);
 
 			m_DirectionalLight.DepthDraw(drawData);
 
-			{
-				VkRenderingAttachmentInfo colorAttachment {
-					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-					.pNext = nullptr,
-					.imageView = drawData.m_SwapchainImageView,
-					.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-					.resolveMode = VK_RESOLVE_MODE_NONE,
-					.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-					.clearValue = { .color { .uint32 { 0, 0, 0, 0 } } },
-				};
-
-				VkRenderingInfo renderingInfo {
-					.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.renderArea = { .offset {}, .extent { m_Renderer.m_SwapchainExtent } },
-					.layerCount = 1,
-					.viewMask = 0,
-					.colorAttachmentCount = 1,
-					.pColorAttachments = &colorAttachment,
-					.pDepthAttachment = nullptr,
-				};
-
+			{	
 				static constexpr uint32_t image_count = 3;
 
 				VkImage images[image_count] {
@@ -6162,6 +6393,29 @@ outColor = texture(image, inUV);
 
 				vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
 					0, 0, nullptr, 0, nullptr, image_count, memoryBarriers);
+
+				VkRenderingAttachmentInfo colorAttachment {
+					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+					.pNext = nullptr,
+					.imageView = drawData.m_SwapchainImageView,
+					.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+					.resolveMode = VK_RESOLVE_MODE_NONE,
+					.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+					.clearValue = { .color { .uint32 { 0, 0, 0, 0 } } },
+				};
+
+				VkRenderingInfo renderingInfo {
+					.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.renderArea = { .offset {}, .extent { m_Renderer.m_SwapchainExtent } },
+					.layerCount = 1,
+					.viewMask = 0,
+					.colorAttachmentCount = 1,
+					.pColorAttachments = &colorAttachment,
+					.pDepthAttachment = nullptr,
+				};
 
 				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
 				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_RenderPipelinePBR);
@@ -6198,8 +6452,48 @@ outColor = texture(image, inUV);
 					};
 				}
 
-				vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
+				vkCmdPipelineBarrier(drawData.m_CommandBuffer, 
+					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
 					0, 0, nullptr, 0, nullptr, image_count, memoryBarriers);
+			}
+
+			{
+				VkRenderingAttachmentInfo colorAttachment {
+					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+					.pNext = nullptr,
+					.imageView = drawData.m_SwapchainImageView,
+					.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+					.resolveMode = VK_RESOLVE_MODE_NONE,
+					.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+					.clearValue = { .color { .uint32 { 0, 0, 0, 0 } } },
+				};
+
+				VkRenderingInfo renderingInfo {
+					.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.renderArea = { .offset {}, .extent { m_Renderer.m_SwapchainExtent } },
+					.layerCount = 1,
+					.viewMask = 0,
+					.colorAttachmentCount = 1,
+					.pColorAttachments = &colorAttachment,
+					.pDepthAttachment = nullptr,
+				};
+
+				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
+				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_WirePipeline);
+				vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugPipelineLayout, 0, 
+					1, &m_CameraMatricesDescriptorSet, 0, nullptr);
+				for (const DebugRenderData& renderData : m_WireRenderDatas) {
+					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
+						VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &renderData.m_Transform);
+					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
+						VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16, &renderData.m_Color);
+					Renderer::DrawIndexed(drawData.m_CommandBuffer, renderData.m_MeshData);
+				}
+				vkCmdEndRendering(drawData.m_CommandBuffer);
+				m_WireRenderDatas.Resize(0);
 			}
 		}
 
@@ -6353,7 +6647,11 @@ outColor = texture(image, inUV);
 		World& m_World;
 		Renderer& m_Renderer;
 
+		Vec4 m_WireColor = { 45.0f / 255, 173.0f / 255, 137.0f / 255, 1.0f };
+
 	private:
+		
+		MeshData m_CubeMeshData;
 
 		GLFWwindow* const m_GLFWwindow;
 
@@ -6375,8 +6673,7 @@ outColor = texture(image, inUV);
 		static constexpr void CheckVkResult(VkResult vkRes) {
 			if (vkRes != VK_SUCCESS) {
 				PrintError(ErrorOrigin::Vulkan,
-					"ImGui produced a vulkan error!", 
-					vkRes);
+					"ImGui produced a vulkan error!", vkRes);
 			}
 		}
 
@@ -6404,7 +6701,9 @@ outColor = texture(image, inUV);
 
 	private:
 
-		void Initialize(GLFWwindow* glfwWindow) {
+		void Initialize(GLFWwindow* glfwWindow, const MeshData& cubeMeshData) {
+
+			m_CubeMeshData = cubeMeshData;
 
 			IMGUI_CHECKVERSION();
 
@@ -6523,18 +6822,23 @@ outColor = texture(image, inUV);
 				else {
 					ImGuiStyle& style = ImGui::GetStyle();
 					Area& area = *m_InspectedArea;
-					bool buttonPressed = false;
+					bool buttonActive = false;
 					if (ImGui::CollapsingHeader("Obstacles", ImGuiTreeNodeFlags_DefaultOpen)) {
 						uint32_t index = 0;
 						for (const Obstacle& obstacle : area.m_Obstacles) {
 							ImGui::SetCursorPosX(style.ItemSpacing.x);
 							if (m_SelectedObjectIndex == index) {
+								Box<float> boundingBox = obstacle.GetBoundingBox();
+								Vec3 dimensions = boundingBox.Dimensions();
+								Vec3 obstaclePos = obstacle.GetPosition();
+								Mat4 transform(1);
+								transform[0] *= dimensions.x / 2;
+								transform[1] *= dimensions.y / 2;
+								transform[2] *= dimensions.z / 2;
+								transform[3] = Vec4(obstaclePos, 1.0f);
+								m_World.RenderWireMesh(m_CubeMeshData, transform, m_WireColor);
 								ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonHovered]);
 								if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(obstacle.m_ObjectID)).CString())) {
-									buttonPressed = true;
-									Box<float> boundingBox = obstacle.GetBoundingBox();
-									Vec3 dimensions = boundingBox.Dimensions();
-									Vec3 obstaclePos = obstacle.GetPosition();
 									Vec3 offset = Vec3(0.0f, boundingBox.m_Max.y + dimensions.y, boundingBox.m_Min.z - dimensions.z);
 									m_World.m_EditorCameraPosition = obstaclePos + offset;
 									m_World.m_EditorCameraPosition.y *= -1;
@@ -6543,21 +6847,20 @@ outColor = texture(image, inUV);
 									m_World.UpdateEditorCamera();
 								}
 								else if (ImGui::IsItemActive()) {
-									buttonPressed = true;
+									buttonActive = true;
 								}
 								ImGui::PopStyleColor();
 							}
 							else if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(obstacle.m_ObjectID)).CString())) {
-								buttonPressed = true;
 								m_SelectedObjectIndex = index;
 							}
 							else if (ImGui::IsItemActive()) {
-								buttonPressed = true;
+								buttonActive = true;
 							}
 							++index;
 						}
 					}
-					if (!buttonPressed && Input::WasMouseButtonPressed(MouseButton::Left)) {
+					if (!buttonActive && Input::WasMouseButtonPressed(MouseButton::Left)) {
 						m_SelectedObjectIndex = UINT32_MAX;
 					}
 				}
@@ -6626,6 +6929,8 @@ outColor = texture(image, inUV);
 
 		StaticMesh m_StaticQuadMesh;
 		StaticMesh m_StaticQuadMesh2D;
+
+		StaticMesh m_StaticBoxMesh;
 
 		static constexpr uint32_t quad_vertex_count = 4;
 
@@ -6744,7 +7049,7 @@ outColor = texture(image, inUV);
 			{
 				.m_Position { -1.0f, -1.0f, 1.0f },
 				.m_Normal { -1.0f, 0.0f, 0.0f },
-				.m_UV { 0.333333f, 0.0f },
+				.m_UV { 0.333333f, 1.0f },
 			},
 			{
 				.m_Position { -1.0f, 1.0f, 1.0f },
@@ -6821,7 +7126,8 @@ outColor = texture(image, inUV);
 				m_AssetManager(projectName, m_Renderer),
 				m_Editor(m_World, m_Renderer, glfwWindow),
 				m_StaticQuadMesh(m_Renderer),
-				m_StaticQuadMesh2D(m_Renderer)
+				m_StaticQuadMesh2D(m_Renderer),
+				m_StaticBoxMesh(m_Renderer)
 		{
 
 			Input input(glfwWindow);
@@ -6833,6 +7139,10 @@ outColor = texture(image, inUV);
 			if (!m_StaticQuadMesh2D.CreateBuffers(quad_vertex_count, quad_vertices_2D, quad_index_count, quad_indices)) {
 				CriticalError(ErrorOrigin::Engine, 
 					"failed to create static 2D quad mesh (function StaticMesh::CreateBuffers in Engine constructor)!");
+			}
+			if (!m_StaticBoxMesh.CreateBuffers(box_vertex_count, box_vertices, box_index_count, box_indices)) {
+				CriticalError(ErrorOrigin::Engine, 
+					"failed to create static box mesh (function StaticMesh::CreateBuffers in Engine constructor)!");
 			}
 
 			const VkFormat fontAtlasFormatCandidates[1] { VK_FORMAT_R8_SRGB, };
@@ -6857,7 +7167,7 @@ outColor = texture(image, inUV);
 
 			m_World.Initialize(m_StaticQuadMesh2D);
 			m_UI.Initialize(m_StaticQuadMesh2D);
-			m_Editor.Initialize(glfwWindow);
+			m_Editor.Initialize(glfwWindow, m_StaticBoxMesh.GetMeshData());
 		}
 
 		Engine(const Engine&) = delete;
@@ -6867,6 +7177,7 @@ outColor = texture(image, inUV);
 			m_World.Terminate();
 			m_StaticQuadMesh.Terminate();
 			m_StaticQuadMesh2D.Terminate();
+			m_StaticBoxMesh.Terminate();
 			m_UI.Terminate();
 			m_Editor.Terminate();
 			m_Renderer.DestroySampler(FontAtlas::s_Sampler);
@@ -6959,6 +7270,9 @@ outColor = texture(image, inUV);
 					m_Editor.Render(drawData);
 				}
 				m_Renderer.EndFrame(0, nullptr);
+			}
+			else {
+				ImGui::EndFrame();
 			}
 
 			Input::ResetInput();
