@@ -20,12 +20,12 @@ namespace pipelines {
 		VkPipeline m_RenderPipelinePBR = VK_NULL_HANDLE;
 		VkPipelineLayout m_RenderPipelineLayoutPBR = VK_NULL_HANDLE;
 
-		VkPipeline m_DebugPipeline = VK_NULL_HANDLE;
+		VkPipeline m_WirePipeline = VK_NULL_HANDLE;
 		VkPipelineLayout m_DebugPipelineLayout = VK_NULL_HANDLE;
 
 		VkDescriptorSetLayout m_DirectionalLightShadowMapDescriptorSetLayout = VK_NULL_HANDLE;
 		VkDescriptorSetLayout m_CameraDescriptorSetLayout = VK_NULL_HANDLE;
-		VkDescriptorSetLayout m_SingleTextureDescriptorSetLayoutPBR = VK_NULL_HANDLE;
+		VkDescriptorSetLayout m_TextureDescriptorSetLayoutPBR = VK_NULL_HANDLE;
 		VkDescriptorSetLayout m_RenderPBRImagesDescriptorSetLayout = VK_NULL_HANDLE;
 
 		void Initialize(engine::Renderer& renderer, VkFormat colorImageResourceFormat);
@@ -34,14 +34,14 @@ namespace pipelines {
 			renderer.DestroyDescriptorSetLayout(m_CameraDescriptorSetLayout);
 			renderer.DestroyDescriptorSetLayout(m_RenderPBRImagesDescriptorSetLayout);
 			renderer.DestroyDescriptorSetLayout(m_DirectionalLightShadowMapDescriptorSetLayout);
-			renderer.DestroyDescriptorSetLayout(m_SingleTextureDescriptorSetLayoutPBR);
+			renderer.DestroyDescriptorSetLayout(m_TextureDescriptorSetLayoutPBR);
 			renderer.DestroyPipeline(m_DrawPipelinePBR);
 			renderer.DestroyPipelineLayout(m_DrawPipelineLayoutPBR);
 			renderer.DestroyPipeline(m_DrawPipelineUD);
 			renderer.DestroyPipelineLayout(m_DrawPipelineLayoutUD);
 			renderer.DestroyPipeline(m_RenderPipelinePBR);
 			renderer.DestroyPipelineLayout(m_RenderPipelineLayoutPBR);
-			renderer.DestroyPipeline(m_DebugPipeline);
+			renderer.DestroyPipeline(m_WirePipeline);
 			renderer.DestroyPipelineLayout(m_DebugPipelineLayout);
 		}
 	};	
