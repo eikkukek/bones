@@ -21,9 +21,9 @@ namespace pipelines {
 		static constexpr VkDescriptorSetLayoutBinding texture_descriptor_set_layout_binding
 			= Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT);
 
-		m_SingleTextureDescriptorSetLayoutPBR = renderer.CreateDescriptorSetLayout(nullptr, 1, &texture_descriptor_set_layout_binding);
+		m_TextureDescriptorSetLayoutPBR = renderer.CreateDescriptorSetLayout(nullptr, 1, &texture_descriptor_set_layout_binding);
 
-		if (m_SingleTextureDescriptorSetLayoutPBR == VK_NULL_HANDLE) {
+		if (m_TextureDescriptorSetLayoutPBR == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
 				"failed to create albedo descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
 		}
@@ -36,7 +36,7 @@ namespace pipelines {
 
 		const VkDescriptorSetLayout drawPbrDescriptorSetLayouts[2] {
 			m_CameraDescriptorSetLayout,
-			m_SingleTextureDescriptorSetLayoutPBR,
+			m_TextureDescriptorSetLayoutPBR,
 		};
 
 		m_DrawPipelineLayoutPBR 
@@ -193,8 +193,8 @@ namespace pipelines {
 		debugPipelineColorBlendState.attachmentCount = 1;
 		debugPipelineColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
 
-		VkPipelineRasterizationStateCreateInfo debugPipelineRasterizationState = Renderer::GraphicsPipelineDefaults::rasterization_state;
-		debugPipelineRasterizationState.polygonMode = VK_POLYGON_MODE_LINE;
+		VkPipelineRasterizationStateCreateInfo wirePipelineRasterizationState = Renderer::GraphicsPipelineDefaults::rasterization_state;
+		wirePipelineRasterizationState.polygonMode = VK_POLYGON_MODE_LINE;
 
 		static constexpr uint32_t pipeline_count = 4;
 
@@ -269,7 +269,7 @@ namespace pipelines {
 				.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
 				.pTessellationState = nullptr,
 				.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
-				.pRasterizationState = &debugPipelineRasterizationState,
+				.pRasterizationState = &wirePipelineRasterizationState,
 				.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
 				.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
 				.pColorBlendState = &debugPipelineColorBlendState,
@@ -292,6 +292,6 @@ namespace pipelines {
 		m_DrawPipelinePBR = pipelines[0];
 		m_DrawPipelineUD = pipelines[1];
 		m_RenderPipelinePBR = pipelines[2];
-		m_DebugPipeline = pipelines[3];
+		m_WirePipeline = pipelines[3];
 	}
 }
