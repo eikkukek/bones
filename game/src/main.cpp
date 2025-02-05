@@ -150,6 +150,10 @@ public:
 int main() {
 	using namespace engine;
 
+	for (int value : array) {
+		fmt::print("{}\n", value);
+	}
+
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
@@ -190,6 +194,12 @@ int main() {
 
 	PersistentReference<Area> area = world.AddArea(AreaFlag_NoSave);
 
+	StaticMesh cubeMesh(renderer);
+	Array<Vertex, Engine::GetBoxVertexCount()> cubeVertices;
+	Array<uint32_t, Engine::GetBoxIndexCount()> cubeIndices;
+	Engine::GetBoxMesh(cubeVertices, cubeIndices);
+	cubeMesh.CreateBuffers(cubeVertices.Size(), cubeVertices.Data(), cubeIndices.Size(), cubeIndices.Data());
+
 	Engine::GetQuadMesh(quadVertices, quadIndices);
 
 	LogicMesh logicQuadMesh(quadVertices, quadIndices);
@@ -198,7 +208,7 @@ int main() {
 		"Obstacle",
 		{
 			.m_Position { 0, 0, 0 },
-			.m_YRotation = pi / 2,
+			.m_YRotation = pi / 4,
 			.m_ColliderInfo {
 				.m_LocalPosition = {},
 				.m_Type = Collider::Type::Fence,
@@ -211,6 +221,9 @@ int main() {
 			}
 		}
 	);
+
+	auto obstacleRenderData = world.AddRenderData(WorldRenderDataFlag_NoSave, *obstacle, Mat4(1), cubeMesh.GetMeshData());
+	(*obstacleRenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 
 	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), -pi / 2).AsMat4();
 
@@ -237,39 +250,11 @@ int main() {
 	fclose(fileStream);
 
 	/*
-
-	DynamicArray<uint32_t> cubeIndices{};
-	DynamicArray<Vertex> cubeVertices{};
-
-	assert(cubeObj.GetMesh(Vertex::SetPosition, Vertex::SetUV, 
-		Vertex::SetNormal, cubeVertices, cubeIndices));	
-
-	fmt::print("vertices:\n");
-	uint32_t index = 0;
-	for (const Vertex& vertex : cubeVertices) {
-		fmt::print("{}:\n", index++);
-		fmt::print("Position: {} {} {}\nNormal: {} {} {}\nUV: {} {}\n",
-			vertex.m_Position.x, vertex.m_Position.y, vertex.m_Position.z,
-			vertex.m_Normal.x, vertex.m_Normal.y, vertex.m_Normal.z,
-			vertex.m_UV.x, vertex.m_UV.y);
-	}
-	*/
-
-	StaticMesh cubeMesh(renderer);
-	Array<Vertex, Engine::GetBoxVertexCount()> cubeVertices;
-	Array<uint32_t, Engine::GetBoxIndexCount()> cubeIndices;
-	Engine::GetBoxMesh(cubeVertices, cubeIndices);
-	cubeMesh.CreateBuffers(cubeVertices.Size(), cubeVertices.Data(), cubeIndices.Size(), cubeIndices.Data());
-
-	auto obstacleRenderData = world.AddRenderData(WorldRenderDataFlag_NoSave, *obstacle, Mat4(1), cubeMesh.GetMeshData());
-	(*obstacleRenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
-
 	Player player(world, cubeMesh);
 	(*player.m_RenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 
 	world.AddEntity(&player);
-
-	//NPC npc(world, playerMesh);
+	*/
 
 	Editor& editor = engine.GetEditor();
 
@@ -284,7 +269,7 @@ int main() {
 	inputText.Terminate();
 	world.DestroyTextureMap(textureMap);
 	brickWallTexture.Terminate();
-	player.m_Mesh.Terminate();
+	//player.m_Mesh.Terminate();
 	glfwTerminate();
 	fontAtlas.Terminate();
 	textRenderer.DestroyGlyphAtlas(atlas);
