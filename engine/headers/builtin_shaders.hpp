@@ -4,6 +4,7 @@ namespace shaders {
 
 	class World {
 	public:
+
 		static constexpr const char* pbr_draw_pipeline_vertex_shader = R"(
 #version 450
 
@@ -74,7 +75,7 @@ layout(location = 3) in vec3 inTangent;
 layout(location = 4) in vec3 inBitangent;
 
 layout(push_constant) uniform PushConstant {
-layout(offset = 0)
+	layout(offset = 0)
 	mat4 c_LightView;
 	mat4 c_Transform;
 } pc;
@@ -173,7 +174,7 @@ layout(push_constant) uniform PushConstant {
 } pc;
 
 void main() {
-	gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(inPosition, 1.0f);
+	gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(inPosition.x, -inPosition.y, inPosition.z, 1.0f);
 }
 			)";
 
@@ -183,7 +184,8 @@ void main() {
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform PushConstant {
-	layout(offset = 64) vec4 c_Color;
+	layout(offset = 64)
+	vec4 c_Color;
 } pc;
 
 void main() {
