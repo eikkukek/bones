@@ -1274,7 +1274,7 @@ namespace engine {
 					if (!timelineSemaphoreExtensionFound && !strcmp(extension.extensionName, vulkan_timeline_semaphore_extension_name)) {
 						timelineSemaphoreExtensionFound = true;
 						continue;
-					}	
+					}
 				}
 				m_SingleThreadStack.Deallocate<VkExtensionProperties>(deviceExtensions.m_Size);
 				if (!dynamicRenderingExtensionFound || !timelineSemaphoreExtensionFound) {
