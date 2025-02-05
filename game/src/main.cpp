@@ -236,13 +236,29 @@ int main() {
 	assert(cubeObj.Load(fileStream));
 	fclose(fileStream);
 
+	/*
+
 	DynamicArray<uint32_t> cubeIndices{};
 	DynamicArray<Vertex> cubeVertices{};
 
 	assert(cubeObj.GetMesh(Vertex::SetPosition, Vertex::SetUV, 
 		Vertex::SetNormal, cubeVertices, cubeIndices));	
 
+	fmt::print("vertices:\n");
+	uint32_t index = 0;
+	for (const Vertex& vertex : cubeVertices) {
+		fmt::print("{}:\n", index++);
+		fmt::print("Position: {} {} {}\nNormal: {} {} {}\nUV: {} {}\n",
+			vertex.m_Position.x, vertex.m_Position.y, vertex.m_Position.z,
+			vertex.m_Normal.x, vertex.m_Normal.y, vertex.m_Normal.z,
+			vertex.m_UV.x, vertex.m_UV.y);
+	}
+	*/
+
 	StaticMesh cubeMesh(renderer);
+	Array<Vertex, Engine::GetBoxVertexCount()> cubeVertices;
+	Array<uint32_t, Engine::GetBoxIndexCount()> cubeIndices;
+	Engine::GetBoxMesh(cubeVertices, cubeIndices);
 	cubeMesh.CreateBuffers(cubeVertices.Size(), cubeVertices.Data(), cubeIndices.Size(), cubeIndices.Data());
 
 	auto obstacleRenderData = world.AddRenderData(WorldRenderDataFlag_NoSave, *obstacle, Mat4(1), cubeMesh.GetMeshData());
