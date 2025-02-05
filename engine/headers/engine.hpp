@@ -830,42 +830,57 @@ namespace engine {
 			return *this;
 		}
 
-		bool Insert(const KeyType& key, const ValueType& value) {
+		ValueType* Insert(const KeyType& key, const ValueType& value) {
 			if (!m_Data) {
 				Reserve(4);
 				*_Keys() = key;
-				*_Values() = value;
+				ValueType* values = _Values();
+				*values = value;
 				++m_Size;
-				return true;
+				return values;
 			}
 			if (m_Capacity == m_Size) {
 				Reserve(m_Capacity * 2);
 			}
 			int64_t index = _FindNewIndex(key);
 			if (index == -1) {
-				return false;
+				return nullptr;
 			}
-			_InsertToIndex(key, value, index);
-			return true;
+			return _InsertToIndex(index, key, value);
 		}
 
 		template<typename... Args>
-		bool Emplace(const KeyType& key, Args&&... args) {
+		ValueType* Emplace(const KeyType& key, Args&&... args) {
 			if (!m_Data) {
 				Reserve(4);
-				*_Keys = key;
-				new(_Values()) ValueType(std::forward<Args>(args)...);
-				return true;
+				*_Keys() = key;
+				ValueType* values = _Values();
+				new(values) ValueType(std::forward<Args>(args)...);
+				++m_Size;
+				return values;
 			}
 			if (m_Capacity == m_Size) {
 				Reserve(m_Capacity * 2);
 			}
 			int64_t index = _FindNewIndex(key);
 			if (index == -1) {
+				return nullptr;
+			}
+			return _EmplaceToIndex(index, key, std::forward<Args>(args)...);
+		}
+
+		bool Erase(const KeyType& key) {
+			if (!m_Data) {
 				return false;
 			}
-			ValueType value(std::forward<Args>(args)...);
-			_EmplaceToIndex(key, std::move(value), index);
+			int64_t index = _FindIndex(key);
+			if (index == -1) {
+				return false;
+			}
+			KeyType* keys = _Keys();
+			ValueType* values = _Values();
+			(&keys[index])->~KeyType();
+			(&values[index])->~ValueType();
 		}
 
 		bool Contains(const KeyType& key) {
@@ -971,7 +986,7 @@ namespace engine {
 			return left;
 		}
 
-		void _InsertToIndex(const KeyType& key, const ValueType& value, uint32_t index) {
+		ValueType* _InsertToIndex(uint32_t index, const KeyType& key, const ValueType& value) {
 			assert(m_Data);
 			KeyType* keys = _Keys();
 			ValueType* values = _Values();
@@ -979,12 +994,15 @@ namespace engine {
 				new(&keys[i]) KeyType(std::move(keys[i - 1]));
 				new(&values[i]) ValueType(std::move(values[i - 1]));
 			}
+			ValueType& newValue = values[index];
 			new(&keys[index]) KeyType(key);
-			new(&values[index]) ValueType(value);
+			new(&newValue) ValueType(value);
 			++m_Size;
+			return newValue;
 		}
 
-		void _EmplaceToIndex(const KeyType& key, ValueType&& value, uint32_t index) {
+		template<typename... Args>
+		ValueType* _EmplaceToIndex(uint32_t index, const KeyType& key, Args&&... args) {
 			assert(m_Data);
 			KeyType* keys = _Keys();
 			ValueType* values = _Values();
@@ -992,9 +1010,11 @@ namespace engine {
 				new(&keys[i]) KeyType(std::move(keys[i - 1]));
 				new(&values[i]) ValueType(std::move(values[i - 1]));
 			}
+			ValueType& newValue = values[index];
 			new(&keys[index]) KeyType(key);
-			new(&values[index]) ValueType(std::move(value));
+			new(&newValue) ValueType(std::forward<Args>(args)...);
 			++m_Size;
+			return newValue;
 		}
 	};
 
@@ -3493,123 +3513,6 @@ namespace engine {
 			}
 	};
 
-	template<typename T>
-	struct PersistentReferenceHolder;
-
-	template<typename T>
-	class PersistentReference {
-	public:
-
-		static_assert(std::is_base_of<PersistentReferenceHolder<T>, T>());
-
-		T* m_Val;
-
-		PersistentReference() noexcept : m_Val(nullptr) {}
-
-		PersistentReference(T& val) noexcept : m_Val(&val) {
-			m_Val->AddPersistentReference(this);
-		}
-
-		PersistentReference(const PersistentReference& other) noexcept : m_Val(other.m_Val) {
-			if (m_Val) {
-				m_Val->AddPersistentReference(this);
-			}
-		}
-
-		~PersistentReference() {
-			RemoveReference();
-		}
-
-		bool IsNull() const {
-			return !m_Val;
-		}
-
-		void SetReference(T& val) {
-			RemoveReference();
-			m_Val = &val;
-			m_Val->AddPersistentReference(this);
-		}
-
-		void RemoveReference() {
-			if (m_Val) {
-				m_Val->RemovePersistentReference(this);
-				m_Val = nullptr;
-			}
-		}
-		
-		T& operator*() {
-			if (!m_Val) {
-				CriticalError(ErrorOrigin::NullDereference,
-					"attempting to deference null reference (in PersistentReference::operator*)");
-			}
-			return *m_Val;
-		}
-
-		const T& operator*() const {
-			if (!m_Val) {
-				CriticalError(ErrorOrigin::NullDereference,
-					"attempting to deference null reference (in PersistentReference::operator*)");
-			}
-			return *m_Val;
-		}
-	};
-
-	template<typename T>
-	class PersistentReferenceHolder {
-
-		typedef T Derived;
-	
-		friend class PersistentReference<T>;
-			
-	private:
-
-		DynamicArray<PersistentReference<T>*> m_PersistentReferences;
-
-	protected:
-
-		PersistentReferenceHolder() : m_PersistentReferences() {
-			m_PersistentReferences.Reserve(4);
-		}
-
-		PersistentReferenceHolder(PersistentReferenceHolder&& other) 
-			: m_PersistentReferences(std::move(other.m_PersistentReferences)) {
-			for (PersistentReference<T>* reference : m_PersistentReferences) {
-				assert(reference);
-				reference->m_Val = (T*)this;
-			}
-		}
-
-		virtual ~PersistentReferenceHolder() {
-			for (PersistentReference<T>* reference : m_PersistentReferences) {
-				assert(reference);
-				reference->m_Val = nullptr;
-			}
-		}
-
-	public:
-
-		bool AddPersistentReference(PersistentReference<T>* reference) {
-			if (reference) {
-				m_PersistentReferences.PushBack(reference);
-				return true;
-			}
-			return false;
-		}
-
-		bool RemovePersistentReference(PersistentReference<T>* reference) {
-			if (reference) {
-				auto end = m_PersistentReferences.end();
-				for (auto iter = m_PersistentReferences.begin(); iter != end; iter++) {
-					if (*iter == reference) {
-						m_PersistentReferences.Erase(iter);
-						return true;
-					}
-				}
-			}
-			return false;
-		}
-	};
-
 	class UI {
 
 		friend class Engine;
@@ -5117,24 +5020,26 @@ outColor = texture(image, inUV);
 
 	typedef uint32_t WorldRenderDataFlags;
 
-	struct WorldRenderData : PersistentReferenceHolder<WorldRenderData> {
+	struct WorldRenderData {
 
-		WorldRenderDataFlags m_FLags;
-		const uint64_t m_ObjectID;
+		WorldRenderDataFlags m_Flags;
+		const uint64_t m_DataID;
+
+		const uint64_t m_ParentID;
 
 		VkDescriptorSet m_AlbedoTextureDescriptorSet = VK_NULL_HANDLE;
 		Mat4 m_Transform{};
 		MeshData m_MeshData{};
 
-		WorldRenderData(uint64_t objectID, WorldRenderDataFlags flags, const Mat4& transform, const MeshData& meshData) noexcept
-			: PersistentReferenceHolder<WorldRenderData>(), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
+		WorldRenderData(uint64_t dataID, uint64_t parentID, WorldRenderDataFlags flags, const Mat4& transform, const MeshData& meshData) noexcept
+			: m_Flags(flags), m_DataID(dataID), m_ParentID(parentID), m_Transform(transform), m_MeshData(meshData) {}
 
 		WorldRenderData(const WorldRenderData&) = delete;
 
 		WorldRenderData(WorldRenderData&& other) noexcept = default;
 	};
 
-	class RayTarget : public PersistentReferenceHolder<RayTarget> {
+	class RayTarget {
 
 		friend class World;
 		friend class DynamicArray<RayTarget>;
@@ -5153,7 +5058,7 @@ outColor = texture(image, inUV);
 		Mat4 m_Transform;
 
 		RayTarget(uint64_t objectID, const CreateInfo& createInfo) 
-			: PersistentReferenceHolder<RayTarget>() , m_ObjectID(objectID), 
+			: m_ObjectID(objectID), 
 				m_LogicMesh(createInfo.m_LogicMesh), m_Transform(createInfo.m_Transform) {
 			m_LogicMesh.UpdateTransform(m_Transform);
 		}
@@ -5185,7 +5090,7 @@ outColor = texture(image, inUV);
 		}
 	};
 
-	class Obstacle : public PersistentReferenceHolder<Obstacle> {
+	class Obstacle {
 
 		friend class World;
 		friend class Area;
@@ -5210,11 +5115,10 @@ outColor = texture(image, inUV);
 		Collider m_Collider;
 
 		Mat4 m_Transform;
-		DynamicArray<PersistentReference<WorldRenderData>> m_RenderDatas{};
-		DynamicArray<Mat4> m_Transforms{};
+		OrderedArray<uint64_t, Mat4> m_RenderDatas{};
 
 		Obstacle(const char* name, uint64_t objectID, const CreateInfo& info) noexcept 
-			: PersistentReferenceHolder<Obstacle>(), m_Name(name), m_ObjectID(objectID), m_Position(info.m_Position),
+			: m_Name(name), m_ObjectID(objectID), m_Position(info.m_Position),
 				m_YRotation(info.m_YRotation), m_Collider(m_Position, m_YRotation, m_Velocity, info.m_ColliderInfo),
 				m_Transform(Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4()) {
 			m_Transform[3] = Vec4(m_Position, 1.0f);
@@ -5262,40 +5166,23 @@ outColor = texture(image, inUV);
 
 	private:
 
-		WorldRenderData& AddRenderData(WorldRenderData& renderData, const Mat4& transform) {
-			auto& data = m_RenderDatas.EmplaceBack(renderData);
-			m_Transforms.PushBack(transform);
-			(*data).m_Transform = m_Transform * transform;
-			return renderData;
+		uint64_t AddRenderData(WorldRenderData& renderData, const Mat4& transform) {
+			m_RenderDatas.Insert(renderData.m_DataID, transform);
+			return renderData.m_DataID;
 		}
 
 		bool RemoveRenderData(WorldRenderData& renderData) {
-			uint32_t index = 0;
-			uint32_t renderDataCount = m_RenderDatas.Size();
-			for (; index < renderDataCount; index++) {
-				auto& ref = m_RenderDatas[index];
-				assert(!ref.IsNull());
-				if ((*ref).m_ObjectID == renderData.m_ObjectID) {
-					break;
-				}
-			}
-			if (index == renderDataCount) {
-				return false;
-			}
-			m_RenderDatas.Erase(m_RenderDatas.begin() + index);
-			m_Transforms.Erase(m_Transforms.begin() + index);
-			return true;
+			return m_RenderDatas.Erase(renderData.m_DataID);
 		}
 
 		void UpdateTransforms() {
 			m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
 			m_Transform[3] = Vec4(m_Position, 1.0f);
 			uint32_t renderDataCount = m_RenderDatas.Size();
-			assert(renderDataCount == m_Transforms.Size());
+			uint64_t* keyIter = m_RenderDatas.KeysBegin();
+			Mat4* valueIter = m_RenderDatas.ValuesBegin();
 			for (uint32_t i = 0; i < renderDataCount; i++) {
-				auto& ref = m_RenderDatas[i];
-				assert(!ref.IsNull());
-				(*ref).m_Transform = m_Transform * m_Transforms[i];
+				(*ref).m_Transform = m_Transform * valueIter[i];
 			}
 		}
 	};
@@ -5998,7 +5885,7 @@ outColor = texture(image, inUV);
 		pipelines::World m_Pipelines{};
 		CameraMatricesBuffer m_EditorCamera{};
 		CameraMatricesBuffer m_GameCamera{};
-		DynamicArray<WorldRenderData> m_RenderDatas{};
+		OrderedArray<uint64_t, WorldRenderData> m_RenderDatas{};
 		VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
 		DynamicArray<VkDescriptorSet> m_RenderPBRImagesDescriptorSets{};
 		DynamicArray<DebugRenderData> m_WireRenderDatas{};
