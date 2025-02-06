@@ -780,16 +780,60 @@ namespace engine {
 			Reserve(capacity);
 		}
 
+		OrderedArray(const OrderedArray& other) 
+			: m_Size(0), m_Capacity(0), m_Data(nullptr) {
+			if (!other.m_Data) {
+				return;
+			}
+			Reserve(other.m_Capacity);
+			const KeyType* otherKeys = other._Keys();
+			const ValueType* otherValues = other._Values();
+			KeyType* thisKeys = _Keys();
+			ValueType* thisValues = _Values();
+			m_Size = other.m_Size;
+			for (uint32_t i = 0; i < m_Size; i++) {
+				thisKeys[i] = otherKeys[i];
+				thisValues[i] = otherValues[i];
+			}
+		}
+
+		OrderedArray(OrderedArray&& other) 
+			: m_Size(other.m_Size), m_Capacity(other.m_Capacity), m_Data(other.m_Data) {
+			other.m_Size = 0;
+			other.m_Capacity = 0;
+			other.m_Data = nullptr;
+		}
+
+		OrderedArray& operator=(const OrderedArray& other) {
+			Clear();
+			if (!other.m_Data) {
+				return *this;
+			}
+			Reserve(other.m_Capacity);
+			const KeyType* otherKeys = other._Keys();
+			const ValueType* otherValues = other._Values();
+			KeyType* thisKeys = _Keys();
+			ValueType* thisValues = _Values();
+			m_Size = other.m_Size;
+			for (uint32_t i = 0; i < m_Size; i++) {
+				thisKeys[i] = otherKeys[i];
+				thisValues[i] = otherValues[i];
+			}
+			return *this;
+		}
+
+		OrderedArray& operator=(OrderedArray&& other) {
+			Clear();
+			m_Size = other.m_Size;
+			m_Capacity = other.m_Capacity;
+			m_Data = other.m_Data;
+			other.m_Size = 0;
+			other.m_Capacity = 0;
+			return *this;
+		}
+
 		~OrderedArray() {
 			Clear();
-		}
-
-		uint32_t Size() {
-			return m_Size;
-		}
-
-		uint32_t Capacity() {
-			return m_Capacity;
 		}
 
 		OrderedArray& Clear() {
@@ -808,6 +852,14 @@ namespace engine {
 			return* this;
 		}
 
+		uint32_t Size() {
+			return m_Size;
+		}
+
+		uint32_t Capacity() {
+			return m_Capacity;
+		}	
+
 		OrderedArray& Reserve(uint32_t capacity) {
 			if (capacity <= m_Capacity) {
 				return *this;
@@ -820,8 +872,8 @@ namespace engine {
 				KeyType* newKeys = (KeyType*)temp;
 				ValueType* newValues = (ValueType*)(temp + capacity * sizeof(KeyType));
 				for (uint32_t i = 0; i < m_Size; i++) {
-					newKeys[i] = keys[i];
-					newValues[i] = values[i];
+					new(&newKeys[i]) KeyType(std::move(keys[i]));
+					new(&newValues[i]) ValueType(std::move(values[i]));
 				}
 			}	
 			free(m_Data);
@@ -896,6 +948,18 @@ namespace engine {
 				return nullptr;
 			}
 			return _Values() + index;
+		}
+
+		const KeyType* GetKeys() const {
+			return _Keys();
+		}
+
+		const ValueType* GetValues() const {
+			return _Values();
+		}
+
+		ValueType* GetValues() {
+			return _Values();
 		}
 
 		KeyIterator KeysBegin() {
@@ -998,7 +1062,7 @@ namespace engine {
 			new(&keys[index]) KeyType(key);
 			new(&newValue) ValueType(value);
 			++m_Size;
-			return newValue;
+			return &newValue;
 		}
 
 		template<typename... Args>
@@ -1014,7 +1078,7 @@ namespace engine {
 			new(&keys[index]) KeyType(key);
 			new(&newValue) ValueType(std::forward<Args>(args)...);
 			++m_Size;
-			return newValue;
+			return &newValue;
 		}
 	};
 
@@ -5017,6 +5081,8 @@ outColor = texture(image, inUV);
 	typedef uint64_t ObjectID;
 	typedef uint64_t RenderID;
 
+	constexpr inline uint64_t Invalid_ID = UINT64_MAX;
+
 	enum WorldRenderDataFlagBits {
 		WorldRenderDataFlag_NoSave = 1,
 	};
@@ -5027,74 +5093,23 @@ outColor = texture(image, inUV);
 
 		WorldRenderDataFlags m_Flags;
 
-		const ObjectID m_ObjectID;
-
 		VkDescriptorSet m_AlbedoTextureDescriptorSet = VK_NULL_HANDLE;
 		Mat4 m_Transform{};
 		MeshData m_MeshData{};
 
-		WorldRenderData(uint64_t objectID, WorldRenderDataFlags flags, const Mat4& transform, const MeshData& meshData) noexcept
-			: m_Flags(flags), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
+		WorldRenderData(WorldRenderDataFlags flags, const Mat4& transform, const MeshData& meshData) noexcept
+			: m_Flags(flags), m_Transform(transform), m_MeshData(meshData) {}
 
 		WorldRenderData(const WorldRenderData&) = delete;
 
 		WorldRenderData(WorldRenderData&& other) noexcept = default;
 	};
 
-	class RayTarget {
-
-		friend class World;
-		friend class DynamicArray<RayTarget>;
-
-	public:
-		
-		struct CreateInfo {
-			const LogicMesh& m_LogicMesh;
-			Mat4 m_Transform;
-		};
-
-	private:
-
-		LogicMesh m_LogicMesh;
-		Mat4 m_Transform;
-
-		RayTarget(const CreateInfo& createInfo) 
-			: m_LogicMesh(createInfo.m_LogicMesh), m_Transform(createInfo.m_Transform) {
-				m_LogicMesh.UpdateTransform(m_Transform);
-		}
-		
-		RayTarget(const RayTarget &) = delete;
-		RayTarget(RayTarget&&) = default;
-
-	public:
-
-		bool AABBCheck(const Vec3& position) const {
-			return m_LogicMesh.AABBCheck(position);
-		}
-
-		bool AABBCheck(const Ray& ray) const {
-			return m_LogicMesh.AABBCheck(ray);
-		}
-
-		Box<float> GetBoundingBox() const {
-			return m_LogicMesh.GetBoundingBox();
-		}
-
-		bool RayCheck(const Ray& ray, RayHitInfo& outHitInfo) const {
-			return m_LogicMesh.IsRayHit(ray, outHitInfo);
-		}
-
-		void UpdateTransform(const Mat4& transform) {
-			m_Transform = transform;
-			m_LogicMesh.UpdateTransform(m_Transform);
-		}
-	};
-
 	class Obstacle {
 
 		friend class World;
 		friend class Area;
-		friend class DynamicArray<Obstacle>;
+		friend class OrderedArray<ObjectID, Obstacle>;
 
 	public:
 
@@ -5116,7 +5131,7 @@ outColor = texture(image, inUV);
 		Collider m_Collider;
 
 		Mat4 m_Transform;
-		OrderedArray<RenderID, Mat4> m_RenderDatas{};
+		OrderedArray<RenderID, Mat4> m_RenderDataTransforms{};
 
 		Obstacle(World& world, const char* name, const CreateInfo& info) noexcept 
 			: m_World(world), m_Name(name), m_Position(info.m_Position),
@@ -5131,7 +5146,7 @@ outColor = texture(image, inUV);
 			: m_World(other.m_World), m_Name(std::move(other.m_Name)),
 				m_Position(other.m_Position), m_YRotation(other.m_YRotation), 
 				m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)),
-				m_Transform(other.m_Transform), m_RenderDatas(std::move(other.m_RenderDatas)) {}
+				m_Transform(other.m_Transform), m_RenderDataTransforms(std::move(other.m_RenderDataTransforms)) {}
 
 		bool Collides(const Collider& collider, Vec3& outColliderPushBack) const {
 			return Collider::ColliderToStaticColliderCollides(collider, m_Collider, outColliderPushBack);
@@ -5169,15 +5184,90 @@ outColor = texture(image, inUV);
 
 	private:
 
-		bool AddRenderData(RenderID ID, const Mat4& transform) {
-			return m_RenderDatas.Insert(ID, transform);
+		bool AddRenderDataTransform(RenderID ID, const Mat4& transform) {
+			bool res = m_RenderDataTransforms.Insert(ID, transform);
+			if (res) {
+				assert(UpdateRenderTransform(ID));
+			}
+			return res;
 		}
+
+		bool RemoveRenderDataTransform(RenderID ID) {
+			return m_RenderDataTransforms.Erase(ID);
+		}
+
+		bool UpdateRenderTransform(RenderID ID);
+		void UpdateTransforms();
+	};
+
+	class RayTarget {
+
+		friend class World;
+		friend class OrderedArray<ObjectID, RayTarget>;
+
+	public:
+		
+		struct CreateInfo {
+			const LogicMesh& m_LogicMesh;
+			Mat4 m_Transform;
+		};
+
+		World& m_World;
+
+	private:
+
+		LogicMesh m_LogicMesh;
+		Mat4 m_Transform;
+		OrderedArray<RenderID, Mat4> m_RenderDataTransforms{};
+
+		RayTarget(World& world, const CreateInfo& createInfo) 
+			: m_World(world), m_LogicMesh(createInfo.m_LogicMesh), m_Transform(createInfo.m_Transform) {
+				m_LogicMesh.UpdateTransform(m_Transform);
+		}
+		
+		RayTarget(const RayTarget &) = delete;
+		RayTarget(RayTarget&&) = default;
+
+	public:
+
+		bool AABBCheck(const Vec3& position) const {
+			return m_LogicMesh.AABBCheck(position);
+		}
+
+		bool AABBCheck(const Ray& ray) const {
+			return m_LogicMesh.AABBCheck(ray);
+		}
+
+		Box<float> GetBoundingBox() const {
+			return m_LogicMesh.GetBoundingBox();
+		}
+
+		bool RayCheck(const Ray& ray, RayHitInfo& outHitInfo) const {
+			return m_LogicMesh.IsRayHit(ray, outHitInfo);
+		}
+
+		void UpdateTransform(const Mat4& transform) {
+			m_Transform = transform;
+			m_LogicMesh.UpdateTransform(m_Transform);
+			UpdateRenderTransforms();
+		}
+
+	private:
+
+		bool AddRenderDataTransform(RenderID ID, const Mat4& transform) {
+			bool res = m_RenderDataTransforms.Insert(ID, transform);
+			if (res) {
+				assert(UpdateRenderTransform(ID));
+			}
+			return res;
+		}
+
+		bool UpdateRenderTransform(RenderID ID);
+		void UpdateRenderTransforms();
 
 		bool RemoveRenderData(RenderID ID) {
-			return m_RenderDatas.Erase(ID);
+			return m_RenderDataTransforms.Erase(ID);
 		}
-
-		void UpdateTransforms();
 	};
 
 	enum AreaFlagBits {
@@ -5191,7 +5281,7 @@ outColor = texture(image, inUV);
 		friend class World;
 		friend class Editor;
 
-		friend class OrderedArray<uint64_t, Area>;
+		friend class OrderedArray<ObjectID, Area>;
 
 	public:
 
@@ -5200,10 +5290,10 @@ outColor = texture(image, inUV);
 	private:
 
 		Box<float> m_BoundingBox{};
-		OrderedArray<uint64_t, Obstacle> m_Obstacles{};
-		OrderedArray<uint64_t, RayTarget> m_RayTargets{};
+		OrderedArray<ObjectID, Obstacle> m_Obstacles{};
+		OrderedArray<ObjectID, RayTarget> m_RayTargets{};
 		
-		Area(AreaFlags flags, World& world) noexcept
+		Area(World& world, AreaFlags flags) noexcept
 			: m_World(world) {}
 
 		void UpdateBoundingBox(const Box<float>& subBoundingBox) {
@@ -5215,18 +5305,15 @@ outColor = texture(image, inUV);
 
 	public:
 
-		uint64_t AddObstacle(const char* name, const Obstacle::CreateInfo& info) {
-			Obstacle* obstacle = m_Obstacles.Emplace(m_World.m_NextObjectID, m_World, name, info);
-			assert(obstacle);
-			UpdateBoundingBox(obstacle->GetBoundingBox());
-			return m_World.m_NextObjectID++;
+		ObjectID AddObstacle(const char* name, const Obstacle::CreateInfo& info);
+		ObjectID AddRayTarget(const RayTarget::CreateInfo& info);
+
+		Obstacle* GetObstacle(ObjectID ID) {
+			return m_Obstacles.Find(ID);
 		}
 
-		uint64_t AddRayTarget(const RayTarget::CreateInfo& info) {
-			RayTarget* rayTarget = m_RayTargets.Emplace(m_World.m_NextObjectID, info);
-			assert(rayTarget);
-			UpdateBoundingBox(rayTarget->GetBoundingBox());
-			return m_World.m_NextObjectID++;
+		RayTarget* GetRayTarget(ObjectID ID) {
+			return m_RayTargets.Find(ID);
 		}
 
 		bool IsPointInside(const Vec3& point) const {
@@ -5260,7 +5347,7 @@ outColor = texture(image, inUV);
 	class Body {
 
 		friend class World;
-		friend class OrderedArray<uint64_t, Body>;
+		friend class OrderedArray<ObjectID, Body>;
 
 	public:	
 	
@@ -5268,7 +5355,7 @@ outColor = texture(image, inUV);
 
 	private:
 
-		uint64_t m_AreaID;
+		ObjectID m_AreaID;
 		Vec3 m_Position;
 		Vec3 m_Velocity;
 		float m_YRotation;
@@ -5276,9 +5363,9 @@ outColor = texture(image, inUV);
 		Collider m_Collider;
 
 		Mat4 m_Transform;
-		OrderedArray<uint64_t, Mat4> m_RenderDataTransforms{};
+		OrderedArray<RenderID, Mat4> m_RenderDataTransforms{};
 
-		Body(World& world, const Vec3& position, float height, uint64_t areaID, const Collider::CreateInfo& colliderInfo)
+		Body(World& world, const Vec3& position, float height, ObjectID areaID, const Collider::CreateInfo& colliderInfo)
 			: m_World(world), m_AreaID(areaID), m_Position(position), m_Velocity(0),
 				m_YRotation(0), m_Height(height), m_Collider(m_Position, m_YRotation, m_Velocity, colliderInfo),
 				m_Transform(Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4()) {}
@@ -5296,46 +5383,13 @@ outColor = texture(image, inUV);
 			return m_Position;
 		}
 
-		void Move(const Vec3& position);
-
 		float GetYRotation() const {
 			return m_YRotation;
 		}
 
-		void Rotate(float yRotation) {
-			if (m_Area.IsNull()) {
-				PrintError(ErrorOrigin::GameLogic,
-					"area was null when attempting to move body (in function World::Body::Move)!");
-				return;
-			}
-			if (yRotation == m_YRotation) {
-				return;
-			}
-			m_YRotation = yRotation;
-			Vec3 pushBack;
-			if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
-				m_Position += pushBack;
-			}
-			UpdateTransforms();
-		}
-
-		void MoveAndRotate(const Vec3& position, float yRotation) {
-			if (m_Area.IsNull()) {
-				PrintError(ErrorOrigin::GameLogic,
-					"area was null when attempting to move body (in function World::Body::Move)!");
-				return;
-			}
-			if (position == m_Position && yRotation == m_YRotation) {
-				return;
-			}
-			m_Position = position;
-			m_YRotation = yRotation;
-			Vec3 pushBack;
-			if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
-				m_Position += pushBack;
-			}
-			UpdateTransforms();
-		}
+		void Move(const Vec3& position);
+		void Rotate(float yRotation);
+		void MoveAndRotate(const Vec3& position, float yRotation);
 
 		const Collider& GetCollider()  const {
 			return m_Collider;
@@ -5343,42 +5397,20 @@ outColor = texture(image, inUV);
 
 	private:
 
-		WorldRenderData& AddRenderData(WorldRenderData& renderData, const Mat4& transform) {
-			auto& ref = m_RenderDatas.EmplaceBack(renderData);
-			m_Transforms.PushBack(transform);
-			(*ref).m_Transform = m_Transform * transform;
-			return renderData;
+		bool AddRenderDataTransform(RenderID ID, const Mat4& transform) {
+			bool res = m_RenderDataTransforms.Insert(ID, transform);
+			if (res) {
+				assert(UpdateRenderTransform(ID));
+			}
+			return res;
 		}
 
-		bool RemoveRenderData(WorldRenderData& renderData) {
-			uint32_t index = 0;
-			uint32_t renderDataCount = m_RenderDatas.Size();
-			for (; index < renderDataCount; index++) {
-				auto& ref = m_RenderDatas.EmplaceBack(renderData);
-				assert(!ref.IsNull());
-				if ((*ref).m_ObjectID == renderData.m_ObjectID) {
-					break;
-				}
-			}
-			if (index == renderDataCount) {
-				return false;
-			}
-			m_RenderDatas.Erase(m_RenderDatas.begin() + index);
-			m_Transforms.Erase(m_Transforms.begin() + index);
-			return true;
+		bool RemoveRenderData(RenderID ID) {
+			return m_RenderDataTransforms.Erase(ID);
 		}
 
-		void UpdateTransforms() {
-			m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
-			m_Transform[3] = Vec4(m_Position, 1.0f);
-			uint32_t renderDataCount = m_RenderDatas.Size();
-			assert(renderDataCount == m_Transforms.Size());
-			for (uint32_t i = 0; i < renderDataCount; i++) {
-				auto& ref = m_RenderDatas[i];
-				assert(!ref.IsNull());
-				(*ref).m_Transform = m_Transform * m_Transforms[i];
-			}
-		}
+		bool UpdateRenderTransform(RenderID ID);
+		void UpdateTransforms();
 	};
 
 	class UnidirectionalLight {
@@ -5424,7 +5456,7 @@ outColor = texture(image, inUV);
 
 		World& m_World;
 
-		const uint64_t m_ObjectID;
+		const ObjectID m_ObjectID;
 
 	private:
 
@@ -5445,7 +5477,7 @@ outColor = texture(image, inUV);
 		VkSampler m_ShadowMapSampler{};
 		Renderer::Buffer m_FragmentBuffer;
 
-		UnidirectionalLight(World& world, uint64_t objectID, Type type, Vec2_T<uint32_t> shadowMapResolution);
+		UnidirectionalLight(World& world, ObjectID objectID, Type type, Vec2_T<uint32_t> shadowMapResolution);
 
 		UnidirectionalLight(const UnidirectionalLight&) = delete;
 		UnidirectionalLight(UnidirectionalLight&&) = delete;
@@ -5842,11 +5874,12 @@ outColor = texture(image, inUV);
 
 		Vec2_T<uint32_t> m_RenderResolution{};
 
-		uint64_t m_NextObjectID{};
-		VkDescriptorSet m_NullTextureDescriptorSet{};
+		ObjectID m_NextObjectID = 0;
+		RenderID m_NextRenderID = 0;
+		VkDescriptorSet m_NullTextureDescriptorSet = VK_NULL_HANDLE;
 		DynamicArray<Entity*> m_Entities{};
-		OrderedArray<uint64_t, Area> m_Areas{};
-		OrderedArray<uint64_t, Body> m_Bodies{};
+		OrderedArray<ObjectID, Area> m_Areas{};
+		OrderedArray<ObjectID, Body> m_Bodies{};
 		float m_EditorCameraSensitivity = pi / 2;
 		float m_EditorCameraSpeed = 5.0f;
 		static constexpr float editor_min_camera_speed = 1.0f;
@@ -5862,7 +5895,7 @@ outColor = texture(image, inUV);
 		pipelines::World m_Pipelines{};
 		CameraMatricesBuffer m_EditorCamera{};
 		CameraMatricesBuffer m_GameCamera{};
-		OrderedArray<uint64_t, WorldRenderData> m_RenderDatas{};
+		OrderedArray<RenderID, WorldRenderData> m_RenderDatas{};
 		VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
 		DynamicArray<VkDescriptorSet> m_RenderPBRImagesDescriptorSets{};
 		DynamicArray<DebugRenderData> m_WireRenderDatas{};
@@ -5933,13 +5966,17 @@ outColor = texture(image, inUV);
 		}
 
 		uint64_t AddArea(AreaFlags flags) {
-			Area* area = m_Areas.Emplace(m_NextObjectID, flags, m_NextObjectID);
+			Area* area = m_Areas.Emplace(m_NextObjectID, *this, flags);
 			assert(area);
 			return m_NextObjectID++;
 		}
 
-		Area* GetArea(uint64_t ID) {
+		Area* GetArea(ObjectID ID) {
 			return m_Areas.Find(ID);
+		}
+
+		Body* GetBody(ObjectID ID) {
+			return m_Bodies.Find(ID);
 		}
 
 		Entity* AddEntity(Entity* entity) {
@@ -5966,20 +6003,23 @@ outColor = texture(image, inUV);
 		}
 
 		uint64_t AddBody(const Vec3& position, float height, const Collider::CreateInfo& colliderInfo) {
-			for (Area& area : m_Areas) {
+			const ObjectID* areaIDs = m_Areas.GetKeys();
+			Area* areas = m_Areas.GetValues();
+			uint32_t areaCount = m_Areas.Size();
+			for (uint32_t i = 0; i < areaCount; i++) {
+				Area& area = areas[i];
 				if (area.IsPointInside(position)) {
-					Body* body = m_Bodies.Emplace(m_NextObjectID, position, height, &area, colliderInfo);
+					Body* body = m_Bodies.Emplace(m_NextObjectID, *this, position, height, areaIDs[i], colliderInfo);
 					assert(body);
 					return m_NextObjectID++;
 				}
 			}
-			Body* body = m_Bodies.Emplace(m_NextObjectID, position, height, nullptr, colliderInfo);
+			Body* body = m_Bodies.Emplace(m_NextObjectID, *this, position, height, Invalid_ID, colliderInfo);
 			assert(body);
 			return m_NextObjectID++;
 		}
 
 		bool RemoveBody(uint64_t ID) {
-			RemoveRenderDatas(ID);
 			return m_Bodies.Erase(ID);
 		}
 
@@ -6022,19 +6062,25 @@ outColor = texture(image, inUV);
 			m_Renderer.DestroyImageView(map.m_ImageView);
 		}
 
-		PersistentReference<WorldRenderData> AddRenderData(WorldRenderDataFlags flags, Body& body,
+		RenderID AddRenderData(WorldRenderDataFlags flags, Body& body,
 				const Mat4& transform, const MeshData& meshData) {
-			return body.AddRenderData(m_RenderDatas.EmplaceBack(body.m_ObjectID, flags, Mat4(), meshData), transform);
+			m_RenderDatas.Emplace(m_NextRenderID, flags, transform, meshData);
+			assert(body.AddRenderDataTransform(m_NextRenderID, transform));
+			return m_NextRenderID++;
 		}
 
-		PersistentReference<WorldRenderData> AddRenderData(WorldRenderDataFlags flags, const RayTarget& rayTarget,
+		RenderID AddRenderData(WorldRenderDataFlags flags, RayTarget& rayTarget,
 				const Mat4& transform, const MeshData& meshData) {
-			return m_RenderDatas.EmplaceBack(rayTarget.m_ObjectID, flags, transform, meshData);
+			m_RenderDatas.Emplace(m_NextRenderID, flags, transform, meshData);
+			assert(rayTarget.AddRenderDataTransform(m_NextRenderID, transform));
+			return m_NextRenderID++;
 		}
 		
-		PersistentReference<WorldRenderData> AddRenderData(WorldRenderDataFlags flags, Obstacle& obstacle,
+		RenderID AddRenderData(WorldRenderDataFlags flags, Obstacle& obstacle,
 				const Mat4& transform, const MeshData& meshData) {
-			return obstacle.AddRenderData(m_RenderDatas.EmplaceBack(obstacle.m_ObjectID, flags, Mat4(), meshData), transform);
+			m_RenderDatas.Emplace(m_NextRenderID, flags, transform, meshData);
+			assert(obstacle.AddRenderDataTransform(m_NextRenderID, transform));
+			return m_NextRenderID++;
 		}
 
 		WorldRenderData* GetRenderData(uint64_t ID) {
@@ -6396,7 +6442,9 @@ outColor = texture(image, inUV);
 					"failed to parse collider for obstacle (in function Collider::CreateInfo::FromFile in function World::LoadObstacle)!");
 				return false;
 			}
-			PersistentReference<Obstacle> obstacle = area.AddObstacle(name.CString(), createInfo);
+			uint64_t ID = area.AddObstacle(name.CString(), createInfo);
+			Obstacle* obstacle = area.m_Obstacles.Find(ID);
+			assert(obstacle);
 			while (true) {
 				char c = FileHandler::Skip(fileStream, Array<char, 2> { '}', '{' });
 				if (c == EOF) {
@@ -6456,24 +6504,25 @@ outColor = texture(image, inUV);
 			return true;
 		}
 
-		Tuple<bool, PersistentReference<Area>> LoadArea(FILE* fileStream) {
+		ObjectID LoadArea(FILE* fileStream) {
 			if (!fileStream) {
 				PrintError(ErrorOrigin::FileParsing, 
 					"attempting to load area with file stream that's null (in function World::LoadArea)!");
-				return { false };
+				return Invalid_ID;
 			}
-			Area& area = m_Areas.EmplaceBack(0, m_NextObjectID++, m_NextObjectID);
+			Area* area = m_Areas.Emplace(m_NextObjectID++, *this, 0);
+			assert(area);
 			uint32_t obstacleCount, rayTargetCount;
 			if (fscanf(fileStream, "O count=%u R count=%u", &obstacleCount, &rayTargetCount) != 2) {
 				PrintError(ErrorOrigin::FileParsing,
 					"failed to load area from file stream due to invalid format t(in function World::LoadArea)");
-				return { false };
+				return Invalid_ID;
 			}
 			while (true) {
 				char c = fgetc(fileStream);
 				switch (c) {
 					case 'O':
-						LoadObstacle(area, fileStream);
+						LoadObstacle(*area, fileStream);
 						break;
 					case 'R':
 						break;
@@ -6481,19 +6530,7 @@ outColor = texture(image, inUV);
 						continue;
 				}
 			}
-			return { true, area };
-		}
-
-
-		void RemoveRenderDatas(uint64_t objectID) {
-			auto end = m_RenderDatas.end();
-			for (auto iter = m_RenderDatas.begin(); iter != end;) {
-				if (iter->m_ObjectID == objectID) {
-					iter = m_RenderDatas.Erase(iter);
-					continue;
-				}
-				++iter;
-			}
+			return m_NextObjectID - 1;
 		}
 
 		void SwapchainCreateCallback(VkExtent2D swapchainExtent, Vec2_T<uint32_t> renderResolution, float aspectRatio, uint32_t imageCount);
@@ -6533,7 +6570,7 @@ outColor = texture(image, inUV);
 
 		GLFWwindow* const m_GLFWwindow;
 
-		PersistentReference<Area> m_InspectedArea{};
+		ObjectID m_InspectedArea{};
 
 		uint32_t m_SelectedObjectIndex = UINT64_MAX;
 
@@ -6657,8 +6694,8 @@ outColor = texture(image, inUV);
 
 	public:
 
-		void SetInspectedArea(Area& area) {
-			m_InspectedArea = area;
+		void SetInspectedArea(ObjectID ID) {
+			m_InspectedArea = ID;
 		}
 
 	private:
@@ -6694,53 +6731,67 @@ outColor = texture(image, inUV);
 			}
 
 			if (ImGui::Begin("Area")) {
-				if (m_InspectedArea.IsNull()) {
+				if (m_InspectedArea == Invalid_ID) {
 					AlignedText("No area selected", 0.5f, 0.5f);
 				}
 				else {
-					ImGuiStyle& style = ImGui::GetStyle();
-					Area& area = *m_InspectedArea;
-					bool buttonActive = false;
-					if (ImGui::CollapsingHeader("Obstacles", ImGuiTreeNodeFlags_DefaultOpen)) {
-						uint32_t index = 0;
-						for (const Obstacle& obstacle : area.m_Obstacles) {
-							ImGui::SetCursorPosX(style.ItemSpacing.x);
-							if (m_SelectedObjectIndex == index) {
-								Box<float> boundingBox = obstacle.GetBoundingBox();
-								Vec3 dimensions = boundingBox.Dimensions();
-								Vec3 obstaclePos = obstacle.GetPosition();
-								Mat4 transform(1);
-								transform[0] *= dimensions.x / 2;
-								transform[1] *= dimensions.y / 2;
-								transform[2] *= dimensions.z / 2;
-								transform[3] = Vec4(obstaclePos, 1.0f);
-								m_World.RenderWireMesh(m_CubeMeshData, transform, m_WireColor);
-								ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonHovered]);
-								if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(obstacle.m_ObjectID)).CString())) {
-									Vec3 offset = Vec3(0.0f, boundingBox.m_Max.y + dimensions.y, boundingBox.m_Min.z - dimensions.z);
-									m_World.m_EditorCameraPosition = obstaclePos + offset;
-									m_World.m_EditorCameraPosition.y *= -1;
-									Vec3 forward = obstaclePos - m_World.m_EditorCameraPosition;
-									m_World.m_EditorCameraRotations = Vec2(-AngleBetween(Vec3::Forward(), forward), 0.0f);
-									m_World.UpdateEditorCamera();
+					Area* pArea = m_World.GetArea(m_InspectedArea);
+					if (!pArea) {
+						AlignedText("Invalid area ID!", 0.5f, 0.5f);
+					}
+					else {
+						Area& area = *pArea;
+						ImGuiStyle& style = ImGui::GetStyle();
+						bool buttonActive = false;
+						if (ImGui::CollapsingHeader("Obstacles", ImGuiTreeNodeFlags_DefaultOpen)) {
+
+							uint32_t index = 0;
+
+							const ObjectID* IDs = area.m_Obstacles.GetKeys();
+							Obstacle* obstacles = area.m_Obstacles.GetValues();
+							uint32_t obstacleCount = area.m_Obstacles.Size();
+
+							for (uint32_t i = 0; i < obstacleCount; i++) {
+								Obstacle& obstacle = obstacles[i];
+								ObjectID ID = IDs[i];
+								ImGui::SetCursorPosX(style.ItemSpacing.x);
+								if (m_SelectedObjectIndex == index) {
+									Box<float> boundingBox = obstacle.GetBoundingBox();
+									Vec3 dimensions = boundingBox.Dimensions();
+									Vec3 obstaclePos = obstacle.GetPosition();
+									Mat4 transform(1);
+									transform[0] *= dimensions.x / 2;
+									transform[1] *= dimensions.y / 2;
+									transform[2] *= dimensions.z / 2;
+									transform[3] = Vec4(obstaclePos, 1.0f);
+									m_World.RenderWireMesh(m_CubeMeshData, transform, m_WireColor);
+									ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonHovered]);
+									if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(ID)).CString())) {
+										Vec3 offset = Vec3(0.0f, boundingBox.m_Max.y + dimensions.y, boundingBox.m_Min.z - dimensions.z);
+										m_World.m_EditorCameraPosition = obstaclePos + offset;
+										m_World.m_EditorCameraPosition.y *= -1;
+										Vec3 forward = obstaclePos - m_World.m_EditorCameraPosition;
+										m_World.m_EditorCameraRotations = Vec2(-AngleBetween(Vec3::Forward(), forward), 0.0f);
+										m_World.UpdateEditorCamera();
+									}
+									else if (ImGui::IsItemActive()) {
+										buttonActive = true;
+									}
+									ImGui::PopStyleColor();
+								}
+								else if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(ID)).CString())) {
+									m_SelectedObjectIndex = index;
 								}
 								else if (ImGui::IsItemActive()) {
 									buttonActive = true;
 								}
-								ImGui::PopStyleColor();
+								++index;
 							}
-							else if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(obstacle.m_ObjectID)).CString())) {
-								m_SelectedObjectIndex = index;
-							}
-							else if (ImGui::IsItemActive()) {
-								buttonActive = true;
-							}
-							++index;
 						}
-					}
-					if (!buttonActive && Input::WasMouseButtonPressed(MouseButton::Left)) {
-						m_SelectedObjectIndex = UINT32_MAX;
-					}
+						if (!buttonActive && Input::WasMouseButtonPressed(MouseButton::Left)) {
+							m_SelectedObjectIndex = UINT32_MAX;
+						}
+					}	
 				}
 				ImGui::End();
 			}
