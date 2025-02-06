@@ -35,17 +35,18 @@ namespace engine {
 		return true;
 	}
 
-	void Obstacle::UpdateTransforms() {
-		m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
-		m_Transform[3] = Vec4(m_Position, 1.0f);
-		uint32_t renderDataCount = m_RenderDatas.Size();
-		uint64_t* keyIter = m_RenderDatas.KeysBegin();
-		Mat4* valueIter = m_RenderDatas.ValuesBegin();
-		for (uint32_t i = 0; i < renderDataCount; i++) {
-			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
-			assert(data);
-			data->m_Transform = m_Transform * valueIter[i];
-		}
+	ObjectID Area::AddObstacle(const char* name, const Obstacle::CreateInfo& info) {
+		Obstacle* obstacle = m_Obstacles.Emplace(m_World.m_NextObjectID, m_World, name, info);
+		assert(obstacle);
+		UpdateBoundingBox(obstacle->GetBoundingBox());
+		return m_World.m_NextObjectID++;
+	}
+
+	ObjectID Area::AddRayTarget(const RayTarget::CreateInfo& info) {
+		RayTarget* rayTarget = m_RayTargets.Emplace(m_World.m_NextObjectID, m_World, info);
+		assert(rayTarget);
+		UpdateBoundingBox(rayTarget->GetBoundingBox());
+		return m_World.m_NextObjectID++;
 	}
 
 	void Body::Move(const Vec3& position) {
@@ -64,6 +65,110 @@ namespace engine {
 			m_Position += pushBack;
 		}
 		UpdateTransforms();
+	}
+
+	void Body::Rotate(float yRotation) {
+		Area* area = m_World.GetArea(m_AreaID);
+		if (!area) {
+			PrintError(ErrorOrigin::GameLogic,
+				"area was null when attempting to move body (in function World::Body::Move)!");
+			return;
+		}
+		if (yRotation == m_YRotation) {
+			return;
+		}
+		m_YRotation = yRotation;
+		Vec3 pushBack;
+		if (area->CollisionCheck(m_Collider, pushBack)) {
+			m_Position += pushBack;
+		}
+		UpdateTransforms();
+	}
+
+	void Body::MoveAndRotate(const Vec3& position, float yRotation) {
+		Area* area = m_World.GetArea(m_AreaID);
+		if (!area) {
+			PrintError(ErrorOrigin::GameLogic,
+				"area was null when attempting to move body (in function World::Body::Move)!");
+			return;
+		}
+		if (position == m_Position && yRotation == m_YRotation) {
+			return;
+		}
+		m_Position = position;
+		m_YRotation = yRotation;
+		Vec3 pushBack;
+		if (area->CollisionCheck(m_Collider, pushBack)) {
+			m_Position += pushBack;
+		}
+		UpdateTransforms();
+	}
+
+	bool Obstacle::UpdateRenderTransform(RenderID ID) {
+		Mat4* transform = m_RenderDataTransforms.Find(ID);
+		if (!transform) {
+			return false;
+		}
+		WorldRenderData* data = m_World.GetRenderData(ID);
+		assert(data);
+		data->m_Transform = m_Transform * *transform;
+	}
+
+	void Obstacle::UpdateTransforms() {
+		m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
+		m_Transform[3] = Vec4(m_Position, 1.0f);
+		uint32_t transformCount = m_RenderDataTransforms.Size();
+		uint64_t* keyIter = m_RenderDataTransforms.KeysBegin();
+		Mat4* valueIter = m_RenderDataTransforms.ValuesBegin();
+		for (uint32_t i = 0; i < transformCount; i++) {
+			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
+			assert(data);
+			data->m_Transform = m_Transform * valueIter[i];
+		}
+	}
+
+	bool RayTarget::UpdateRenderTransform(RenderID ID) {
+		Mat4* transform = m_RenderDataTransforms.Find(ID);
+		if (!transform) {
+			return false;
+		}
+		WorldRenderData* data = m_World.GetRenderData(ID);
+		assert(data);
+		data->m_Transform = m_Transform * *transform;
+	}
+
+	void RayTarget::UpdateRenderTransforms() {
+		uint32_t transformCount = m_RenderDataTransforms.Size();
+		uint64_t* keyIter = m_RenderDataTransforms.KeysBegin();
+		Mat4* valueIter = m_RenderDataTransforms.ValuesBegin();
+		for (uint32_t i = 0; i < transformCount; i++) {
+			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
+			assert(data);
+			data->m_Transform = m_Transform * valueIter[i];
+		}
+	}
+
+	bool Body::UpdateRenderTransform(RenderID ID) {
+		Mat4* transform = m_RenderDataTransforms.Find(ID);
+		if (!transform) {
+			return false;
+		}
+		WorldRenderData* data = m_World.GetRenderData(ID);
+		assert(data);
+		data->m_Transform = m_Transform * *transform;
+	}
+
+	void Body::UpdateTransforms() {
+		m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
+		m_Transform[3] = Vec4(m_Position, 1.0f);
+		uint32_t transformCount = m_RenderDataTransforms.Size();
+		uint64_t* keyIter = m_RenderDataTransforms.KeysBegin();
+		Mat4* valueIter = m_RenderDataTransforms.ValuesBegin();
+		for (uint32_t i = 0; i < transformCount; i++) {
+			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
+			assert(data);
+			data->m_Transform = m_Transform * valueIter[i];
+		}
 	}
 
 	UnidirectionalLight::UnidirectionalLight(World& world, uint64_t objectID, Type type, Vec2_T<uint32_t> shadowMapResolution) 
