@@ -5014,6 +5014,9 @@ outColor = texture(image, inUV);
 
 	class World;
 
+	typedef uint64_t ObjectID;
+	typedef uint64_t RenderID;
+
 	enum WorldRenderDataFlagBits {
 		WorldRenderDataFlag_NoSave = 1,
 	};
@@ -5023,16 +5026,15 @@ outColor = texture(image, inUV);
 	struct WorldRenderData {
 
 		WorldRenderDataFlags m_Flags;
-		const uint64_t m_DataID;
 
-		const uint64_t m_ParentID;
+		const ObjectID m_ObjectID;
 
 		VkDescriptorSet m_AlbedoTextureDescriptorSet = VK_NULL_HANDLE;
 		Mat4 m_Transform{};
 		MeshData m_MeshData{};
 
-		WorldRenderData(uint64_t dataID, uint64_t parentID, WorldRenderDataFlags flags, const Mat4& transform, const MeshData& meshData) noexcept
-			: m_Flags(flags), m_DataID(dataID), m_ParentID(parentID), m_Transform(transform), m_MeshData(meshData) {}
+		WorldRenderData(uint64_t objectID, WorldRenderDataFlags flags, const Mat4& transform, const MeshData& meshData) noexcept
+			: m_Flags(flags), m_ObjectID(objectID), m_Transform(transform), m_MeshData(meshData) {}
 
 		WorldRenderData(const WorldRenderData&) = delete;
 
@@ -5053,14 +5055,12 @@ outColor = texture(image, inUV);
 
 	private:
 
-		const uint64_t m_ObjectID;
 		LogicMesh m_LogicMesh;
 		Mat4 m_Transform;
 
-		RayTarget(uint64_t objectID, const CreateInfo& createInfo) 
-			: m_ObjectID(objectID), 
-				m_LogicMesh(createInfo.m_LogicMesh), m_Transform(createInfo.m_Transform) {
-			m_LogicMesh.UpdateTransform(m_Transform);
+		RayTarget(const CreateInfo& createInfo) 
+			: m_LogicMesh(createInfo.m_LogicMesh), m_Transform(createInfo.m_Transform) {
+				m_LogicMesh.UpdateTransform(m_Transform);
 		}
 		
 		RayTarget(const RayTarget &) = delete;
@@ -5104,8 +5104,9 @@ outColor = texture(image, inUV);
 			Collider::CreateInfo m_ColliderInfo{};
 		};
 
+		World& m_World;
+
 		String m_Name;
-		uint64_t m_ObjectID;
 
 	private:
 
@@ -5115,10 +5116,10 @@ outColor = texture(image, inUV);
 		Collider m_Collider;
 
 		Mat4 m_Transform;
-		OrderedArray<uint64_t, Mat4> m_RenderDatas{};
+		OrderedArray<RenderID, Mat4> m_RenderDatas{};
 
-		Obstacle(const char* name, uint64_t objectID, const CreateInfo& info) noexcept 
-			: m_Name(name), m_ObjectID(objectID), m_Position(info.m_Position),
+		Obstacle(World& world, const char* name, const CreateInfo& info) noexcept 
+			: m_World(world), m_Name(name), m_Position(info.m_Position),
 				m_YRotation(info.m_YRotation), m_Collider(m_Position, m_YRotation, m_Velocity, info.m_ColliderInfo),
 				m_Transform(Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4()) {
 			m_Transform[3] = Vec4(m_Position, 1.0f);
@@ -5126,9 +5127,11 @@ outColor = texture(image, inUV);
 
 		Obstacle(const Obstacle&) = delete;
 
-		Obstacle(Obstacle&& other) noexcept : m_ObjectID(other.m_ObjectID),
-			m_Position(other.m_Position), m_YRotation(other.m_YRotation), 
-				m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}
+		Obstacle(Obstacle&& other) noexcept 
+			: m_World(other.m_World), m_Name(std::move(other.m_Name)),
+				m_Position(other.m_Position), m_YRotation(other.m_YRotation), 
+				m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)),
+				m_Transform(other.m_Transform), m_RenderDatas(std::move(other.m_RenderDatas)) {}
 
 		bool Collides(const Collider& collider, Vec3& outColliderPushBack) const {
 			return Collider::ColliderToStaticColliderCollides(collider, m_Collider, outColliderPushBack);
@@ -5166,25 +5169,15 @@ outColor = texture(image, inUV);
 
 	private:
 
-		uint64_t AddRenderData(WorldRenderData& renderData, const Mat4& transform) {
-			m_RenderDatas.Insert(renderData.m_DataID, transform);
-			return renderData.m_DataID;
+		bool AddRenderData(RenderID ID, const Mat4& transform) {
+			return m_RenderDatas.Insert(ID, transform);
 		}
 
-		bool RemoveRenderData(WorldRenderData& renderData) {
-			return m_RenderDatas.Erase(renderData.m_DataID);
+		bool RemoveRenderData(RenderID ID) {
+			return m_RenderDatas.Erase(ID);
 		}
 
-		void UpdateTransforms() {
-			m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
-			m_Transform[3] = Vec4(m_Position, 1.0f);
-			uint32_t renderDataCount = m_RenderDatas.Size();
-			uint64_t* keyIter = m_RenderDatas.KeysBegin();
-			Mat4* valueIter = m_RenderDatas.ValuesBegin();
-			for (uint32_t i = 0; i < renderDataCount; i++) {
-				(*ref).m_Transform = m_Transform * valueIter[i];
-			}
-		}
+		void UpdateTransforms();
 	};
 
 	enum AreaFlagBits {
@@ -5193,27 +5186,25 @@ outColor = texture(image, inUV);
 
 	typedef uint32_t AreaFlags;
 
-	class Area : public PersistentReferenceHolder<Area> {
+	class Area {
 
 		friend class World;
 		friend class Editor;
 
-		friend class DynamicArray<Area>;
+		friend class OrderedArray<uint64_t, Area>;
 
 	public:
 
-		const uint64_t m_ObjectID;
+		World& m_World;
 
 	private:
 
-		uint64_t& m_NextObjectID;
-
 		Box<float> m_BoundingBox{};
-		DynamicArray<Obstacle> m_Obstacles{};
-		DynamicArray<RayTarget> m_RayTargets{};
+		OrderedArray<uint64_t, Obstacle> m_Obstacles{};
+		OrderedArray<uint64_t, RayTarget> m_RayTargets{};
 		
-		Area(AreaFlags flags, uint64_t objectID, uint64_t& nextObjectID) noexcept
-			: m_ObjectID(objectID), m_NextObjectID(nextObjectID) {}
+		Area(AreaFlags flags, World& world) noexcept
+			: m_World(world) {}
 
 		void UpdateBoundingBox(const Box<float>& subBoundingBox) {
 			for (uint32_t i = 0; i < 3; i++) {
@@ -5224,16 +5215,18 @@ outColor = texture(image, inUV);
 
 	public:
 
-		PersistentReference<Obstacle> AddObstacle(const char* name, const Obstacle::CreateInfo& info) {
-			Obstacle& obstacle = m_Obstacles.EmplaceBack(name, m_NextObjectID++, info);
-			UpdateBoundingBox(obstacle.GetBoundingBox());
-			return obstacle;
+		uint64_t AddObstacle(const char* name, const Obstacle::CreateInfo& info) {
+			Obstacle* obstacle = m_Obstacles.Emplace(m_World.m_NextObjectID, m_World, name, info);
+			assert(obstacle);
+			UpdateBoundingBox(obstacle->GetBoundingBox());
+			return m_World.m_NextObjectID++;
 		}
 
-		PersistentReference<RayTarget> AddRayTarget(const RayTarget::CreateInfo& info) {
-			RayTarget& rayTarget = m_RayTargets.EmplaceBack(m_NextObjectID++, info);
-			UpdateBoundingBox(rayTarget.GetBoundingBox());
-			return rayTarget;
+		uint64_t AddRayTarget(const RayTarget::CreateInfo& info) {
+			RayTarget* rayTarget = m_RayTargets.Emplace(m_World.m_NextObjectID, info);
+			assert(rayTarget);
+			UpdateBoundingBox(rayTarget->GetBoundingBox());
+			return m_World.m_NextObjectID++;
 		}
 
 		bool IsPointInside(const Vec3& point) const {
@@ -5264,15 +5257,18 @@ outColor = texture(image, inUV);
 		}
 	};
 
-	class Body : public PersistentReferenceHolder<Body> {
+	class Body {
 
 		friend class World;
-		friend class DynamicArray<Body>;
+		friend class OrderedArray<uint64_t, Body>;
 
-	private:	
+	public:	
+	
+		World& m_World;
 
-		const uint64_t m_ObjectID;
-		PersistentReference<Area> m_Area;
+	private:
+
+		uint64_t m_AreaID;
 		Vec3 m_Position;
 		Vec3 m_Velocity;
 		float m_YRotation;
@@ -5280,24 +5276,19 @@ outColor = texture(image, inUV);
 		Collider m_Collider;
 
 		Mat4 m_Transform;
-		DynamicArray<PersistentReference<WorldRenderData>> m_RenderDatas{};
-		DynamicArray<Mat4> m_Transforms{};
+		OrderedArray<uint64_t, Mat4> m_RenderDataTransforms{};
 
-		Body(uint64_t objectID, const Vec3& position, float height, Area* area, const Collider::CreateInfo& colliderInfo)
-			: PersistentReferenceHolder<Body>(), m_Area(), m_Position(position), m_Velocity(0), 
-				m_YRotation(0), m_ObjectID(objectID),
-				m_Height(height), m_Collider(m_Position, m_YRotation, m_Velocity, colliderInfo),
-				m_Transform(Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4()){
-			if (area) {
-				m_Area = *area;
-			}
-		}
+		Body(World& world, const Vec3& position, float height, uint64_t areaID, const Collider::CreateInfo& colliderInfo)
+			: m_World(world), m_AreaID(areaID), m_Position(position), m_Velocity(0),
+				m_YRotation(0), m_Height(height), m_Collider(m_Position, m_YRotation, m_Velocity, colliderInfo),
+				m_Transform(Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4()) {}
 
 		Body(const Body&) = delete;
 
 		Body(Body&& other) noexcept 
-			: m_ObjectID(other.m_ObjectID), m_Area(other.m_Area), m_Position(other.m_Position), m_YRotation(other.m_YRotation),
-				m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)) {}	
+			: m_World(other.m_World), m_AreaID(other.m_AreaID), m_Position(other.m_Position), m_YRotation(other.m_YRotation),
+				m_Velocity(other.m_Velocity), m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)),
+				m_Transform(other.m_Transform), m_RenderDataTransforms(std::move(other.m_RenderDataTransforms)) {}
 
 	public:	
 
@@ -5305,22 +5296,7 @@ outColor = texture(image, inUV);
 			return m_Position;
 		}
 
-		void Move(const Vec3& position) {
-			if (m_Area.IsNull()) {
-				PrintError(ErrorOrigin::GameLogic,
-					"area was null when attempting to move body (in function World::Body::Move)!");
-				return;
-			}
-			if (position == m_Position) {
-				return;
-			}
-			m_Position = position;
-			Vec3 pushBack;
-			if ((*m_Area).CollisionCheck(m_Collider, pushBack)) {
-				m_Position += pushBack;
-			}
-			UpdateTransforms();
-		}
+		void Move(const Vec3& position);
 
 		float GetYRotation() const {
 			return m_YRotation;
@@ -5815,6 +5791,7 @@ outColor = texture(image, inUV);
 	class World {
 
 		friend class Engine;
+		friend class Area;
 		friend class Editor;
 
 		friend class UnidirectionalLight;
@@ -5868,8 +5845,8 @@ outColor = texture(image, inUV);
 		uint64_t m_NextObjectID{};
 		VkDescriptorSet m_NullTextureDescriptorSet{};
 		DynamicArray<Entity*> m_Entities{};
-		DynamicArray<Area> m_Areas{};
-		DynamicArray<Body> m_Bodies{};
+		OrderedArray<uint64_t, Area> m_Areas{};
+		OrderedArray<uint64_t, Body> m_Bodies{};
 		float m_EditorCameraSensitivity = pi / 2;
 		float m_EditorCameraSpeed = 5.0f;
 		static constexpr float editor_min_camera_speed = 1.0f;
@@ -5955,8 +5932,14 @@ outColor = texture(image, inUV);
 			m_GameCamera.m_View = matrix;
 		}
 
-		PersistentReference<Area> AddArea(AreaFlags flags) {
-			return m_Areas.EmplaceBack(flags, m_NextObjectID++, m_NextObjectID);
+		uint64_t AddArea(AreaFlags flags) {
+			Area* area = m_Areas.Emplace(m_NextObjectID, flags, m_NextObjectID);
+			assert(area);
+			return m_NextObjectID++;
+		}
+
+		Area* GetArea(uint64_t ID) {
+			return m_Areas.Find(ID);
 		}
 
 		Entity* AddEntity(Entity* entity) {
@@ -5982,18 +5965,22 @@ outColor = texture(image, inUV);
 			return false;
 		}
 
-		PersistentReference<Body> AddBody(const Vec3& position, float height, const Collider::CreateInfo& colliderInfo) {
+		uint64_t AddBody(const Vec3& position, float height, const Collider::CreateInfo& colliderInfo) {
 			for (Area& area : m_Areas) {
 				if (area.IsPointInside(position)) {
-					return m_Bodies.EmplaceBack(m_NextObjectID++, position, height, &area, colliderInfo);
+					Body* body = m_Bodies.Emplace(m_NextObjectID, position, height, &area, colliderInfo);
+					assert(body);
+					return m_NextObjectID++;
 				}
 			}
-			return m_Bodies.EmplaceBack(m_NextObjectID++, position, height, nullptr, colliderInfo);
+			Body* body = m_Bodies.Emplace(m_NextObjectID, position, height, nullptr, colliderInfo);
+			assert(body);
+			return m_NextObjectID++;
 		}
 
-		bool RemoveBody(Body& body) {
-			RemoveRenderDatas(body.m_ObjectID);
-			return m_Bodies.Erase(&body);
+		bool RemoveBody(uint64_t ID) {
+			RemoveRenderDatas(ID);
+			return m_Bodies.Erase(ID);
 		}
 
 		bool CreateTextureMap(const StaticTexture& texture, TextureMap& out) const {
@@ -6048,6 +6035,10 @@ outColor = texture(image, inUV);
 		PersistentReference<WorldRenderData> AddRenderData(WorldRenderDataFlags flags, Obstacle& obstacle,
 				const Mat4& transform, const MeshData& meshData) {
 			return obstacle.AddRenderData(m_RenderDatas.EmplaceBack(obstacle.m_ObjectID, flags, Mat4(), meshData), transform);
+		}
+
+		WorldRenderData* GetRenderData(uint64_t ID) {
+			return m_RenderDatas.Find(ID);
 		}
 
 		void RenderWireMesh(const MeshData& mesh, const Mat4& transform, const Vec4& wireColor) {
