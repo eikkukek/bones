@@ -8,20 +8,23 @@ public:
 	engine::World& m_World;
 	engine::StaticMesh& m_Mesh;
 	engine::Quaternion m_Rotation;
-	engine::PersistentReference<engine::Body> m_Body;
-	engine::PersistentReference<engine::WorldRenderData> m_RenderData;
+	engine::ObjectID m_BodyID;
+	engine::RenderID m_RenderData;
 
 	Player(engine::World& world, engine::StaticMesh& mesh) 
 		: m_World(world), 
-			m_Body(world.AddBody({ 3.0f, 0.0f, 0.0f }, 2.0f,
+			m_BodyID(world.AddBody({ 3.0f, 0.0f, 0.0f }, 2.0f,
 				{ 
 					.m_LocalPosition {}, 
 					.m_Type { engine::Collider::Type::Pole },
 					.u_TypeInfo { .m_PoleInfo { .m_Radius = 1, .m_Height = 2 } },
 				}
-			)), 
-		m_Mesh(mesh), m_RenderData(world.AddRenderData(engine::WorldRenderDataFlag_NoSave, *m_Body, engine::Mat4(1), mesh.GetMeshData())) {
+			)),
+			m_Mesh(mesh), m_RenderData(engine::Invalid_ID) {
 		using namespace engine;
+		Body* body = m_World.GetBody(m_BodyID);
+		assert(body);
+		m_RenderData = world.AddRenderData(engine::WorldRenderDataFlag_NoSave, *body, engine::Mat4(1), mesh.GetMeshData());
 	}
 
 	void Update(engine::World& world) {
@@ -32,10 +35,11 @@ public:
 			0.0f,
 			Input::ReadKeyValue(Key::W) - Input::ReadKeyValue(Key::S)
 		) * (5 * Time::DeltaTime());
-		Body& body = *m_Body;
+		Body* body = m_World.GetBody(m_BodyID);
+		assert(body);
 		if (movementVector != Vec3(0.0f)) {
-			body.Move(body.GetPosition() + movementVector);
-			world.SetGameCameraView(Mat4::LookAt(Vec3(0.0f, 10.0f, -5.0f), Vec3::Up(), body.GetPosition()));
+			body->Move(body->GetPosition() + movementVector);
+			world.SetGameCameraView(Mat4::LookAt(Vec3(0.0f, 10.0f, -5.0f), Vec3::Up(), body->GetPosition()));
 		}
 	}
 
@@ -188,7 +192,10 @@ int main() {
 	World::TextureMap textureMap{};
 	assert(world.CreateTextureMap(brickWallTexture, textureMap));
 
-	PersistentReference<Area> area = world.AddArea(AreaFlag_NoSave);
+	ObjectID areaID = world.AddArea(AreaFlag_NoSave);
+	Area* pArea = world.GetArea(areaID);
+	assert(pArea);
+	Area& area = *pArea;
 
 	StaticMesh cubeMesh(renderer);
 	Array<Vertex, Engine::GetBoxVertexCount()> cubeVertices;
@@ -200,7 +207,7 @@ int main() {
 
 	LogicMesh logicQuadMesh(quadVertices, quadIndices);
 
-	auto obstacle = (*area).AddObstacle(
+	ObjectID obstacleID = area.AddObstacle(
 		"Obstacle",
 		{
 			.m_Position { 0, 0, 0 },
@@ -218,8 +225,11 @@ int main() {
 		}
 	);
 
-	auto obstacleRenderData = world.AddRenderData(WorldRenderDataFlag_NoSave, *obstacle, Mat4(1), cubeMesh.GetMeshData());
-	(*obstacleRenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
+	Obstacle* obstacle = area.GetObstacle(obstacleID);
+	assert(obstacle);
+
+	RenderID obstacleRenderID = world.AddRenderData(WorldRenderDataFlag_NoSave, *obstacle, Mat4(1), cubeMesh.GetMeshData());
+	world.GetRenderData(obstacleRenderID)->m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 
 	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), -pi / 2).AsMat4();
 
@@ -228,17 +238,19 @@ int main() {
 	groundTransform[2] *= 10;
 	groundTransform[3].y = -1.0f;
 
-	auto ground = (*area).AddRayTarget(
+	ObjectID groundID = area.AddRayTarget(
 		{
 			.m_LogicMesh = logicQuadMesh,
 			.m_Transform = groundTransform,
 		}
 	);
 
+	RayTarget* ground = area.GetRayTarget(groundID);
+
 	MeshData groundMesh = engine.GetQuadMesh().GetMeshData();
 
-	auto groundRenderData = world.AddRenderData(WorldRenderDataFlag_NoSave, *ground, groundTransform, engine.GetQuadMesh().GetMeshData());
-	(*groundRenderData).m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
+	RenderID groundRenderID = world.AddRenderData(WorldRenderDataFlag_NoSave, *ground, Mat4(1), engine.GetQuadMesh().GetMeshData());
+	world.GetRenderData(groundRenderID)->m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 
 	Obj cubeObj{};
 	FILE* fileStream = fopen("resources\\meshes\\cube.obj", "r");
@@ -254,7 +266,7 @@ int main() {
 
 	Editor& editor = engine.GetEditor();
 
-	editor.SetInspectedArea(*area);
+	editor.SetInspectedArea(areaID);
 
 	while (engine.Loop()) {
 		float deltaTime = Time::DeltaTime();
