@@ -35,6 +35,37 @@ namespace engine {
 		return true;
 	}
 
+	void Obstacle::UpdateTransforms() {
+		m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
+		m_Transform[3] = Vec4(m_Position, 1.0f);
+		uint32_t renderDataCount = m_RenderDatas.Size();
+		uint64_t* keyIter = m_RenderDatas.KeysBegin();
+		Mat4* valueIter = m_RenderDatas.ValuesBegin();
+		for (uint32_t i = 0; i < renderDataCount; i++) {
+			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
+			assert(data);
+			data->m_Transform = m_Transform * valueIter[i];
+		}
+	}
+
+	void Body::Move(const Vec3& position) {
+		Area* area = m_World.GetArea(m_AreaID);
+		if (!area) {
+			PrintError(ErrorOrigin::GameLogic,
+				"area was null when attempting to move body (in function World::Body::Move)!");
+			return;
+		}
+		if (position == m_Position) {
+			return;
+		}
+		m_Position = position;
+		Vec3 pushBack;
+		if (area->CollisionCheck(m_Collider, pushBack)) {
+			m_Position += pushBack;
+		}
+		UpdateTransforms();
+	}
+
 	UnidirectionalLight::UnidirectionalLight(World& world, uint64_t objectID, Type type, Vec2_T<uint32_t> shadowMapResolution) 
 		: m_World(world), m_ObjectID(objectID), m_ShadowMapResolution(shadowMapResolution), m_Type(type),
 			m_FragmentBuffer(world.m_Renderer) {}
