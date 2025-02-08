@@ -44,7 +44,7 @@ void main() {
 }
 			)";
 
-			static constexpr const char* pbr_draw_pipeline_fragment_shader = R"(
+		static constexpr const char* pbr_draw_pipeline_fragment_shader = R"(
 #version 450
 
 layout(location = 0) in vec2 inUV;
@@ -63,9 +63,9 @@ void main() {
 	outPositionAndMetallic = vec4(inPosition, 1.0f);
 	outNormalAndRougness = vec4(inNormal, 1.0f);
 }
-			)";
+		)";
 
-			static constexpr const char * ud_draw_vertex_shader = R"(
+		static constexpr const char * ud_draw_vertex_shader = R"(
 #version 450
 
 layout(location = 0) in vec3 inPosition;
@@ -83,9 +83,9 @@ layout(push_constant) uniform PushConstant {
 void main() {
 	gl_Position = pc.c_LightView * pc.c_Transform * vec4(inPosition.x, -inPosition.y, inPosition.z, 1.0f);
 }
-			)";
+		)";
 
-			static constexpr const char* pbr_render_pipeline_vertex_shader = R"(
+		static constexpr const char* pbr_render_pipeline_vertex_shader = R"(
 #version 450
 
 layout(location = 0) in vec3 inPosition;
@@ -97,9 +97,9 @@ void main() {
 	outUV = inUV;
 	gl_Position = vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
 }
-			)";
+		)";
 
-			static constexpr const char* pbr_render_pipeline_fragment_shader = R"(
+		static constexpr const char* pbr_render_pipeline_fragment_shader = R"(
 #version 450
 
 layout(location = 0) in vec2 inUV;
@@ -153,9 +153,9 @@ void main() {
 
 	outColor = vec4(color, 1.0f);
 }
-			)";
+		)";
 
-			static constexpr const char* debug_pipeline_vertex_shader = R"(
+		static constexpr const char* debug_pipeline_vertex_shader = R"(
 #version 450
 
 layout(location = 0) in vec3 inPosition;
@@ -170,15 +170,16 @@ layout(set = 0, binding = 0) uniform CameraMatrices {
 } camera_matrices;
 
 layout(push_constant) uniform PushConstant {
-	layout(offset = 0) mat4 c_Transform;
+	layout(offset = 0) 
+	mat4 c_Transform;
 } pc;
 
 void main() {
 	gl_Position = camera_matrices.c_Projection * camera_matrices.c_View * pc.c_Transform * vec4(inPosition.x, -inPosition.y, inPosition.z, 1.0f);
 }
-			)";
+		)";
 
-			static constexpr const char* debug_pipeline_fragment_shader = R"(
+		static constexpr const char* debug_pipeline_fragment_shader = R"(
 #version 450
 
 layout(location = 0) out vec4 outColor;
@@ -191,6 +192,82 @@ layout(push_constant) uniform PushConstant {
 void main() {
 	outColor = pc.c_Color;
 }
-			)";
+		)";
+	};
+
+	class Editor {
+	public:
+
+		static constexpr const char* torus_pipeline_vertex_shader = R"(
+#version 450
+
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec2 inUV;
+
+layout(location = 0) out vec2 outUV;
+layout(location = 1) out vec3 outRayOrigin;
+layout(location = 2) out vec3 outRayDirection;
+
+layout(push_constant) uniform PushConstant {
+	layout(offset = 0)
+	mat4 c_InverseCameraMatrix;
+	float c_CameraNear;
+	float c_CameraFar;
+} pc;
+
+layout(set = 0, binding = 0) uniform Transform {
+	mat4 c_RectTransform;
+} transform;
+
+void main() {
+	gl_Position = transform.c_RectTransform * vec4(inPosition.x, -inPosition.y, inPosition.z, 1.0f);
+	const float near = pc.c_CameraNear;
+	const float far = pc.c_CameraFar;
+	vec2 pos = vec2(inPosition.x, -inPosition.y);
+	outRayOrigin = (pc.c_InverseCameraMatrix * vec4(pos, -1.0f, 1.0f) * near).xyz;
+	outRayDirection = (pc.c_InverseCameraMatrix * vec4(pos * (far - near), far + near, far - near)).xyz;
+}
+		)";
+
+		static constexpr const char* torus_pipeline_fragment_shader = R"(
+#version 450
+
+layout(location = 0) in vec2 inUV;
+layout(location = 1) in vec3 inRayOrigin;
+layout(location = 2) in vec3 inRayDirection;
+
+layout(location = 0) out vec4 outColor;
+
+float SdTorus(vec3 pos, float r, float t) {
+	vec2 q = vec2(length(pos.xz) - r, pos.y);
+	return length(q) - t;
+}
+
+float Map(vec3 pos) {
+	return SdTorus(pos, 0.4f, 0.01f);
+}
+
+void main() {
+
+	const vec3 ro = inRayOrigin;
+	const vec3 rd = normalize(inRayDirection);
+
+	const float tmax = 5.0f;
+	float t = 0.0f;
+	for (int i = 0; i < 256; i++) {
+		vec3 pos = ro + rd * t;
+		float h = Map(pos);
+		if (h < 0.0001f || t > tmax) {
+			break;
+		}
+		t += h;
+	}
+	vec4 col = vec4(0.0f);
+	if (t < tmax) {
+		col = vec4(0.8f, 0.8f, 0.8f, 1.0f);
+	}
+	outColor = col;
+}
+		)";
 	};
 }
