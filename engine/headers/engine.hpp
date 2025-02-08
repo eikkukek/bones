@@ -6706,7 +6706,7 @@ void main() {
 			if (m_Pipelines.m_DebugRenderTransformDescriptorSetLayout == VK_NULL_HANDLE) {
 
 				VkDescriptorSetLayoutBinding torusDesriptorSetBinding 
-					= m_Renderer.GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT);
+					= m_Renderer.GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
 
 				m_Pipelines.m_DebugRenderTransformDescriptorSetLayout = m_Renderer.CreateDescriptorSetLayout(nullptr, 1, &torusDesriptorSetBinding);
 
@@ -6889,6 +6889,8 @@ void main() {
 			ImGui::Render();
 			ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), drawData.m_CommandBuffer);
 
+			/*
+
 			vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TorusPipeline);
 			vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TorusPipelineLayout, 
 				0, 1, &m_DebugRenderTransformDescriptorSet, 0, nullptr);
@@ -6908,7 +6910,9 @@ void main() {
 			vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_TorusPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
 				0, sizeof(TorusPC), &pc);
 
+
 			Renderer::DrawIndexed(drawData.m_CommandBuffer, m_QuadMesh2DData);
+			*/
 
 			vkCmdEndRendering(drawData.m_CommandBuffer);
 		}
