@@ -3598,8 +3598,8 @@ mat4 c_Transform;
 } pc;
 
 void main() {
-outUV = inUV;
-gl_Position = pc.c_Transform * vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
+	outUV = inUV;
+	gl_Position = pc.c_Transform * vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
 }
 			)";
 
@@ -3615,12 +3615,12 @@ layout(location = 0) out vec4 outColor;
 layout(set = 0, binding = 0) uniform sampler2D textures[];
 
 layout(push_constant) uniform PushConstant {
-layout(offset = 64) 
-uint c_TextureIndex;
+	layout(offset = 64) 
+	uint c_TextureIndex;
 } pc;
 
 void main() {
-outColor = texture(textures[nonuniformEXT(pc.c_TextureIndex)], inUV);
+	outColor = texture(textures[nonuniformEXT(pc.c_TextureIndex)], inUV);
 }
 			)";
 
@@ -3634,12 +3634,12 @@ layout(location = 0) out vec2 outUV;
 
 layout(push_constant) uniform PushConstant {
 layout(offset = 0)
-mat4 c_Transform;
+	mat4 c_Transform;
 } pc;
 
 void main() {
-outUV = inUV;
-gl_Position = pc.c_Transform * vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
+	outUV = inUV;
+	gl_Position = pc.c_Transform * vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
 }
 			)";
 
@@ -3654,19 +3654,19 @@ layout(set = 0, binding = 0) uniform sampler2D glyph_atlas; // unnormalized coor
 layout(set = 0, binding = 1) uniform sampler2D color_mask; // unnormalized coordinates
 
 layout(push_constant) uniform PushConstant1 {
-layout(offset = 64)
-uvec2 c_FrameExtent;
-uvec2 c_Bearing;
-uint c_AtlasOffsetX;
-vec4 c_Color;
-ivec2 c_ColorMaskOffset;
+	layout(offset = 64)
+	uvec2 c_FrameExtent;
+	uvec2 c_Bearing;
+	uint c_AtlasOffsetX;
+	vec4 c_Color;
+	ivec2 c_ColorMaskOffset;
 } pc;
 
 void main() {
-vec2 localUV = uvec2(inUV.x * pc.c_FrameExtent.x, inUV.y * pc.c_FrameExtent.y);
-float val = textureLod(glyph_atlas, localUV + vec2(pc.c_AtlasOffsetX, 0.0f), 0).r;
-outColor = pc.c_ColorMaskOffset.x != -1 ? textureLod(color_mask, localUV + pc.c_ColorMaskOffset, 0) : pc.c_Color;
-outColor *= val;
+	vec2 localUV = uvec2(inUV.x * pc.c_FrameExtent.x, inUV.y * pc.c_FrameExtent.y);
+	float val = textureLod(glyph_atlas, localUV + vec2(pc.c_AtlasOffsetX, 0.0f), 0).r;
+	outColor = pc.c_ColorMaskOffset.x != -1 ? textureLod(color_mask, localUV + pc.c_ColorMaskOffset, 0) : pc.c_Color;
+	outColor *= val;
 }
 			)";
 
@@ -3679,8 +3679,8 @@ layout(location = 1) in vec2 inUV;
 layout(location = 0) out vec2 outUV;
 
 void main() {
-outUV = inUV;
-gl_Position = vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
+	outUV = inUV;
+	gl_Position = vec4(vec3(inPosition.x, -inPosition.y, inPosition.z), 1.0f);
 }
 			)";
 
@@ -3696,7 +3696,7 @@ layout(location = 0) out vec4 outColor;
 layout(set = 0, binding = 0) uniform sampler2D image;
 
 void main() {
-outColor = texture(image, inUV);
+	outColor = texture(image, inUV);
 }
 			)";
 		};
@@ -5747,7 +5747,7 @@ outColor = texture(image, inUV);
 			}
 			uint64_t ID;
 			uint32_t type;
-			if (fscanf(metafile, "ID:%uType:%u\n", &ID) != 2) {
+			if (fscanf(metafile, "ID:%llu\nType:%u\n", &ID, &type) != 2) {
 				PrintError(ErrorOrigin::FileParsing,
 					"invalid metadata file (in function LoadMetadata)!");
 				return false;
@@ -6563,21 +6563,26 @@ outColor = texture(image, inUV);
 		Vec4 m_WireColor = { 45.0f / 255, 173.0f / 255, 137.0f / 255, 1.0f };
 
 	private:
-		
+	
+		GLFWwindow* const m_GLFWwindow;
+		ObjectID m_InspectedArea{};
+		uint32_t m_SelectedObjectIndex = UINT64_MAX;
 		MeshData m_CubeMeshData;
 
-		GLFWwindow* const m_GLFWwindow;
+		pipelines::Editor m_Pipelines{};
+		VkDescriptorSet m_DebugRenderTransformDescriptorSet = VK_NULL_HANDLE;
+		MeshData m_QuadMesh2DData;
 
-		ObjectID m_InspectedArea{};
-
-		uint32_t m_SelectedObjectIndex = UINT64_MAX;
+		Mat4* m_DebugRenderTransformMap = nullptr;
 
 		ImGuiContext* m_ImGuiContext = nullptr;
 		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
 		VkFormat m_ImGuiColorAttachmentFormat = VK_FORMAT_UNDEFINED;
+		Renderer::Buffer m_DebugRenderTransformBuffer;
+		VkDescriptorPool m_DebugRenderTransformDescriptorPool = VK_NULL_HANDLE;
 
 		Editor(World& world, Renderer& renderer, GLFWwindow* glfwWindow) 
-			: m_World(world), m_Renderer(renderer), m_GLFWwindow(glfwWindow) {}
+			: m_World(world), m_Renderer(renderer), m_GLFWwindow(glfwWindow), m_DebugRenderTransformBuffer(m_Renderer) {}
 
 		Editor(const Editor&) = delete;
 
@@ -6614,9 +6619,10 @@ outColor = texture(image, inUV);
 
 	private:
 
-		void Initialize(GLFWwindow* glfwWindow, const MeshData& cubeMeshData) {
+		void Initialize(GLFWwindow* glfwWindow, const MeshData& cubeMeshData, const MeshData& quadMesh2D) {
 
 			m_CubeMeshData = cubeMeshData;
+			m_QuadMesh2DData = quadMesh2D;
 
 			IMGUI_CHECKVERSION();
 
@@ -6679,6 +6685,8 @@ outColor = texture(image, inUV);
 				CriticalError(ErrorOrigin::Editor,
 					"failed to initialize ImGui (function ImGui_ImplVulkan_CreateFontsTexture in function Editor::Initialize)!");
 			}
+
+			m_Pipelines.Initialize(m_Renderer);
 		}
 
 		void Terminate() {
@@ -6687,7 +6695,62 @@ outColor = texture(image, inUV);
 			ImGui::DestroyContext(m_ImGuiContext);
 			m_ImGuiContext = nullptr;
 			m_Renderer.DestroyDescriptorPool(m_ImGuiDescriptorPool);
-			m_ImGuiDescriptorPool = nullptr;
+			m_ImGuiDescriptorPool = VK_NULL_HANDLE;
+			m_Renderer.DestroyDescriptorPool(m_DebugRenderTransformDescriptorPool);
+			m_DebugRenderTransformBuffer.Terminate();
+			m_Pipelines.Terminate(m_Renderer);
+		}
+
+		void SwapchainCreateCallback(float aspectRatio) {
+
+			if (m_Pipelines.m_DebugRenderTransformDescriptorSetLayout == VK_NULL_HANDLE) {
+
+				VkDescriptorSetLayoutBinding torusDesriptorSetBinding 
+					= m_Renderer.GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT);
+
+				m_Pipelines.m_DebugRenderTransformDescriptorSetLayout = m_Renderer.CreateDescriptorSetLayout(nullptr, 1, &torusDesriptorSetBinding);
+
+				if (m_Pipelines.m_DebugRenderTransformDescriptorSetLayout == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to create torus descriptor set layout (function Renderer::CreateDescriptorSetLayout in function Editor::SwapchainCreateCallback)!");
+				}
+			}
+
+			if (m_DebugRenderTransformBuffer.IsNull()) {
+				if (!m_DebugRenderTransformBuffer.Create(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to create debug render transform buffer (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
+				}
+				if (!m_DebugRenderTransformBuffer.MapMemory(0, 64, (void**)&m_DebugRenderTransformMap)) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to map debug render transform buffer (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)");
+				}
+				VkDescriptorPoolSize poolSize {
+					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+					.descriptorCount = 1,
+				};
+				m_DebugRenderTransformDescriptorPool = m_Renderer.CreateDescriptorPool(0, 1, 1, &poolSize);
+				if (m_DebugRenderTransformDescriptorPool == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to create debug render transform descriptor pool (function Renderer::CreateDescriptorPool in function Editor::SwapchainCreateCallback)!");
+				}
+				if (!m_Renderer.AllocateDescriptorSets(nullptr, m_DebugRenderTransformDescriptorPool, 1, 
+						&m_Pipelines.m_DebugRenderTransformDescriptorSetLayout, &m_DebugRenderTransformDescriptorSet)) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to allocate debug render transform descriptor set (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
+				}
+				VkDescriptorBufferInfo bufferInfo {
+					.buffer = m_DebugRenderTransformBuffer.m_Buffer,
+					.offset = 0,
+					.range = 64,
+				};
+				VkWriteDescriptorSet write = Renderer::GetDescriptorWrite(nullptr, 0, m_DebugRenderTransformDescriptorSet,
+					VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &bufferInfo);
+				m_Renderer.UpdateDescriptorSets(1, &write);
+			}
+
+			*m_DebugRenderTransformMap = Mat4(1.0f);
 		}
 
 	public:
@@ -6796,6 +6859,7 @@ outColor = texture(image, inUV);
 		}
 
 		void Render(const Renderer::DrawData& drawData) {
+
 			VkRenderingAttachmentInfo colorAttachmentInfo {
 				.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
 				.pNext = nullptr,
@@ -6821,8 +6885,31 @@ outColor = texture(image, inUV);
 			};
 
 			vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
+
 			ImGui::Render();
 			ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), drawData.m_CommandBuffer);
+
+			vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TorusPipeline);
+			vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TorusPipelineLayout, 
+				0, 1, &m_DebugRenderTransformDescriptorSet, 0, nullptr);
+
+			struct TorusPC {
+				const Mat4 c_InverseCameraMatrix;
+				const float c_CameraNear;
+				const float c_CameraFar;
+			};
+
+			TorusPC pc {
+				.c_InverseCameraMatrix = Inverse(m_World.m_CameraMatricesMap->m_Projection * m_World.m_CameraMatricesMap->m_View),
+				.c_CameraNear = World::default_camera_near,
+				.c_CameraFar = World::default_camera_far,
+			};
+
+			vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_TorusPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
+				0, sizeof(TorusPC), &pc);
+
+			Renderer::DrawIndexed(drawData.m_CommandBuffer, m_QuadMesh2DData);
+
 			vkCmdEndRendering(drawData.m_CommandBuffer);
 		}
 	};
@@ -6849,10 +6936,10 @@ outColor = texture(image, inUV);
 
 		UI m_UI;
 		World m_World;
+		Editor m_Editor;
 		Renderer m_Renderer;
 		TextRenderer m_TextRenderer;
 		AssetManager m_AssetManager;
-		Editor m_Editor;
 
 		StaticMesh m_StaticQuadMesh;
 		StaticMesh m_StaticQuadMesh2D;
@@ -7094,7 +7181,7 @@ outColor = texture(image, inUV);
 
 			m_World.Initialize(m_StaticQuadMesh2D);
 			m_UI.Initialize(m_StaticQuadMesh2D);
-			m_Editor.Initialize(glfwWindow, m_StaticBoxMesh.GetMeshData());
+			m_Editor.Initialize(glfwWindow, m_StaticBoxMesh.GetMeshData(), m_StaticQuadMesh2D.GetMeshData());
 		}
 
 		Engine(const Engine&) = delete;
@@ -7259,6 +7346,7 @@ outColor = texture(image, inUV);
 			s_engine_instance->m_RenderResolution = { (uint32_t)(renderResHeight * aspectRatio), renderResHeight};
 			s_engine_instance->m_UI.SwapchainCreateCallback({ swapchainExtent.width, swapchainExtent.height }, aspectRatio, imageCount);
 			s_engine_instance->m_World.SwapchainCreateCallback(swapchainExtent, s_engine_instance->m_RenderResolution, aspectRatio, imageCount);
+			s_engine_instance->m_Editor.SwapchainCreateCallback(aspectRatio);
 		}
 
 		static inline EngineMode UpdateEngineInstance(Engine* engine, EngineMode mode) {
