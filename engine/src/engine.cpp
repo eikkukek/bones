@@ -610,6 +610,7 @@ namespace engine {
 	}
 
 	void World::SwapchainCreateCallback(VkExtent2D swapchainExtent, Vec2_T<uint32_t> renderResolution, float aspectRatio, uint32_t imageCount) {
+
 		m_RenderResolution = renderResolution;
 
 		m_EditorCamera.m_Projection
