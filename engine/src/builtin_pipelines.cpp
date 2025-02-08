@@ -298,15 +298,35 @@ namespace pipelines {
 	void Editor::Initialize(engine::Renderer& renderer) {
 		using namespace engine;
 
-		const VkPushConstantRange pushConstantRanges[1] {
+		const VkPushConstantRange torusPushConstantRanges[2] {
 			{
 				.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
 				.offset = 0,
 				.size = 72,
 			},
+			{
+				.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+				.offset = 80,
+				.size = 36,
+			},
 		};
 
-		m_TorusPipelineLayout = renderer.CreatePipelineLayout(1, &m_DebugRenderTransformDescriptorSetLayout, 1, pushConstantRanges);
+		VkDescriptorSetLayoutBinding torusBinding 
+			= Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT);
+
+		m_TorusInverseTransformDescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 1, &torusBinding);
+
+		if (m_TorusInverseTransformDescriptorSetLayout == VK_NULL_HANDLE) {
+			CriticalError(ErrorOrigin::Renderer,
+				"failed to create torus inverse transform descriptor set layout (function Renderer::CreateDescriptorSetLayout in function pipelines::Editor::Initialize)!");
+		}
+
+		VkDescriptorSetLayout torusSetLayouts[2] {
+			m_DebugRenderTransformDescriptorSetLayout,
+			m_TorusInverseTransformDescriptorSetLayout,
+		};
+
+		m_TorusPipelineLayout = renderer.CreatePipelineLayout(2, torusSetLayouts, 2, torusPushConstantRanges);
 
 		if (m_TorusPipelineLayout == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
