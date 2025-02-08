@@ -238,13 +238,24 @@ layout(location = 2) in vec3 inRayDirection;
 
 layout(location = 0) out vec4 outColor;
 
+layout(set = 1, binding = 0) uniform Transform {
+	mat4 c_InverseTransform;
+} transform;
+
+layout(push_constant) uniform PushConstant {
+	layout(offset = 80)
+	vec4 c_Color;
+	float c_Radius;
+	float c_Thickness;
+} pc;
+
 float SdTorus(vec3 pos, float r, float t) {
 	vec2 q = vec2(length(pos.xz) - r, pos.y);
 	return length(q) - t;
 }
 
 float Map(vec3 pos) {
-	return SdTorus(pos, 0.4f, 0.01f);
+	return SdTorus((transform.c_InverseTransform * vec4(pos, 1.0f)).xyz, pc.c_Radius, pc.c_Thickness);
 }
 
 void main() {
@@ -264,7 +275,7 @@ void main() {
 	}
 	vec4 col = vec4(0.0f);
 	if (t < tmax) {
-		col = vec4(0.8f, 0.8f, 0.8f, 1.0f);
+		col = pc.c_Color;
 	}
 	outColor = col;
 }
