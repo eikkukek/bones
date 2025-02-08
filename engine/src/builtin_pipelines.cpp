@@ -15,7 +15,7 @@ namespace pipelines {
 
 		if (m_CameraDescriptorSetLayout == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer, 
-				"failed to create camera descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
+				"failed to create camera descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function pipelines::World::Initialize)!");
 		}
 
 		static constexpr VkDescriptorSetLayoutBinding texture_descriptor_set_layout_binding
@@ -25,7 +25,7 @@ namespace pipelines {
 
 		if (m_TextureDescriptorSetLayoutPBR == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
-				"failed to create albedo descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
+				"failed to create albedo descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function pipelines::World::Initialize)!");
 		}
 
 		const VkPushConstantRange pbrDrawPushConstantRange {
@@ -44,7 +44,7 @@ namespace pipelines {
 
 		if (m_DrawPipelineLayoutPBR == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
-				"failed to create pbr draw pipeline layout for world (function Renderer::CreatePipelineLayout in function World::Pipelines::Initialize)!");
+				"failed to create pbr draw pipeline layout for world (function Renderer::CreatePipelineLayout in function pipelines::World::Initialize)!");
 		}
 
 		const VkPushConstantRange udDrawPipelinePushConstantRange {
@@ -57,7 +57,7 @@ namespace pipelines {
 
 		if (m_DrawPipelineLayoutUD == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer, 
-				"failed to create unidirectional light pipeline layout (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
+				"failed to create unidirectional light pipeline layout (function Renderer::CreateDescriptorSetLayout in function pipelines::World::Initialize)!");
 		}
 
 		const VkDescriptorSetLayout pbrRenderPipelineDescriptorSetLayouts[2] {
@@ -70,7 +70,7 @@ namespace pipelines {
 
 		if (m_RenderPipelineLayoutPBR == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer, 
-				"faileld to create pbr render pipeline layout for world (function Renderer::CreatePipelineLayout in function World::Pipelines::Initialize)!");
+				"faileld to create pbr render pipeline layout for world (function Renderer::CreatePipelineLayout in function pipelines::World::Initialize)!");
 		}
 
 		const VkPushConstantRange debugPushConstantRanges[2] {
@@ -82,7 +82,7 @@ namespace pipelines {
 
 		if (m_DebugPipelineLayout == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
-				"failed to create debug pipeline layout for world (function Renderer::CreatePipelineLayout in function World::Pipelines::initialize)");
+				"failed to create debug pipeline layout for world (function Renderer::CreatePipelineLayout in function pipelines::World::initialize)");
 		}
 
 		Renderer::Shader pbrDrawShaders[2] {
@@ -92,12 +92,12 @@ namespace pipelines {
 
 		if (!pbrDrawShaders[0].Compile(shaders::World::pbr_draw_pipeline_vertex_shader)) {
 			CriticalError(ErrorOrigin::Renderer, 
-				"failed to compile pbr draw vertex shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
+				"failed to compile pbr draw vertex shader code (function Renderer::Shader::Compile in function pipelines::World::Initialize)!");
 		}
 
 		if (!pbrDrawShaders[1].Compile(shaders::World::pbr_draw_pipeline_fragment_shader)) {
 			CriticalError(ErrorOrigin::Renderer, 
-				"failed to compile pbr draw fragment shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
+				"failed to compile pbr draw fragment shader code (function Renderer::Shader::Compile in function pipelines::World::Initialize)!");
 		}
 
 		const VkPipelineShaderStageCreateInfo pbrDrawPipelineShaderStageInfos[2] {
@@ -109,7 +109,7 @@ namespace pipelines {
 
 		if (!udDrawVertexShader.Compile(shaders::World::ud_draw_vertex_shader)) {
 			CriticalError(ErrorOrigin::Renderer, 
-				"failed to compile unidirectional light draw vertex shader (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
+				"failed to compile unidirectional light draw vertex shader (function Renderer::CreateDescriptorSetLayout in function pipelines::World::Initialize)!");
 		}
 
 		const VkPipelineShaderStageCreateInfo udDrawPipelineShaderStageInfo 
@@ -122,12 +122,12 @@ namespace pipelines {
 
 		if (!pbrRenderShaders[0].Compile(shaders::World::pbr_render_pipeline_vertex_shader)) {
 			CriticalError(ErrorOrigin::Renderer, 
-				"failed to compile pbr render vertex shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
+				"failed to compile pbr render vertex shader code (function Renderer::Shader::Compile in function pipelines::World::Initialize)!");
 		}
 
 		if (!pbrRenderShaders[1].Compile(shaders::World::pbr_render_pipeline_fragment_shader)) {
 			CriticalError(ErrorOrigin::Renderer, 
-				"failed to compile pbr render fragment shader code (function Renderer::Shader::Compile in function World::Pipeliens:.Initialize)");
+				"failed to compile pbr render fragment shader code (function Renderer::Shader::Compile in function pipelines::World:.Initialize)");
 		}
 
 		const VkPipelineShaderStageCreateInfo pbrRenderPipelineShaderStageInfos[2] {
@@ -142,12 +142,12 @@ namespace pipelines {
 
 		if (!debugShaders[0].Compile(shaders::World::debug_pipeline_vertex_shader)) {
 			CriticalError(ErrorOrigin::Renderer, 
-				"failed to compile vertex shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
+				"failed to compile vertex shader code (function Renderer::Shader::Compile in function pipelines::World::Initialize)!");
 		}
 
 		if (!debugShaders[1].Compile(shaders::World::debug_pipeline_fragment_shader)) {
 			CriticalError(ErrorOrigin::Renderer, 
-				"failed to compile fragment shader code (function Renderer::Shader::Compile in function World::Pipelines::Initialize)!");
+				"failed to compile fragment shader code (function Renderer::Shader::Compile in function pipelines::World::Initialize)!");
 		}
 
 		const VkPipelineShaderStageCreateInfo debugPipelineShaderStageInfos[2] {
@@ -286,12 +286,93 @@ namespace pipelines {
 
 		if (!renderer.CreateGraphicsPipelines(pipeline_count, graphicsPipelineInfos, pipelines)) {
 			CriticalError(ErrorOrigin::Renderer,
-				"failed to create world graphics pipeline (function Renderer::CreateGraphicsPipelines in function World::Pipelines::Initialize)!");
+				"failed to create world graphics pipeline (function Renderer::CreateGraphicsPipelines in function pipelines::World::Initialize)!");
 		}
 
 		m_DrawPipelinePBR = pipelines[0];
 		m_DrawPipelineUD = pipelines[1];
 		m_RenderPipelinePBR = pipelines[2];
 		m_WirePipeline = pipelines[3];
+	}
+
+	void Editor::Initialize(engine::Renderer& renderer) {
+		using namespace engine;
+
+		const VkPushConstantRange pushConstantRanges[1] {
+			{
+				.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+				.offset = 0,
+				.size = 72,
+			},
+		};
+
+		m_TorusPipelineLayout = renderer.CreatePipelineLayout(1, &m_DebugRenderTransformDescriptorSetLayout, 1, pushConstantRanges);
+
+		if (m_TorusPipelineLayout == VK_NULL_HANDLE) {
+			CriticalError(ErrorOrigin::Renderer,
+				"failed to create torus pipeline layout (function Renderer::CreatePipelineLayout in function pipelines::Editor::Initialize)!");
+		}
+
+		Renderer::Shader torusShaders[2] { 
+			{ renderer, VK_SHADER_STAGE_VERTEX_BIT },
+			{ renderer, VK_SHADER_STAGE_FRAGMENT_BIT },
+		};
+
+		if (!torusShaders[0].Compile(shaders::Editor::torus_pipeline_vertex_shader)) {
+			CriticalError(ErrorOrigin::Renderer,
+				"failed to compile torus vertex shader (function Renderer::Shader::Compile in function pipelines::Editor::Initialize)!");
+		}
+
+		if (!torusShaders[1].Compile(shaders::Editor::torus_pipeline_fragment_shader)) {
+			CriticalError(ErrorOrigin::Renderer,
+				"failed to compile torus fragment shader (function Renderer::Shader::Compile in function pipelines::Editor::Initialize)!");
+		}
+
+		VkPipelineShaderStageCreateInfo torusShaderStageInfos[2] {
+			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(torusShaders[0]),
+			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(torusShaders[1]),
+		};
+
+		VkPipelineRenderingCreateInfo torusRenderingInfo {
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+			.pNext = nullptr,
+			.viewMask = 0,
+			.colorAttachmentCount = 1,
+			.pColorAttachmentFormats = &renderer.m_SwapchainSurfaceFormat.format,
+			.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
+			.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+		};
+
+		VkPipelineColorBlendStateCreateInfo torusBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
+		torusBlendState.attachmentCount = 1;
+		torusBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
+
+		VkGraphicsPipelineCreateInfo graphicsPipelineInfos[1] {
+			{
+				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+				.pNext = &torusRenderingInfo,
+				.stageCount = 2,
+				.pStages = torusShaderStageInfos,
+				.pVertexInputState = &Vertex2D::GetVertexInputState(),
+				.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
+				.pTessellationState = nullptr,
+				.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
+				.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
+				.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
+				.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
+				.pColorBlendState = &torusBlendState,
+				.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
+				.layout = m_TorusPipelineLayout,
+				.renderPass = VK_NULL_HANDLE,
+				.subpass = 0,
+				.basePipelineHandle = VK_NULL_HANDLE,
+				.basePipelineIndex = 0,
+			},
+		};
+
+		if (!renderer.CreateGraphicsPipelines(1, graphicsPipelineInfos, &m_TorusPipeline)) {
+			CriticalError(ErrorOrigin::Renderer,
+				"failed to create graphis pipelines for editor (function Renderer::CreateGraphicsPipelines in function pipelines::Editor::Initialize)!");
+		}
 	}
 }
