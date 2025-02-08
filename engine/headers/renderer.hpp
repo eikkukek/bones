@@ -988,6 +988,8 @@ namespace engine {
 				.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
 			};
 
+			/*! @brief Default pipeline color blend state create info with attachment count of 0
+			*/
 			static constexpr VkPipelineColorBlendStateCreateInfo color_blend_state {
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
 				.pNext = nullptr,
@@ -2232,7 +2234,7 @@ namespace engine {
 		}
 
 		bool CreateGraphicsPipelines(uint32_t pipelineCount, const VkGraphicsPipelineCreateInfo* pipelineCreateInfos, VkPipeline outPipelines[]) {
-			if (!VkCheck(vkCreateGraphicsPipelines(m_VulkanDevice, VK_NULL_HANDLE, pipelineCount, pipelineCreateInfos, 
+			if (!VkCheck(vkCreateGraphicsPipelines(m_VulkanDevice, VK_NULL_HANDLE, pipelineCount, pipelineCreateInfos,
 					m_VulkanAllocationCallbacks, outPipelines), 
 					"failed to create graphics pipelines (function vkCreateGraphicsPipelines in function CreateGraphicsPipelines)!")) {
 				return false;
