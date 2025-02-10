@@ -3440,10 +3440,6 @@ namespace engine {
 			return s_TextInput;
 		}
 
-		static Vec2_T<int> GetContentArea() {
-			return s_ContentArea;
-		}
-
 		static Vec2_T<double> GetMousePosition() {
 			return s_CursorPosition;
 		}
@@ -6145,8 +6141,7 @@ void main() {
 			if (mouseHeld || moved) {
 				if (mouseHeld) {
 					Vec2_T<double> deltaCursorPos = Input::GetDeltaMousePosition();
-					Vec2_T<double> contentArea = Input::GetContentArea();
-					m_EditorCameraRotations += Vec2(-deltaCursorPos.y / contentArea.y, deltaCursorPos.x / contentArea.x) * (m_EditorCameraSensitivity * Time::DeltaTime());
+					m_EditorCameraRotations += Vec2(-deltaCursorPos.y / 50.0f, deltaCursorPos.x / 50.0f) * (m_EditorCameraSensitivity * Time::DeltaTime());
 					m_EditorCameraRotations.x = fmod(m_EditorCameraRotations.x, 2 * pi);
 					m_EditorCameraRotations.y = fmod(m_EditorCameraRotations.y, 2 * pi);
 				}
@@ -6607,7 +6602,7 @@ void main() {
 
 		Mat4* m_DebugRenderTransformMap = nullptr;
 		Mat4* m_RotatorUniformBufferMaps[3] { 0, 0, 0 };
-		uint32_t* m_RotatorStorageBufferMaps[3] { 0, 0, 0 };
+		uint32_t* m_RotatorStorageBufferMaps[15] { 0, 0, 0 };
 
 		ImGuiContext* m_ImGuiContext = nullptr;
 		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
@@ -7243,11 +7238,16 @@ void main() {
 
 					if (*m_RotatorStorageBufferMaps[i]) {
 						color.w = 1.0f;
+						*m_RotatorStorageBufferMaps[i] = 0;
 					}
+
+					IntVec2 contentArea;
+
+					glfwGetWindowSize(m_GLFWwindow, &contentArea.x, &contentArea.y);
 
 					TorusPC_F pc_f {
 						.c_Color = color,
-						.c_Resolution = Input::GetContentArea(),
+						.c_Resolution = contentArea,
 						.c_MousePosition = Input::GetMousePosition(),
 						.c_Radius = 0.4f,
 						.c_Thickness = 0.005f,

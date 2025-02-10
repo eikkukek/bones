@@ -292,7 +292,8 @@ void main() {
 	if (t < sdfDepth) {
 		col = pc.c_Color;
 		outDepth = vec4(t, 0.0f, 0.0f, 1.0f);
-		hitBuffer.m_Hit = ((pc.c_Resolution * inUV) == pc.c_MousePosition) ? 1 : hitBuffer.m_Hit;
+		uvec2 mousePos = uvec2(pc.c_MousePosition.x, pc.c_Resolution - pc.c_MousePosition);
+		hitBuffer.m_Hit = (mousePos == ivec2(pc.c_Resolution * inUV)) ? 1 : hitBuffer.m_Hit;
 	}
 	else {
 		outDepth = vec4(sdfDepth, 0.0f, 0.0f, 1.0f);
