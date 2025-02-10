@@ -1,7 +1,6 @@
 #pragma once
 
 #include "algorithm.hpp"
-#include "fmt/printf.h"
 #include "fmt/color.h"
 #include <cstdio>
 #include <math.h>
@@ -24,6 +23,9 @@ namespace engine {
 
 	template<typename T>
 	struct Vec4_T;
+
+	template<typename T>
+	struct Quaternion_T;
 
 	/*! @brief Two element vector
 	*/
@@ -530,6 +532,10 @@ namespace engine {
 			return Vec3_T<T>(-columns[0].z, columns[1].z, -columns[2].z);
 		}
 
+		static constexpr inline Mat4_T AxisRotation(const Vec3_T<T>& axis, float radians) {
+			return Quaternion_T<T>::AxisRotation(axis, radians).AsMat4();
+		}
+
 		static constexpr inline Mat4_T Projection(T radFovY, T aspectRatio, T zNear, T zFar) noexcept {
 			T halfTan = tan(radFovY / 2);
 			Mat4_T result(1);
@@ -743,8 +749,7 @@ namespace engine {
 	struct Quaternion_T {
 
 		static constexpr inline const Quaternion_T& Identity() noexcept { 
-			static constexpr Quaternion_T identity = Quaternion_T(Cast(0), Cast(0), Cast(0), Cast(1));
-			return identity;
+			return Quaternion_T(Cast(0), Cast(0), Cast(0), Cast(1));
 		}
 
 		T x, y, z, w;
