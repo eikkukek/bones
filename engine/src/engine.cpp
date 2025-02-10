@@ -922,25 +922,25 @@ namespace engine {
 
 		assert(imageCount < 5);
 
-		if (m_Pipelines.m_RenderTransformDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
+		if (m_Pipelines.m_QuadTransformDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
 
 			VkDescriptorSetLayoutBinding binding { 
 				m_Renderer.GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT),
 			};
 
-			m_Pipelines.m_RenderTransformDescriptorSetLayoutSDF = m_Renderer.CreateDescriptorSetLayout(nullptr, 1, &binding);
+			m_Pipelines.m_QuadTransformDescriptorSetLayoutSDF = m_Renderer.CreateDescriptorSetLayout(nullptr, 1, &binding);
 
-			if (m_Pipelines.m_RenderTransformDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
+			if (m_Pipelines.m_QuadTransformDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
 				CriticalError(ErrorOrigin::Renderer,
 					"failed to create SDF transform descriptor set layout (function Renderer::CreateDescriptorSetLayout in function Editor::SwapchainCreateCallback)!");
 			}
 
-			if (!m_RenderTransformBufferSDF.Create(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+			if (!m_QuadTransformBufferSDF.Create(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
 					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
 				CriticalError(ErrorOrigin::Renderer,
 					"failed to create debug render transform buffer (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
 			}
-			if (!m_RenderTransformBufferSDF.MapMemory(0, 64, (void**)&m_DebugRenderTransformMap)) {
+			if (!m_QuadTransformBufferSDF.MapMemory(0, 64, (void**)&m_QuadTransformBufferMapSDF)) {
 				CriticalError(ErrorOrigin::Renderer,
 					"failed to map debug render transform buffer (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)");
 			}
@@ -948,195 +948,89 @@ namespace engine {
 				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 				.descriptorCount = 1,
 			};
-			m_RenderTransformDescriptorPoolSDF = m_Renderer.CreateDescriptorPool(0, 1, 1, &poolSize);
-			if (m_RenderTransformDescriptorPoolSDF  == VK_NULL_HANDLE) {
+			m_QuadTransformBufferDescriptorPoolSDF = m_Renderer.CreateDescriptorPool(0, 1, 1, &poolSize);
+			if (m_QuadTransformBufferDescriptorPoolSDF  == VK_NULL_HANDLE) {
 				CriticalError(ErrorOrigin::Renderer,
 					"failed to create debug render transform descriptor pool (function Renderer::CreateDescriptorPool in function Editor::SwapchainCreateCallback)!");
 			}
-			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_RenderTransformDescriptorPoolSDF, 1, 
-					&m_Pipelines.m_RenderTransformDescriptorSetLayoutSDF, &m_RenderTransformDescriptorSetSDF)) {
+			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_QuadTransformBufferDescriptorPoolSDF, 1, 
+					&m_Pipelines.m_QuadTransformDescriptorSetLayoutSDF, &m_QuadTransformDescriptorSetSDF)) {
 				CriticalError(ErrorOrigin::Renderer,
 					"failed to allocate debug render transform descriptor set (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
 			}
 			VkDescriptorBufferInfo bufferInfo {
-				.buffer = m_RenderTransformBufferSDF.m_Buffer,
+				.buffer = m_QuadTransformBufferSDF.m_Buffer,
 				.offset = 0,
 				.range = 64,
 			};
-			VkWriteDescriptorSet write = Renderer::GetDescriptorWrite(nullptr, 0, m_RenderTransformDescriptorSetSDF,
+			VkWriteDescriptorSet write = Renderer::GetDescriptorWrite(nullptr, 0, m_QuadTransformDescriptorSetSDF,
 				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &bufferInfo);
 			m_Renderer.UpdateDescriptorSets(1, &write);
 		}
 
-		*m_DebugRenderTransformMap = Mat4(1.0f);
+		*m_QuadTransformBufferMapSDF = Mat4(1.0f);
 
-		if (m_Pipelines.m_DepthImageDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
-
+		if (m_Pipelines.m_MouseHitDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
 			VkDescriptorSetLayoutBinding bindings[1] {
-				m_Renderer.GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT),
+				m_Renderer.GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT),
 			};
 
-			m_Pipelines.m_DepthImageDescriptorSetLayoutSDF = m_Renderer.CreateDescriptorSetLayout(nullptr, 1, bindings);
+			m_Pipelines.m_MouseHitDescriptorSetLayoutSDF = m_Renderer.CreateDescriptorSetLayout(nullptr, 1, bindings);
 
-			if (m_Pipelines.m_DepthImageDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
+			if (m_Pipelines.m_MouseHitDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
 				CriticalError(ErrorOrigin::Renderer, 
-					"failed to create SDF SDF depth image descriptor set layout (funtion Renderer::CreateDescriptorSetLayout in function Editor::SwapchainCreateCallback)");
+					"failed to create SDF mouse hit image descriptor set layout (funtion Renderer::CreateDescriptorSetLayout in function Editor::SwapchainCreateCallback)");
 			}
 		}
 
-		if (m_Sampler == VK_NULL_HANDLE) {
-			m_Sampler = m_Renderer.CreateSampler(Renderer::GetDefaultSamplerInfo());
-		}
 
-		if (m_DepthImageFormatSDF == VK_FORMAT_UNDEFINED) {
-			const VkFormat candidates[2] { VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_B8G8R8A8_SRGB, };
-			m_DepthImageFormatSDF = m_Renderer.FindSupportedFormat(2, candidates, VK_IMAGE_TILING_OPTIMAL,
-				VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
-			if (m_DepthImageFormatSDF == VK_FORMAT_UNDEFINED) {
+		if (m_LastImageCount != imageCount) {
+			for (uint32_t i = 0; i < 5; i++) {
+				m_MouseHitBuffersSDF[i].Terminate();
+			}
+			m_Renderer.DestroyDescriptorPool(m_MouseHitBufferDescriptorPoolSDF);
+			m_MouseHitBufferDescriptorPoolSDF = VK_NULL_HANDLE;
+			VkDescriptorPoolSize poolSizes[5];
+			VkDescriptorBufferInfo bufferInfos[5];
+			VkDescriptorSetLayout setLayouts[5];
+			for (uint32_t i = 0; i < imageCount; i++) {
+				if (!m_MouseHitBuffersSDF[i].Create(4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to create editor rotator storage buffers (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
+				}
+				if (!m_MouseHitBuffersSDF[i].MapMemory(0, 4, (void**)&m_MouseHitBufferMapsSDF[i])) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to map editor rotator storage buffers (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)!");
+				}
+				poolSizes[i] = {
+					.type =VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+					.descriptorCount = 1,
+				};
+				bufferInfos[i] = {
+					.buffer = m_MouseHitBuffersSDF[i].m_Buffer,
+					.offset = 0,
+					.range = 4,
+				};
+				setLayouts[i] = m_Pipelines.m_MouseHitDescriptorSetLayoutSDF;
+			}
+			m_MouseHitBufferDescriptorPoolSDF = m_Renderer.CreateDescriptorPool(0, imageCount, imageCount, poolSizes);
+			if (m_MouseHitBufferDescriptorPoolSDF  == VK_NULL_HANDLE) {
 				CriticalError(ErrorOrigin::Renderer,
-					"failed to find suitable format for SDF depth images (function Renderer::FindSupportedFormat in function Editor::SwapchainCreateCallback)!");
+					"failed to create rotator storage buffer descriptor pool (function Renderer::CreateDescriptorPool in function Editor:.SwapchainCreateCallback)!");
 			}
-		}
-
-		m_Renderer.DestroyDescriptorPool(m_DepthImageDescriptorPoolSDF);
-		m_DepthImageDescriptorPoolSDF = VK_NULL_HANDLE;
-
-		for (uint32_t i = 0; i < m_DepthImageCountSDF; i++) {
-
-			VkImage& image1 = m_DepthImagesSDF1[i];
-			VkDeviceMemory deviceMemory1 = m_DepthVulkanDeviceMemorySDF1[i];
-			VkImageView& imageView1 = m_DepthImageViewsSDF1[i];
-			VkImage& image2 = m_DepthImagesSDF2[i];
-			VkDeviceMemory deviceMemory2 = m_DepthVulkanDeviceMemorySDF2[i];
-			VkImageView& imageView2 = m_DepthImageViewsSDF2[i];
-
-			m_Renderer.DestroyImageView(imageView1);
-			imageView1 = VK_NULL_HANDLE;
-			m_Renderer.DestroyImage(image1);
-			image1 = VK_NULL_HANDLE;
-			m_Renderer.FreeVulkanDeviceMemory(deviceMemory1);
-			deviceMemory1 = VK_NULL_HANDLE;
-			m_Renderer.DestroyImageView(imageView2);
-			imageView2 = VK_NULL_HANDLE;
-			m_Renderer.DestroyImage(image2);
-			image2 = VK_NULL_HANDLE;
-			m_Renderer.FreeVulkanDeviceMemory(deviceMemory2);
-			deviceMemory2 = VK_NULL_HANDLE;
-		}
-
-		VkExtent3D imageExtent {
-			extent.width,
-			extent.height,
-			1,
-		};
-
-		VkDescriptorImageInfo imageInfos1[5];
-		VkDescriptorImageInfo imageInfos2[5];
-
-		for (uint32_t i = 0; i < imageCount; i++) {
-
-			VkImage& image1 = m_DepthImagesSDF1[i];
-			VkDeviceMemory& deviceMemory1 = m_DepthVulkanDeviceMemorySDF1[i];
-			VkImageView& imageView1 = m_DepthImageViewsSDF1[i];
-
-			image1 = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_DepthImageFormatSDF, imageExtent, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
-						VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_SHARING_MODE_EXCLUSIVE, 1, &m_Renderer.m_GraphicsQueueFamilyIndex);
-			if (image1 == VK_NULL_HANDLE) {
+			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_MouseHitBufferDescriptorPoolSDF, imageCount, setLayouts,
+					m_MouseHitDescriptorSetsSDF)) {
 				CriticalError(ErrorOrigin::Renderer,
-					"failed to create SDF depth image (funtion Renderer::CreateImage in function Editor::SwapchainCreateCallback)!");
+					"failed to allocate rotator storage buffer descriptor sets (function Renderer::AllocateDescriptorSets in function Editor:.SwapchainCreateCallback)!");
 			}
-			deviceMemory1 = m_Renderer.AllocateImageMemory(image1, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			if (deviceMemory1 == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to allocate SDF depth image memory (function Renderer::AllocateImageMemory in function Editor::SwapchainCreateCallback)");
+			VkWriteDescriptorSet writes[5]{};
+			for (uint32_t i = 0; i < imageCount; i++) {
+				writes[i] = Renderer::GetDescriptorWrite(nullptr, 0, m_MouseHitDescriptorSetsSDF[i],
+					VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &bufferInfos[i]);
 			}
-			imageView1 = m_Renderer.CreateImageView(image1, VK_IMAGE_VIEW_TYPE_2D, m_DepthImageFormatSDF, VK_IMAGE_ASPECT_COLOR_BIT);
-			if (imageView1 == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to create SDF depth image view (function Renderer::CreateImageView in function Editor::SwapchainCreateCallback)!");
-			}
-			imageInfos1[i] = {
-				.sampler = m_Sampler,
-				.imageView = imageView1,
-				.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-			};
-
-			VkImage& image2 = m_DepthImagesSDF2[i];
-			VkDeviceMemory& deviceMemory2 = m_DepthVulkanDeviceMemorySDF2[i];
-			VkImageView& imageView2 = m_DepthImageViewsSDF2[i];
-
-			image2 = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_DepthImageFormatSDF, imageExtent, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
-						VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_SHARING_MODE_EXCLUSIVE, 1, &m_Renderer.m_GraphicsQueueFamilyIndex);
-			if (image2 == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to create SDF depth image (funtion Renderer::CreateImage in function Editor::SwapchainCreateCallback)!");
-			}
-			deviceMemory2 = m_Renderer.AllocateImageMemory(image2, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			if (deviceMemory2 == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to allocate SDF depth image memory (function Renderer::AllocateImageMemory in function Editor::SwapchainCreateCallback)");
-			}
-			imageView2 = m_Renderer.CreateImageView(image2, VK_IMAGE_VIEW_TYPE_2D, m_DepthImageFormatSDF, VK_IMAGE_ASPECT_COLOR_BIT);
-			if (imageView2 == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to create SDF depth image view (function Renderer::CreateImageView in function Editor::SwapchainCreateCallback)!");
-			}
-			imageInfos2[i] = {
-				.sampler = m_Sampler,
-				.imageView = imageView2,
-				.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-			};
+			m_Renderer.UpdateDescriptorSets(imageCount, writes);
 		}
-
-		uint32_t descriptorCount = imageCount * 2;
-
-		VkDescriptorPoolSize poolSizes[10];
-
-		for (uint32_t i = 0; i < descriptorCount; i++) {
-			poolSizes[i] = {
-				.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-				.descriptorCount = 1,
-			};
-		}
-
-		m_DepthImageDescriptorPoolSDF = m_Renderer.CreateDescriptorPool(0, descriptorCount, descriptorCount, poolSizes);
-		if (m_DepthImageDescriptorPoolSDF == VK_NULL_HANDLE) {
-			CriticalError(ErrorOrigin::Renderer,
-				"failed to create SDF depth image descriptor pool (function Renderer::CreateDescriptorPool in function Editor::SwapchainCreateCallback)!");
-		}
-
-		VkDescriptorSetLayout depthImageSetLayouts[5];
-
-		for (uint32_t i = 0; i < imageCount; i++) {
-			depthImageSetLayouts[i] = m_Pipelines.m_DepthImageDescriptorSetLayoutSDF;
-		}
-
-		if (!m_Renderer.AllocateDescriptorSets(nullptr, m_DepthImageDescriptorPoolSDF, imageCount,
-				depthImageSetLayouts, m_DepthImageDescriptorSetsSDF1)) {
-			CriticalError(ErrorOrigin::Renderer,
-				"failed to allocate SDF depth image descriptor sets (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
-		}
-
-		if (!m_Renderer.AllocateDescriptorSets(nullptr, m_DepthImageDescriptorPoolSDF, imageCount,
-				depthImageSetLayouts, m_DepthImageDescriptorSetsSDF2)) {
-			CriticalError(ErrorOrigin::Renderer,
-				"failed to allocate SDF depth image descriptor sets (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
-		}
-
-		VkWriteDescriptorSet writes[10];
-
-		for (uint32_t i = 0; i < imageCount; i++) {
-
-			uint32_t index = i * 2;
-
-			writes[index] = Renderer::GetDescriptorWrite(nullptr, 0, m_DepthImageDescriptorSetsSDF1[i], VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-				&imageInfos1[i], nullptr);
-
-			writes[index + 1] = Renderer::GetDescriptorWrite(nullptr, 0, m_DepthImageDescriptorSetsSDF2[i], VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-				&imageInfos2[i], nullptr);
-		}
-		m_Renderer.UpdateDescriptorSets(descriptorCount, writes);
-
-		m_DepthImageCountSDF = imageCount;
+		m_LastImageCount = imageCount;
 	}
 }

@@ -61,27 +61,26 @@ namespace pipelines {
 	class Editor {
 	public:
 	
-		VkPipeline m_TorusPipeline = VK_NULL_HANDLE;
-		VkPipelineLayout m_TorusPipelineLayout = VK_NULL_HANDLE;
+		VkPipeline m_PipelineSDF = VK_NULL_HANDLE;
+		VkPipelineLayout m_PipelineLayoutSDF = VK_NULL_HANDLE;
 
-		VkDescriptorSetLayout m_RenderTransformDescriptorSetLayoutSDF = VK_NULL_HANDLE;
+		VkDescriptorSetLayout m_QuadTransformDescriptorSetLayoutSDF = VK_NULL_HANDLE;
+		VkDescriptorSetLayout m_RotatorInfoDescriptorSetLayoutSDF = VK_NULL_HANDLE;
+		VkDescriptorSetLayout m_MouseHitDescriptorSetLayoutSDF = VK_NULL_HANDLE;
 
-		VkDescriptorSetLayout m_DepthImageDescriptorSetLayoutSDF = VK_NULL_HANDLE;
-		VkDescriptorSetLayout m_TorusSet2DescriptorSetLayout = VK_NULL_HANDLE;
-
-		void Initialize(engine::Renderer& renderer, VkFormat sdfDepthFormat);
+		void Initialize(engine::Renderer& renderer);
 
 		void Terminate(engine::Renderer& renderer) {
-			renderer.DestroyPipeline(m_TorusPipeline);
-			m_TorusPipeline = VK_NULL_HANDLE;
-			renderer.DestroyPipelineLayout(m_TorusPipelineLayout);
-			m_TorusPipelineLayout = VK_NULL_HANDLE;
-			renderer.DestroyDescriptorSetLayout(m_TorusSet2DescriptorSetLayout);
-			m_TorusSet2DescriptorSetLayout = VK_NULL_HANDLE;
-			renderer.DestroyDescriptorSetLayout(m_RenderTransformDescriptorSetLayoutSDF);
-			m_RenderTransformDescriptorSetLayoutSDF = VK_NULL_HANDLE;
-			renderer.DestroyDescriptorSetLayout(m_DepthImageDescriptorSetLayoutSDF);
-			m_DepthImageDescriptorSetLayoutSDF = VK_NULL_HANDLE;
+			renderer.DestroyPipeline(m_PipelineSDF);
+			m_PipelineSDF = VK_NULL_HANDLE;
+			renderer.DestroyPipelineLayout(m_PipelineLayoutSDF);
+			m_PipelineLayoutSDF = VK_NULL_HANDLE;
+			renderer.DestroyDescriptorSetLayout(m_QuadTransformDescriptorSetLayoutSDF);
+			m_QuadTransformDescriptorSetLayoutSDF = VK_NULL_HANDLE;
+			renderer.DestroyDescriptorSetLayout(m_RotatorInfoDescriptorSetLayoutSDF);
+			m_RotatorInfoDescriptorSetLayoutSDF = VK_NULL_HANDLE;
+			renderer.DestroyDescriptorSetLayout(m_MouseHitDescriptorSetLayoutSDF);
+			m_MouseHitDescriptorSetLayoutSDF = VK_NULL_HANDLE;
 		}
 	};
 }

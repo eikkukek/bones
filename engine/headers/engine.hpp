@@ -273,6 +273,27 @@ namespace engine {
 			return *this;
 		}
 
+		template<typename... Args>
+		DynamicArray& Resize(uint32_t size, Args&&... args) {
+			if (size == m_Size) {
+				return *this;
+			}
+			if (size < m_Size) {
+				for (uint32_t i = size; i < m_Size; i++) {
+					(&m_Data[i])->~T();
+				}
+				m_Size = size;
+				return *this;
+			}
+			if (size >= m_Capacity) {
+				Reserve(size * 2);
+			}
+			for (uint32_t i = m_Size; i < size; i++) {
+				new(&m_Data[i]) T(args...);
+			}
+			m_Size = size;
+		}
+
 		DynamicArray& Clear() {
 			free(m_Data);
 			m_Data = nullptr;
@@ -5874,7 +5895,7 @@ void main() {
 		DynamicArray<Entity*> m_Entities{};
 		OrderedArray<ObjectID, Area> m_Areas{};
 		OrderedArray<ObjectID, Body> m_Bodies{};
-		float m_EditorCameraSensitivity = 400;
+		float m_EditorCameraSensitivity = pi / 2;
 		float m_EditorCameraSpeed = 5.0f;
 		static constexpr float editor_min_camera_speed = 1.0f;
 		static constexpr float editor_max_camera_speed = 20.0f;
@@ -6119,7 +6140,7 @@ void main() {
 			};
 		}
  
-		void EditorUpdate() {
+		void EditorUpdate(GLFWwindow* glfwWindow) {
 
 			using Key = Input::Key;
 			using MouseButton = Input::MouseButton;
@@ -6141,7 +6162,7 @@ void main() {
 			if (mouseHeld || moved) {
 				if (mouseHeld) {
 					Vec2_T<double> deltaCursorPos = Input::GetDeltaMousePosition();
-					m_EditorCameraRotations += Vec2(-deltaCursorPos.y / 50.0f, deltaCursorPos.x / 50.0f) * (m_EditorCameraSensitivity * Time::DeltaTime());
+					m_EditorCameraRotations += Vec2(-deltaCursorPos.y, deltaCursorPos.x) * (m_EditorCameraSensitivity * Time::DeltaTime());
 					m_EditorCameraRotations.x = fmod(m_EditorCameraRotations.x, 2 * pi);
 					m_EditorCameraRotations.y = fmod(m_EditorCameraRotations.y, 2 * pi);
 				}
@@ -6577,6 +6598,17 @@ void main() {
 
 	public:
 
+		struct RotatorInfoBufferSDF {
+			Mat4 c_InverseTransformX;
+			Mat4 c_InverseTransformY;
+			Mat4 c_InverseTransformZ;
+			Vec4 c_ColorX;
+			Vec4 c_ColorY;
+			Vec4 c_ColorZ;
+			float c_Radius;
+			float c_Thickness;
+		};
+
 		World& m_World;
 		Renderer& m_Renderer;
 
@@ -6589,40 +6621,33 @@ void main() {
 		uint32_t m_SelectedObjectIndex = UINT64_MAX;
 		MeshData m_CubeMeshData{};
 
-		VkImage m_DepthImagesSDF1[5]{};
-		VkImageView m_DepthImageViewsSDF1[5]{};
-		VkImage m_DepthImagesSDF2[5]{};
-		VkImageView m_DepthImageViewsSDF2[5]{};
 		pipelines::Editor m_Pipelines{};
-		VkDescriptorSet m_RenderTransformDescriptorSetSDF = VK_NULL_HANDLE;
-		VkDescriptorSet m_DepthImageDescriptorSetsSDF1[5]{};
-		VkDescriptorSet m_DepthImageDescriptorSetsSDF2[5]{};
-		VkDescriptorSet m_RotatorDescriptorSets[3] { 0, 0, 0 };
+		VkDescriptorSet m_QuadTransformDescriptorSetSDF = VK_NULL_HANDLE;
+		VkDescriptorSet m_RotatorInfoDescriptorSetSDF{};
+		VkDescriptorSet m_MouseHitDescriptorSetsSDF[5]{};
+
 		MeshData m_QuadMesh2DData{};
 
-		Mat4* m_DebugRenderTransformMap = nullptr;
-		Mat4* m_RotatorUniformBufferMaps[3] { 0, 0, 0 };
-		uint32_t* m_RotatorStorageBufferMaps[15] { 0, 0, 0 };
+		Mat4* m_QuadTransformBufferMapSDF = nullptr;
+		RotatorInfoBufferSDF* m_RotatorInfoBufferMapSDF = nullptr;
+		int32_t* m_MouseHitBufferMapsSDF[5]{};
 
 		ImGuiContext* m_ImGuiContext = nullptr;
 		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
 		VkFormat m_ImGuiColorAttachmentFormat = VK_FORMAT_UNDEFINED;
-		Renderer::Buffer m_RenderTransformBufferSDF;
-		Renderer::Buffer m_RotatorUniformBuffers[3];
-		Renderer::Buffer m_RotatorStorageBuffers[3];
-		VkSampler m_Sampler = VK_NULL_HANDLE;
-		uint32_t m_DepthImageCountSDF = 0;
-		VkDeviceMemory m_DepthVulkanDeviceMemorySDF1[5]{};
-		VkDeviceMemory m_DepthVulkanDeviceMemorySDF2[5]{};
-		VkFormat m_DepthImageFormatSDF = VK_FORMAT_UNDEFINED;
-		VkDescriptorPool m_RenderTransformDescriptorPoolSDF = VK_NULL_HANDLE;
-		VkDescriptorPool m_DepthImageDescriptorPoolSDF = VK_NULL_HANDLE;
-		VkDescriptorPool m_RotatorBuffersDescriptorPool = VK_NULL_HANDLE;
+		Renderer::Buffer m_QuadTransformBufferSDF;
+		Renderer::Buffer m_RotatorInfoBufferSDF;
+		Renderer::Buffer m_MouseHitBuffersSDF[5];
+		VkDescriptorPool m_QuadTransformBufferDescriptorPoolSDF = VK_NULL_HANDLE;
+		VkDescriptorPool m_RotatorInfoBufferDescriptorPoolSDF = VK_NULL_HANDLE;
+		VkDescriptorPool m_MouseHitBufferDescriptorPoolSDF = VK_NULL_HANDLE; 
+		uint32_t m_LastImageCount = 0;
 
 		Editor(World& world, Renderer& renderer, GLFWwindow* glfwWindow) 
-			: m_World(world), m_Renderer(renderer), m_GLFWwindow(glfwWindow), m_RenderTransformBufferSDF(m_Renderer),
-				m_RotatorUniformBuffers { m_Renderer, m_Renderer, m_Renderer },
-				m_RotatorStorageBuffers { m_Renderer, m_Renderer, m_Renderer } {}
+			: m_World(world), m_Renderer(renderer), m_GLFWwindow(glfwWindow),
+				m_QuadTransformBufferSDF(m_Renderer),
+				m_RotatorInfoBufferSDF(m_Renderer),
+				m_MouseHitBuffersSDF { m_Renderer, m_Renderer, m_Renderer, m_Renderer, m_Renderer } {}
 
 		Editor(const Editor&) = delete;
 
@@ -6726,70 +6751,42 @@ void main() {
 					"failed to initialize ImGui (function ImGui_ImplVulkan_CreateFontsTexture in function Editor::Initialize)!");
 			}
 
-			m_Pipelines.Initialize(m_Renderer, m_DepthImageFormatSDF);
+			m_Pipelines.Initialize(m_Renderer);
 
-			VkDescriptorSetLayout rotatorSetLayouts[3];
-			VkDescriptorBufferInfo rotatorUniformBufferInfos[3];
-			VkDescriptorBufferInfo rotatorStorageBufferInfos[3];
-			for (uint32_t i = 0; i < 3; i++) {
-				if (!m_RotatorUniformBuffers[i].Create(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create editor rotator buffers (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
-				}
-				if (!m_RotatorUniformBuffers[i].MapMemory(0, 64, (void**)&m_RotatorUniformBufferMaps[i])) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to map editor rotator buffers (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)!");
-				}
-				rotatorUniformBufferInfos[i] = {
-					.buffer = m_RotatorUniformBuffers[i].m_Buffer,
-					.offset = 0,
-					.range = 64,
-				};
-				if (!m_RotatorStorageBuffers[i].Create(4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create editor rotator buffers (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
-				}
-				if (!m_RotatorStorageBuffers[i].MapMemory(0, 4, (void**)&m_RotatorStorageBufferMaps[i])) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to map editor rotator buffers (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)!");
-				}
-				rotatorStorageBufferInfos[i] = {
-					.buffer = m_RotatorStorageBuffers[i].m_Buffer,
-					.offset = 0,
-					.range = 4,
-				};
-				rotatorSetLayouts[i] = m_Pipelines.m_TorusSet2DescriptorSetLayout;
-			}
-			VkDescriptorPoolSize rotatorPoolSizes[6];
-			for (uint32_t i = 0; i < 6; i++) {
-				rotatorPoolSizes[i] = {
-					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-					.descriptorCount = 1,
-				};
-			}
-			m_RotatorBuffersDescriptorPool = m_Renderer.CreateDescriptorPool(0, 3, 6, rotatorPoolSizes);
-			if (m_RotatorBuffersDescriptorPool == VK_NULL_HANDLE) {
+			if (!m_RotatorInfoBufferSDF.Create(sizeof(RotatorInfoBufferSDF), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
 				CriticalError(ErrorOrigin::Renderer,
-					"failed to create rotator descriptor pool (function Renderer::CreateDescriptorPool in function Editor::SwapchainCreateCallback)!");
+					"failed to create editor SDF rotator info buffers (function Renderer::Buffer::Create in function Editor::Initialize)!");
 			}
-			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_RotatorBuffersDescriptorPool, 3, rotatorSetLayouts, m_RotatorDescriptorSets)) {
+			if (!m_RotatorInfoBufferSDF.MapMemory(0, sizeof(RotatorInfoBufferSDF), (void**)&m_RotatorInfoBufferMapSDF)) {
 				CriticalError(ErrorOrigin::Renderer,
-					"failed to allocate rotator descriptor sets (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
+					"failed to map editor SDF rotator info buffers (function Renderer::Buffer::MapMemory in function Editor::Initialize)!");
 			}
-			VkWriteDescriptorSet rotatorWrites[6];
-			for (uint32_t i = 0; i < 3; i++) {
-				rotatorWrites[i] = Renderer::GetDescriptorWrite(nullptr, 0, m_RotatorDescriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &rotatorUniformBufferInfos[i]);
-				rotatorWrites[i + 3] = Renderer::GetDescriptorWrite(nullptr, 1, m_RotatorDescriptorSets[i], VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &rotatorStorageBufferInfos[i]);
+			VkDescriptorPoolSize rotatorInfoPoolSize {
+				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				.descriptorCount = 1,
+			};
+			m_RotatorInfoBufferDescriptorPoolSDF = m_Renderer.CreateDescriptorPool(0, 1, 1, &rotatorInfoPoolSize);
+			if (m_RotatorInfoBufferDescriptorPoolSDF == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create SDF rotator info buffer descriptor pool (function Renderer::CreateDescriptorPool in function Editor::Initialize)!");
 			}
-			m_Renderer.UpdateDescriptorSets(6, rotatorWrites);
-			*m_RotatorUniformBufferMaps[0] = Inverse(Mat4::AxisRotation(Vec3::Forward(), pi / 2));
-			*m_RotatorUniformBufferMaps[1] = Inverse(Mat4(1));
-			*m_RotatorUniformBufferMaps[2] = Inverse(Mat4::AxisRotation(Vec3::Right(), pi/2));
-			*m_RotatorStorageBufferMaps[0] = 0;
-			*m_RotatorStorageBufferMaps[1] = 0;
-			*m_RotatorStorageBufferMaps[2] = 0;
+			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_RotatorInfoBufferDescriptorPoolSDF, 1, 
+					&m_Pipelines.m_RotatorInfoDescriptorSetLayoutSDF, &m_RotatorInfoDescriptorSetSDF)) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to allocate SDF rotator info buffer descriptor sets (function Renderer::AllocateDescriptorSets in function Editor::Initialize)!");
+			}
+			VkDescriptorBufferInfo rotatorInfoBufferInfo {
+				.buffer = m_RotatorInfoBufferSDF.m_Buffer,
+				.offset = 0,
+				.range = sizeof(RotatorInfoBufferSDF),
+			};
+			VkWriteDescriptorSet rotatorInfoWrite = Renderer::GetDescriptorWrite(nullptr, 0, m_RotatorInfoDescriptorSetSDF, 
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &rotatorInfoBufferInfo);
+			m_Renderer.UpdateDescriptorSets(1, &rotatorInfoWrite);
+			m_RotatorInfoBufferMapSDF->c_InverseTransformX = Inverse(Mat4::AxisRotation(Vec3::Forward(), pi / 2));
+			m_RotatorInfoBufferMapSDF->c_InverseTransformY = Mat4(1);
+			m_RotatorInfoBufferMapSDF->c_InverseTransformZ = Inverse(Mat4::AxisRotation(Vec3::Right(), pi/2));
 		}
 
 		void Terminate() {
@@ -6799,40 +6796,21 @@ void main() {
 			m_ImGuiContext = nullptr;
 			m_Renderer.DestroyDescriptorPool(m_ImGuiDescriptorPool);
 			m_ImGuiDescriptorPool = VK_NULL_HANDLE;
-			m_Renderer.DestroyDescriptorPool(m_RenderTransformDescriptorPoolSDF);
-			m_RenderTransformDescriptorPoolSDF = VK_NULL_HANDLE;
-			m_RenderTransformBufferSDF.Terminate();
-			m_Renderer.DestroyDescriptorPool(m_RotatorBuffersDescriptorPool);
-			m_RotatorBuffersDescriptorPool = VK_NULL_HANDLE;
-			m_Renderer.DestroyDescriptorPool(m_DepthImageDescriptorPoolSDF);
-			m_DepthImageDescriptorPoolSDF = VK_NULL_HANDLE;
-			for (uint32_t i = 0; i < m_DepthImageCountSDF; i++) {
-				VkImage& image1 = m_DepthImagesSDF1[i];
-				VkDeviceMemory& deviceMemory1 = m_DepthVulkanDeviceMemorySDF1[i];
-				VkImageView& imageView1 = m_DepthImageViewsSDF1[i];
-				m_Renderer.DestroyImageView(imageView1);
-				imageView1 = VK_NULL_HANDLE;
-				m_Renderer.DestroyImage(image1);
-				image1 = VK_NULL_HANDLE;
-				m_Renderer.FreeVulkanDeviceMemory(deviceMemory1);
-				deviceMemory1 = VK_NULL_HANDLE;
-				VkImage& image2 = m_DepthImagesSDF2[i];
-				VkDeviceMemory& deviceMemory2 = m_DepthVulkanDeviceMemorySDF2[i];
-				VkImageView& imageView2 = m_DepthImageViewsSDF2[i];
-				m_Renderer.DestroyImageView(imageView2);
-				imageView2 = VK_NULL_HANDLE;
-				m_Renderer.DestroyImage(image2);
-				image2 = VK_NULL_HANDLE;
-				m_Renderer.FreeVulkanDeviceMemory(deviceMemory2);
-				deviceMemory2 = VK_NULL_HANDLE;
-			}
-			m_Renderer.DestroySampler(m_Sampler);
-			m_Sampler = VK_NULL_HANDLE;
-			for (uint32_t i = 0; i < 3; i++) {
-				m_RotatorUniformBuffers[i].Terminate();
-				m_RotatorUniformBufferMaps[i] = nullptr;
-				m_RotatorStorageBuffers[i].Terminate();
-				m_RotatorStorageBufferMaps[i] = nullptr;
+			m_Renderer.DestroyDescriptorPool(m_QuadTransformBufferDescriptorPoolSDF);
+			m_QuadTransformBufferDescriptorPoolSDF = VK_NULL_HANDLE;
+			m_QuadTransformBufferSDF.Terminate();
+			m_Renderer.DestroyDescriptorPool(m_RotatorInfoBufferDescriptorPoolSDF);
+			m_RotatorInfoBufferDescriptorPoolSDF = VK_NULL_HANDLE;
+			m_Renderer.DestroyDescriptorPool(m_MouseHitBufferDescriptorPoolSDF);
+			m_MouseHitBufferDescriptorPoolSDF = VK_NULL_HANDLE;
+			m_QuadTransformBufferSDF.Terminate();
+			m_QuadTransformBufferMapSDF = nullptr;
+			m_RotatorInfoBufferSDF.Terminate();
+			m_RotatorInfoBufferMapSDF = nullptr;
+			for (uint32_t i = 0; i < m_LastImageCount; i++) {
+				m_MouseHitBuffersSDF[i].Terminate();
+				m_MouseHitBufferMapsSDF[i] = nullptr;
+				m_MouseHitDescriptorSetsSDF[i] = VK_NULL_HANDLE;
 			}
 			m_Pipelines.Terminate(m_Renderer);
 		}
@@ -6980,290 +6958,111 @@ void main() {
 			}
 
 			{
-				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TorusPipeline);
+
+				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_PipelineSDF);
 
 				Mat4 inverseCameraMat = Inverse(m_World.m_CameraMatricesMap->m_Projection * m_World.m_CameraMatricesMap->m_View);
 
-				struct TorusPC_V {
+				struct PushConstantVertexSDF {
 					const Mat4 c_InverseCameraMatrix;
 					const float c_CameraNear;
 					const float c_CameraFar;
 				};
 
-				TorusPC_V t_pc_v {
+				PushConstantVertexSDF pcv {
 					.c_InverseCameraMatrix = inverseCameraMat,
 					.c_CameraNear = World::default_camera_near,
 					.c_CameraFar = World::default_camera_far,
 				};
 
+				struct PushConstantFragmentSDF {
+					const Vec2_T<uint32_t> c_Resolution;
+					const Vec2_T<uint32_t> c_MousePosition;
+				};
+
+				IntVec2 contentArea;
+
+				glfwGetWindowSize(m_GLFWwindow, &contentArea.x, &contentArea.y);
+
+				PushConstantFragmentSDF pcf {
+					.c_Resolution = contentArea,
+					.c_MousePosition = Input::GetMousePosition(),
+				};
+
 				float alpha = 0.5f;
 
-				Vec4 colors[3] {
-					{ 1.0f, 0.0f, 0.0f, alpha },
-					{ 0.0f, 1.0f, 0.0f, alpha },
-					{ 0.0f, 0.0f, 1.0f, alpha },
-				};
+				m_RotatorInfoBufferMapSDF->c_ColorX = { 1.0f, 0.0f, 0.0f, alpha };
+				m_RotatorInfoBufferMapSDF->c_ColorY = { 0.0f, 1.0f, 0.0f, alpha };
+				m_RotatorInfoBufferMapSDF->c_ColorZ = { 0.0f, 0.0f, 1.0f, alpha };
+				m_RotatorInfoBufferMapSDF->c_Radius = 0.4f;
+				m_RotatorInfoBufferMapSDF->c_Thickness = 0.01f;
 
-				VkImage depthImages[2] {
-					m_DepthImagesSDF1[drawData.m_CurrentFrame],
-					m_DepthImagesSDF2[drawData.m_CurrentFrame],
-				};
-
-				VkImageView depthImageAttachments[2] {
-					m_DepthImageViewsSDF2[drawData.m_CurrentFrame],
-					m_DepthImageViewsSDF1[drawData.m_CurrentFrame],
-				};
-
-				VkDescriptorSet depthImageDescriptorSets[2] {
-					m_DepthImageDescriptorSetsSDF1[drawData.m_CurrentFrame],
-					m_DepthImageDescriptorSetsSDF2[drawData.m_CurrentFrame],
-				};
-
-				VkImageLayout depthImageLayouts[2] {
-					VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-					VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-				};
-
-				uint32_t imagePairIndex = 0;
-
+				VkRenderingAttachmentInfo colorAttachmentInfos[1]
 				{
-					VkImageMemoryBarrier imageMemoryBarriers[3] {
-						{
-							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-							.pNext = nullptr,
-							.srcAccessMask = 0,
-							.dstAccessMask = 0,
-							.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-							.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.image = depthImages[0],
-							.subresourceRange {
-								.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-								.baseMipLevel = 0,
-								.levelCount = 1,
-								.baseArrayLayer = 0,
-								.layerCount = 1,
-							},
-						},
-						{
-							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-							.pNext = nullptr,
-							.srcAccessMask = 0,
-							.dstAccessMask = 0,
-							.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-							.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.image = depthImages[1],
-							.subresourceRange {
-								.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-								.baseMipLevel = 0,
-								.levelCount = 1,
-								.baseArrayLayer = 0,
-								.layerCount = 1,
-							},
-						},
-						{
-							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-							.pNext = nullptr,
-							.srcAccessMask = 0,
-							.dstAccessMask = 0,
-							.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-							.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.image = m_World.m_DepthImages[drawData.m_CurrentFrame],
-							.subresourceRange {
-								.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-								.baseMipLevel = 0,
-								.levelCount = 1,
-								.baseArrayLayer = 0,
-								.layerCount = 1,
-							},
-						},
-					};
-
-					vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-						0, 0, nullptr, 0, nullptr, 3, imageMemoryBarriers);
-
-					VkRenderingAttachmentInfo colorAttachmentInfos[2]
 					{
-						{
-							.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
-							.pNext = nullptr,
-							.imageView = depthImageAttachments[0],
-							.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-							.resolveMode = VK_RESOLVE_MODE_NONE,
-							.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-							.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-							.clearValue { .color { .float32 { 100.0f, 0.0f, 0.0f, 1.0f, } } },
-						},
-						{
-							.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
-							.pNext = nullptr,
-							.imageView = depthImageAttachments[1],
-							.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-							.resolveMode = VK_RESOLVE_MODE_NONE,
-							.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-							.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-							.clearValue { .color { .float32 { 100.0f, 0.0f, 0.0f, 1.0f, } } },
-						},
-
-					};
-
-					VkRenderingInfo renderingInfo {
-						.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+						.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
 						.pNext = nullptr,
-						.flags = 0,
-						.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
-						.layerCount = 1,
-						.viewMask = 0,
-						.colorAttachmentCount = 2,
-						.pColorAttachments = colorAttachmentInfos,
-						.pDepthAttachment = nullptr,
-						.pStencilAttachment = nullptr,
-					};
+						.imageView = drawData.m_SwapchainImageView,
+						.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+						.resolveMode = VK_RESOLVE_MODE_NONE,
+						.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+						.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+						.clearValue { .color { .uint32 { 0, 0, 0, 0 } } },
+					},
+				};
 
-					vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
-					vkCmdEndRendering(drawData.m_CommandBuffer);
-				}
+				VkRenderingInfo renderingInfo {
+					.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
+					.layerCount = 1,
+					.viewMask = 0,
+					.colorAttachmentCount = 1,
+					.pColorAttachments = colorAttachmentInfos,
+					.pDepthAttachment = nullptr,
+					.pStencilAttachment = nullptr,
+				};
 
-				for (uint32_t i = 0; i < 3; i++) {
+				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
 
-					uint32_t otherIndex = (imagePairIndex + 1) % 2;
+				uint32_t mouseHitBufferIndex = drawData.m_CurrentFrame;
 
-					VkImageMemoryBarrier imageMemoryBarriers1[2] {
-						{
-							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-							.pNext = nullptr,
-							.srcAccessMask = 0,
-							.dstAccessMask = 0,
-							.oldLayout = depthImageLayouts[imagePairIndex],
-							.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.image = depthImages[imagePairIndex],
-							.subresourceRange {
-								.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-								.baseMipLevel = 0,
-								.levelCount = 1,
-								.baseArrayLayer = 0,
-								.layerCount = 1,
-							},
-						},
-						{
-							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-							.pNext = nullptr,
-							.srcAccessMask = 0,
-							.dstAccessMask = 0,
-							.oldLayout = depthImageLayouts[otherIndex],
-							.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-							.image = depthImages[otherIndex],
-							.subresourceRange {
-								.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-								.baseMipLevel = 0,
-								.levelCount = 1,
-								.baseArrayLayer = 0,
-								.layerCount = 1,
-							},
-						},
-					};
+				VkDescriptorSet sets[3] {
+					m_QuadTransformDescriptorSetSDF,
+					m_RotatorInfoDescriptorSetSDF,
+					m_MouseHitDescriptorSetsSDF[mouseHitBufferIndex],
+				};
 
-					vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-						0, 0, nullptr, 0, nullptr, 2, imageMemoryBarriers1);
+				vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_PipelineLayoutSDF,
+					0, 3, sets, 0, nullptr);
 
-					depthImageLayouts[imagePairIndex] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-					depthImageLayouts[otherIndex] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-					VkRenderingAttachmentInfo colorAttachmentInfos[2] 
-					{
-						{
-							.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
-							.pNext = nullptr,
-							.imageView = drawData.m_SwapchainImageView,
-							.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-							.resolveMode = VK_RESOLVE_MODE_NONE,
-							.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-							.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-							.clearValue { .color { .uint32 { 0, 0, 0, 0 } } },
-						},
-						{
-							.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
-							.pNext = nullptr,
-							.imageView = depthImageAttachments[imagePairIndex],
-							.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-							.resolveMode = VK_RESOLVE_MODE_NONE,
-							.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-							.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-							.clearValue { .color { .float32 { 5.0f } } },
-						},
-					};
-
-					VkRenderingInfo renderingInfo {
-						.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-						.pNext = nullptr,
-						.flags = 0,
-						.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
-						.layerCount = 1,
-						.viewMask = 0,
-						.colorAttachmentCount = 2,
-						.pColorAttachments = colorAttachmentInfos,
-						.pDepthAttachment = nullptr,
-						.pStencilAttachment = nullptr,
-					};
-
-					vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
-
-					VkDescriptorSet sets[3] {
-						m_RenderTransformDescriptorSetSDF,
-						depthImageDescriptorSets[imagePairIndex],
-						m_RotatorDescriptorSets[i],
-					};
-
-					vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TorusPipelineLayout, 
-						0, 3, sets, 0, nullptr);
-
-					struct TorusPC_F {
-						const Vec4 c_Color;
-						Vec2_T<uint32_t> c_Resolution;
-						Vec2_T<uint32_t> c_MousePosition;
-						const float c_Radius;
-						const float c_Thickness;
-					};
-
-					Vec4 color = colors[i];
-
-					if (*m_RotatorStorageBufferMaps[i]) {
-						color.w = 1.0f;
-						*m_RotatorStorageBufferMaps[i] = 0;
+				if (*m_MouseHitBufferMapsSDF[mouseHitBufferIndex]) {
+					int32_t& map = *m_MouseHitBufferMapsSDF[mouseHitBufferIndex];
+					switch (map) {
+						case 1:
+							m_RotatorInfoBufferMapSDF->c_ColorX.w = 1.0f;
+							break;
+						case 2:
+							m_RotatorInfoBufferMapSDF->c_ColorY.w = 1.0f;
+							break;
+						case 3:
+							m_RotatorInfoBufferMapSDF->c_ColorZ.w = 1.0f;
+							break;
+						default:
+							break;
 					}
-
-					IntVec2 contentArea;
-
-					glfwGetWindowSize(m_GLFWwindow, &contentArea.x, &contentArea.y);
-
-					TorusPC_F pc_f {
-						.c_Color = color,
-						.c_Resolution = contentArea,
-						.c_MousePosition = Input::GetMousePosition(),
-						.c_Radius = 0.4f,
-						.c_Thickness = 0.005f,
-					};
-
-					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_TorusPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
-						0, sizeof(TorusPC_V), &t_pc_v);
-					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_TorusPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-						80, sizeof(TorusPC_F), &pc_f);
-
-					Renderer::DrawIndexed(drawData.m_CommandBuffer, m_QuadMesh2DData);
-
-					vkCmdEndRendering(drawData.m_CommandBuffer);
-
-					imagePairIndex = (imagePairIndex + 1) % 2;
+					map = 0;
 				}
+
+				vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_PipelineLayoutSDF, VK_SHADER_STAGE_VERTEX_BIT,
+					0, sizeof(PushConstantVertexSDF), &pcv);
+				vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_PipelineLayoutSDF, VK_SHADER_STAGE_FRAGMENT_BIT,
+					80, sizeof(PushConstantFragmentSDF), &pcf);
+
+				Renderer::DrawIndexed(drawData.m_CommandBuffer, m_QuadMesh2DData);
+
+				vkCmdEndRendering(drawData.m_CommandBuffer);
 			}
 		}
 	};
@@ -7625,7 +7424,7 @@ void main() {
 			if (editorMode) {
 				m_Editor.NewFrame();
 				m_Editor.Update();
-				m_World.EditorUpdate();
+				m_World.EditorUpdate(m_Renderer.m_Window);
 				editorMode = true;
 			}
 

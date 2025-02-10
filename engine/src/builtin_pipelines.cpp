@@ -295,28 +295,27 @@ namespace pipelines {
 		m_WirePipeline = pipelines[3];
 	}
 
-	void Editor::Initialize(engine::Renderer& renderer, VkFormat sdfDepthFormat) {
+	void Editor::Initialize(engine::Renderer& renderer) {
 		using namespace engine;
 
-		VkDescriptorSetLayoutBinding torusBindings[2]{
+		VkDescriptorSetLayoutBinding rotatorBindings[1] {
 			Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT),
-			Renderer::GetDescriptorSetLayoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT),
 		};
 
-		m_TorusSet2DescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 2, torusBindings);
+		m_RotatorInfoDescriptorSetLayoutSDF = renderer.CreateDescriptorSetLayout(nullptr, 1, rotatorBindings);
 
-		if (m_TorusSet2DescriptorSetLayout == VK_NULL_HANDLE) {
+		if (m_RotatorInfoDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
-				"failed to create torus set 2 descriptor set layout (function Renderer::CreateDescriptorSetLayout in function pipelines::Editor::Initialize)!");
+				"failed to create SDF rotator info descriptor set layout (function Renderer::CreateDescriptorSetLayout in function pipelines::Editor::Initialize)!");
 		}
 
-		VkDescriptorSetLayout torusSetLayouts[3] {
-			m_RenderTransformDescriptorSetLayoutSDF,
-			m_DepthImageDescriptorSetLayoutSDF,
-			m_TorusSet2DescriptorSetLayout,
+		VkDescriptorSetLayout sdfSetLayouts[3] {
+			m_QuadTransformDescriptorSetLayoutSDF,
+			m_RotatorInfoDescriptorSetLayoutSDF,
+			m_MouseHitDescriptorSetLayoutSDF,
 		};
 
-		const VkPushConstantRange torusPushConstantRanges[2] {
+		const VkPushConstantRange sdfPushConstantRanges[2] {
 			{
 				.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
 				.offset = 0,
@@ -325,66 +324,60 @@ namespace pipelines {
 			{
 				.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
 				.offset = 80,
-				.size = 40,
+				.size = 16,
 			},
 		};
 
-		m_TorusPipelineLayout = renderer.CreatePipelineLayout(3, torusSetLayouts, 2, torusPushConstantRanges);
+		m_PipelineLayoutSDF = renderer.CreatePipelineLayout(3, sdfSetLayouts, 2, sdfPushConstantRanges);
 
-		if (m_TorusPipelineLayout == VK_NULL_HANDLE) { 
+		if (m_PipelineLayoutSDF == VK_NULL_HANDLE) { 
 			CriticalError(ErrorOrigin::Renderer,
-				"failed to create torus pipeline layout (function Renderer::CreatePipelineLayout in function pipelines::Editor::Initialize)!");
+				"failed to create SDF pipeline layout (function Renderer::CreatePipelineLayout in function pipelines::Editor::Initialize)!");
 		}
 
 		Renderer::Shader sdfVertexShader(renderer, VK_SHADER_STAGE_VERTEX_BIT);
+		Renderer::Shader sdfFragmentShader(renderer, VK_SHADER_STAGE_FRAGMENT_BIT);
 
 		if (!sdfVertexShader.Compile(shaders::Editor::sdf_pipeline_vertex_shader)) {
 			CriticalError(ErrorOrigin::Renderer,
 				"failed to compile SDF vertex shader (function Renderer::Shader::Compile in function pipelines::Editor::Initialize)!");
 		}
 
-		Renderer::Shader torusFragmentShader(renderer, VK_SHADER_STAGE_FRAGMENT_BIT);
-
-		if (!torusFragmentShader.Compile(shaders::Editor::torus_pipeline_fragment_shader)) {
+		if (!sdfFragmentShader.Compile(shaders::Editor::sdf_pipeline_fragment_shader)) {
 			CriticalError(ErrorOrigin::Renderer,
-				"failed to compile torus fragment shader (function Renderer::Shader::Compile in function pipelines::Editor::Initialize)!");
+				"failed to compile SDF fragment shader (function Renderer::Shader::Compile in function pipelines::Editor::Initialize)!");
 		}
 
-		VkPipelineShaderStageCreateInfo torusShaderStageInfos[2] {
+		VkPipelineShaderStageCreateInfo sdfShaderStageInfos[2] {
 			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(sdfVertexShader),
-			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(torusFragmentShader),
+			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(sdfFragmentShader),
 		};
 
-		VkFormat torusAttachmentFormats[2] {
+		VkFormat sdfAttachmentFormats[1] {
 			renderer.m_SwapchainSurfaceFormat.format,
-			sdfDepthFormat,
 		};
 
-		VkPipelineRenderingCreateInfo torusRenderingInfo {
+		VkPipelineRenderingCreateInfo sdfRenderingInfo {
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
 			.pNext = nullptr,
 			.viewMask = 0,
-			.colorAttachmentCount = 2,
-			.pColorAttachmentFormats = torusAttachmentFormats,
+			.colorAttachmentCount = 1,
+			.pColorAttachmentFormats = sdfAttachmentFormats,
 			.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
 			.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
 		};
 
-		VkPipelineColorBlendAttachmentState torusBlendStates[2] {
-			Renderer::GraphicsPipelineDefaults::color_blend_attachment_state,
-			Renderer::GraphicsPipelineDefaults::color_blend_attachment_state,
-		};
-
-		VkPipelineColorBlendStateCreateInfo torusBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
-		torusBlendState.attachmentCount = 2;
-		torusBlendState.pAttachments = torusBlendStates;
+		VkPipelineColorBlendStateCreateInfo sdfBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
+		sdfBlendState.attachmentCount = 1;
+		sdfBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
+;
 
 		VkGraphicsPipelineCreateInfo graphicsPipelineInfos[1] {
 			{
 				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-				.pNext = &torusRenderingInfo,
+				.pNext = &sdfRenderingInfo,
 				.stageCount = 2,
-				.pStages = torusShaderStageInfos,
+				.pStages = sdfShaderStageInfos,
 				.pVertexInputState = &Vertex2D::GetVertexInputState(),
 				.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
 				.pTessellationState = nullptr,
@@ -392,9 +385,9 @@ namespace pipelines {
 				.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
 				.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
 				.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
-				.pColorBlendState = &torusBlendState,
+				.pColorBlendState = &sdfBlendState,
 				.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
-				.layout = m_TorusPipelineLayout,
+				.layout = m_PipelineLayoutSDF,
 				.renderPass = VK_NULL_HANDLE,
 				.subpass = 0,
 				.basePipelineHandle = VK_NULL_HANDLE,
@@ -402,7 +395,7 @@ namespace pipelines {
 			},
 		};
 
-		if (!renderer.CreateGraphicsPipelines(1, graphicsPipelineInfos, &m_TorusPipeline)) {
+		if (!renderer.CreateGraphicsPipelines(1, graphicsPipelineInfos, &m_PipelineSDF)) {
 			CriticalError(ErrorOrigin::Renderer,
 				"failed to create graphis pipelines for editor (function Renderer::CreateGraphicsPipelines in function pipelines::Editor::Initialize)!");
 		}
