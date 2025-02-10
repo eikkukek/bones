@@ -269,7 +269,6 @@ int main() {
 	editor.SetInspectedArea(areaID);
 
 	while (engine.Loop()) {
-		float deltaTime = Time::DeltaTime();
 		//uiWindow->SetPosition(UI.GetCursorPosition());
 	}
 	vkDeviceWaitIdle(renderer.m_VulkanDevice);	
