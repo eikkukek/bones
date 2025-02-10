@@ -234,7 +234,7 @@ void main() {
 }
 		)";
 
-		static constexpr const char* torus_pipeline_fragment_shader = R"(
+		static constexpr const char* sdf_pipeline_fragment_shader = R"(
 #version 450
 
 layout(location = 0) in vec2 inUV;
@@ -242,25 +242,26 @@ layout(location = 1) in vec3 inRayOrigin;
 layout(location = 2) in vec3 inRayDirection;
 
 layout(location = 0) out vec4 outColor;
-layout(location = 1) out vec4 outDepth;
 
-layout(set = 1, binding = 0) uniform sampler2D sdf_depth_image;
+layout(set = 1, binding = 0) uniform RotatorInfo {
+	mat4 c_InverseTransformX;
+	mat4 c_InverseTransformY;
+	mat4 c_InverseTransformZ;
+	vec4 c_ColorX;
+	vec4 c_ColorY;
+	vec4 c_ColorZ;
+	float c_Radius;
+	float c_Thickness;
+} rotator_info;
 
-layout(set = 2, binding = 0) uniform Transform {
-	mat4 c_InverseTransform;
-} transform;
-
-layout(std140, set = 2, binding = 1) buffer MouseHitBuffer {
-	uint m_Hit;
+layout(std140, set = 2, binding = 0) buffer MouseHitBuffer {
+	int m_Hit;
 } hitBuffer;
 
 layout(push_constant) uniform PushConstant {
 	layout(offset = 80)
-	vec4 c_Color;
 	uvec2 c_Resolution;
 	uvec2 c_MousePosition;
-	float c_Radius;
-	float c_Thickness;
 } pc;
 
 float SdTorus(vec3 pos, float r, float t) {
@@ -268,8 +269,28 @@ float SdTorus(vec3 pos, float r, float t) {
 	return length(q) - t;
 }
 
+vec4 color;
+int hit = 0;
+
 float Map(vec3 pos) {
-	return SdTorus((transform.c_InverseTransform * vec4(pos, 1.0f)).xyz, pc.c_Radius, pc.c_Thickness);
+	float x = SdTorus((rotator_info.c_InverseTransformX * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
+	float y = SdTorus((rotator_info.c_InverseTransformY * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
+	float z = SdTorus((rotator_info.c_InverseTransformZ * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
+
+	float min = x;
+	color = rotator_info.c_ColorX;
+	hit = 1;
+	if (y < min) {
+		min = y;
+		color = rotator_info.c_ColorY;
+		hit = 2;
+	}
+	if (z < min) {
+		min = z;
+		color = rotator_info.c_ColorZ;
+		hit = 3;
+	}
+	return min;
 }
 
 void main() {
@@ -287,18 +308,16 @@ void main() {
 		}
 		t += h;
 	}
-	float sdfDepth = texture(sdf_depth_image, inUV).r;
-	vec4 col = vec4(0.0f);
-	if (t < sdfDepth) {
-		col = pc.c_Color;
-		outDepth = vec4(t, 0.0f, 0.0f, 1.0f);
-		uvec2 mousePos = uvec2(pc.c_MousePosition.x, pc.c_Resolution - pc.c_MousePosition);
-		hitBuffer.m_Hit = (mousePos == ivec2(pc.c_Resolution * inUV)) ? 1 : hitBuffer.m_Hit;
+
+	if (t < tmax) {
+		outColor = color;
+		if (pc.c_MousePosition == uvec2(pc.c_Resolution * inUV)) {
+			hitBuffer.m_Hit = hit;
+		}
 	}
 	else {
-		outDepth = vec4(sdfDepth, 0.0f, 0.0f, 1.0f);
+		outColor = vec4(0.0f);
 	}
-	outColor = col;
 }
 		)";
 	};
