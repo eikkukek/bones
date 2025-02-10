@@ -3379,7 +3379,7 @@ namespace engine {
 
 		static inline DynamicArray<unsigned int> s_TextInput{};
 
-		static inline Vec2_T<float> s_ContentScale { 1, 1 };
+		static inline Vec2_T<int> s_ContentArea { 1, 1 };
 
 		static inline Vec2_T<double> s_CursorPosition{};
 		static inline Vec2_T<double> s_DeltaCursorPosition{};
@@ -3440,16 +3440,12 @@ namespace engine {
 			return s_TextInput;
 		}
 
-		static Vec2_T<float> GetContentScale() {
-			return s_ContentScale;
+		static Vec2_T<int> GetContentArea() {
+			return s_ContentArea;
 		}
 
 		static Vec2_T<double> GetDeltaMousePosition() {
 			return s_DeltaCursorPosition;
-		}
-
-		static Vec2_T<double> GetScaledDeltaMousePosition() {
-			return { s_DeltaCursorPosition.x / s_ContentScale.x, s_DeltaCursorPosition.y / s_ContentScale.y };
 		}
 
 		static Vec2_T<double> GetDeltaScrollOffset() {
@@ -3544,7 +3540,7 @@ namespace engine {
 			glfwSetCursorPosCallback(pGLFWwindow, CursorPositionCallback);
 			glfwSetScrollCallback(pGLFWwindow, ScrollCallback);
 			GLFWmonitor* pMonitor = glfwGetPrimaryMonitor();
-			glfwGetMonitorContentScale(pMonitor, &s_ContentScale.x, &s_ContentScale.y);
+			glfwGetWindowSize(pGLFWwindow, &s_ContentArea.x, &s_ContentArea.y);
 		};
 	};
 
@@ -5878,7 +5874,7 @@ void main() {
 		DynamicArray<Entity*> m_Entities{};
 		OrderedArray<ObjectID, Area> m_Areas{};
 		OrderedArray<ObjectID, Body> m_Bodies{};
-		float m_EditorCameraSensitivity = pi / 2;
+		float m_EditorCameraSensitivity = 400;
 		float m_EditorCameraSpeed = 5.0f;
 		static constexpr float editor_min_camera_speed = 1.0f;
 		static constexpr float editor_max_camera_speed = 20.0f;
@@ -6124,6 +6120,7 @@ void main() {
 		}
  
 		void EditorUpdate() {
+
 			using Key = Input::Key;
 			using MouseButton = Input::MouseButton;
 
@@ -6143,8 +6140,9 @@ void main() {
 
 			if (mouseHeld || moved) {
 				if (mouseHeld) {
-					Vec2_T<double> deltaCursorPos = Input::GetScaledDeltaMousePosition();
-					m_EditorCameraRotations += Vec2(-deltaCursorPos.y, deltaCursorPos.x) * (m_EditorCameraSensitivity * Time::DeltaTime());
+					Vec2_T<double> deltaCursorPos = Input::GetDeltaMousePosition();
+					Vec2_T<double> contentArea = Input::GetContentArea();
+					m_EditorCameraRotations += Vec2(-deltaCursorPos.y / contentArea.y, deltaCursorPos.x / contentArea.x) * (m_EditorCameraSensitivity * Time::DeltaTime());
 					m_EditorCameraRotations.x = fmod(m_EditorCameraRotations.x, 2 * pi);
 					m_EditorCameraRotations.y = fmod(m_EditorCameraRotations.y, 2 * pi);
 				}
@@ -6188,6 +6186,29 @@ void main() {
 			{
 
 				SetViewportToRenderResolution(drawData);
+
+				VkImageMemoryBarrier memoryBarrier {
+					.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+					.pNext = nullptr,
+					.srcAccessMask = 0,
+					.dstAccessMask = 0,
+					.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+					.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+					.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+					.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+					.image = m_DepthImages[drawData.m_CurrentFrame],
+					.subresourceRange {
+						.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+						.baseMipLevel = 0,
+						.levelCount = 1,
+						.baseArrayLayer = 0,
+						.layerCount = 1,
+					},
+				};
+
+				vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
+					VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 
+					1, &memoryBarrier);
 
 				static constexpr uint32_t color_attachment_count = 3;
 
@@ -6569,20 +6590,37 @@ void main() {
 		uint32_t m_SelectedObjectIndex = UINT64_MAX;
 		MeshData m_CubeMeshData;
 
+		VkImage m_DepthImagesSDF1[5]{};
+		VkImageView m_DepthImageViewsSDF1[5]{};
+		VkImage m_DepthImagesSDF2[5]{};
+		VkImageView m_DepthImageViewsSDF2[5]{};
 		pipelines::Editor m_Pipelines{};
-		VkDescriptorSet m_DebugRenderTransformDescriptorSet = VK_NULL_HANDLE;
+		VkDescriptorSet m_RenderTransformDescriptorSetSDF = VK_NULL_HANDLE;
+		VkDescriptorSet m_DepthImageDescriptorSetsSDF1[5]{};
+		VkDescriptorSet m_DepthImageDescriptorSetsSDF2[5]{};
+		VkDescriptorSet m_RotatorDescriptorSets[3] { 0, 0, 0 };
 		MeshData m_QuadMesh2DData;
 
 		Mat4* m_DebugRenderTransformMap = nullptr;
+		Mat4* m_RotatorBufferMaps[3] { 0, 0, 0 };
 
 		ImGuiContext* m_ImGuiContext = nullptr;
 		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
 		VkFormat m_ImGuiColorAttachmentFormat = VK_FORMAT_UNDEFINED;
-		Renderer::Buffer m_DebugRenderTransformBuffer;
-		VkDescriptorPool m_DebugRenderTransformDescriptorPool = VK_NULL_HANDLE;
+		Renderer::Buffer m_RenderTransformBufferSDF;
+		Renderer::Buffer m_RotatorBuffers[3];
+		VkSampler m_Sampler = VK_NULL_HANDLE;
+		uint32_t m_DepthImageCountSDF = 0;
+		VkDeviceMemory m_DepthVulkanDeviceMemorySDF1[5]{};
+		VkDeviceMemory m_DepthVulkanDeviceMemorySDF2[5]{};
+		VkFormat m_DepthImageFormatSDF = VK_FORMAT_UNDEFINED;
+		VkDescriptorPool m_RenderTransformDescriptorPoolSDF = VK_NULL_HANDLE;
+		VkDescriptorPool m_DepthImageDescriptorPoolSDF = VK_NULL_HANDLE;
+		VkDescriptorPool m_RotatorBuffersDescriptorPool = VK_NULL_HANDLE;
 
 		Editor(World& world, Renderer& renderer, GLFWwindow* glfwWindow) 
-			: m_World(world), m_Renderer(renderer), m_GLFWwindow(glfwWindow), m_DebugRenderTransformBuffer(m_Renderer) {}
+			: m_World(world), m_Renderer(renderer), m_GLFWwindow(glfwWindow), m_RenderTransformBufferSDF(m_Renderer),
+				m_RotatorBuffers { m_Renderer, m_Renderer, m_Renderer } {}
 
 		Editor(const Editor&) = delete;
 
@@ -6686,7 +6724,49 @@ void main() {
 					"failed to initialize ImGui (function ImGui_ImplVulkan_CreateFontsTexture in function Editor::Initialize)!");
 			}
 
-			m_Pipelines.Initialize(m_Renderer);
+			m_Pipelines.Initialize(m_Renderer, m_DepthImageFormatSDF);
+
+			VkDescriptorPoolSize rotatorPoolSizes[3];
+			VkDescriptorSetLayout rotatorSetLayouts[3];
+			VkDescriptorBufferInfo rotatorBufferInfos[3];
+			for (uint32_t i = 0; i < 3; i++) {
+				if (!m_RotatorBuffers[i].Create(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to create editor rotator buffers (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
+				}
+				if (!m_RotatorBuffers[i].MapMemory(0, 64, (void**)&m_RotatorBufferMaps[i])) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to map editor rotator buffers (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)!");
+				}
+				rotatorPoolSizes[i] = {
+					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+					.descriptorCount = 1,
+				};
+				rotatorSetLayouts[i] = m_Pipelines.m_TorusInverseTransformDescriptorSetLayout;
+				rotatorBufferInfos[i] = {
+					.buffer = m_RotatorBuffers[i].m_Buffer,
+					.offset = 0,
+					.range = 64,
+				};
+			}
+			m_RotatorBuffersDescriptorPool = m_Renderer.CreateDescriptorPool(0, 3, 3, rotatorPoolSizes);
+			if (m_RotatorBuffersDescriptorPool == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create rotator descriptor pool (function Renderer::CreateDescriptorPool in function Editor::SwapchainCreateCallback)!");
+			}
+			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_RotatorBuffersDescriptorPool, 3, rotatorSetLayouts, m_RotatorDescriptorSets)) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to allocate rotator descriptor sets (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
+			}
+			VkWriteDescriptorSet rotatorWrites[3];
+			for (uint32_t i = 0; i < 3; i++) {
+				rotatorWrites[i] = Renderer::GetDescriptorWrite(nullptr, 0, m_RotatorDescriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &rotatorBufferInfos[i]);
+			}
+			m_Renderer.UpdateDescriptorSets(3, rotatorWrites);
+			*m_RotatorBufferMaps[0] = Inverse(Mat4::AxisRotation(Vec3::Forward(), pi / 2));
+			*m_RotatorBufferMaps[1] = Inverse(Mat4(1));
+			*m_RotatorBufferMaps[2] = Inverse(Mat4::AxisRotation(Vec3::Right(), pi/2));
 		}
 
 		void Terminate() {
@@ -6696,62 +6776,43 @@ void main() {
 			m_ImGuiContext = nullptr;
 			m_Renderer.DestroyDescriptorPool(m_ImGuiDescriptorPool);
 			m_ImGuiDescriptorPool = VK_NULL_HANDLE;
-			m_Renderer.DestroyDescriptorPool(m_DebugRenderTransformDescriptorPool);
-			m_DebugRenderTransformBuffer.Terminate();
+			m_Renderer.DestroyDescriptorPool(m_RenderTransformDescriptorPoolSDF);
+			m_RenderTransformDescriptorPoolSDF = VK_NULL_HANDLE;
+			m_RenderTransformBufferSDF.Terminate();
+			m_Renderer.DestroyDescriptorPool(m_RotatorBuffersDescriptorPool);
+			m_RotatorBuffersDescriptorPool = VK_NULL_HANDLE;
+			m_Renderer.DestroyDescriptorPool(m_DepthImageDescriptorPoolSDF);
+			m_DepthImageDescriptorPoolSDF = VK_NULL_HANDLE;
+			for (uint32_t i = 0; i < m_DepthImageCountSDF; i++) {
+				VkImage& image1 = m_DepthImagesSDF1[i];
+				VkDeviceMemory& deviceMemory1 = m_DepthVulkanDeviceMemorySDF1[i];
+				VkImageView& imageView1 = m_DepthImageViewsSDF1[i];
+				m_Renderer.DestroyImageView(imageView1);
+				imageView1 = VK_NULL_HANDLE;
+				m_Renderer.DestroyImage(image1);
+				image1 = VK_NULL_HANDLE;
+				m_Renderer.FreeVulkanDeviceMemory(deviceMemory1);
+				deviceMemory1 = VK_NULL_HANDLE;
+				VkImage& image2 = m_DepthImagesSDF2[i];
+				VkDeviceMemory& deviceMemory2 = m_DepthVulkanDeviceMemorySDF2[i];
+				VkImageView& imageView2 = m_DepthImageViewsSDF2[i];
+				m_Renderer.DestroyImageView(imageView2);
+				imageView2 = VK_NULL_HANDLE;
+				m_Renderer.DestroyImage(image2);
+				image2 = VK_NULL_HANDLE;
+				m_Renderer.FreeVulkanDeviceMemory(deviceMemory2);
+				deviceMemory2 = VK_NULL_HANDLE;
+			}
+			m_Renderer.DestroySampler(m_Sampler);
+			m_Sampler = VK_NULL_HANDLE;
+			for (uint32_t i = 0; i < 3; i++) {
+				m_RotatorBuffers[i].Terminate();
+				m_RotatorBufferMaps[i] = nullptr;
+			}
 			m_Pipelines.Terminate(m_Renderer);
 		}
 
-		void SwapchainCreateCallback(float aspectRatio) {
-
-			if (m_Pipelines.m_DebugRenderTransformDescriptorSetLayout == VK_NULL_HANDLE) {
-
-				VkDescriptorSetLayoutBinding torusDesriptorSetBinding 
-					= m_Renderer.GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-
-				m_Pipelines.m_DebugRenderTransformDescriptorSetLayout = m_Renderer.CreateDescriptorSetLayout(nullptr, 1, &torusDesriptorSetBinding);
-
-				if (m_Pipelines.m_DebugRenderTransformDescriptorSetLayout == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create torus descriptor set layout (function Renderer::CreateDescriptorSetLayout in function Editor::SwapchainCreateCallback)!");
-				}
-			}
-
-			if (m_DebugRenderTransformBuffer.IsNull()) {
-				if (!m_DebugRenderTransformBuffer.Create(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
-						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create debug render transform buffer (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
-				}
-				if (!m_DebugRenderTransformBuffer.MapMemory(0, 64, (void**)&m_DebugRenderTransformMap)) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to map debug render transform buffer (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)");
-				}
-				VkDescriptorPoolSize poolSize {
-					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-					.descriptorCount = 1,
-				};
-				m_DebugRenderTransformDescriptorPool = m_Renderer.CreateDescriptorPool(0, 1, 1, &poolSize);
-				if (m_DebugRenderTransformDescriptorPool == VK_NULL_HANDLE) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create debug render transform descriptor pool (function Renderer::CreateDescriptorPool in function Editor::SwapchainCreateCallback)!");
-				}
-				if (!m_Renderer.AllocateDescriptorSets(nullptr, m_DebugRenderTransformDescriptorPool, 1, 
-						&m_Pipelines.m_DebugRenderTransformDescriptorSetLayout, &m_DebugRenderTransformDescriptorSet)) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to allocate debug render transform descriptor set (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
-				}
-				VkDescriptorBufferInfo bufferInfo {
-					.buffer = m_DebugRenderTransformBuffer.m_Buffer,
-					.offset = 0,
-					.range = 64,
-				};
-				VkWriteDescriptorSet write = Renderer::GetDescriptorWrite(nullptr, 0, m_DebugRenderTransformDescriptorSet,
-					VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &bufferInfo);
-				m_Renderer.UpdateDescriptorSets(1, &write);
-			}
-
-			*m_DebugRenderTransformMap = Mat4(1.0f);
-		}
+		void SwapchainCreateCallback(VkExtent2D extent, uint32_t imageCount);
 
 	public:
 
@@ -6859,62 +6920,311 @@ void main() {
 		}
 
 		void Render(const Renderer::DrawData& drawData) {
+			{
 
-			VkRenderingAttachmentInfo colorAttachmentInfo {
-				.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
-				.pNext = nullptr,
-				.imageView = drawData.m_SwapchainImageView,
-				.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-				.resolveMode = VK_RESOLVE_MODE_NONE,
-				.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-				.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-				.clearValue { .color { .uint32 { 0, 0, 0, 0 } } },
-			};
+				VkRenderingAttachmentInfo colorAttachmentInfo {
+					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
+					.pNext = nullptr,
+					.imageView = drawData.m_SwapchainImageView,
+					.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+					.resolveMode = VK_RESOLVE_MODE_NONE,
+					.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+					.clearValue { .color { .uint32 { 0, 0, 0, 0 } } },
+				};
 
-			VkRenderingInfo renderingInfo {
-				.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-				.pNext = nullptr,
-				.flags = 0,
-				.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
-				.layerCount = 1,
-				.viewMask = 0,
-				.colorAttachmentCount = 1,
-				.pColorAttachments = &colorAttachmentInfo,
-				.pDepthAttachment = nullptr,
-				.pStencilAttachment = nullptr,
-			};
+				VkRenderingInfo renderingInfo {
+					.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
+					.layerCount = 1,
+					.viewMask = 0,
+					.colorAttachmentCount = 1,
+					.pColorAttachments = &colorAttachmentInfo,
+					.pDepthAttachment = nullptr,
+					.pStencilAttachment = nullptr,
+				};
 
-			vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
+				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
 
-			ImGui::Render();
-			ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), drawData.m_CommandBuffer);
+				ImGui::Render();
+				ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), drawData.m_CommandBuffer);
 
-			/*
+				vkCmdEndRendering(drawData.m_CommandBuffer);
+			}
 
-			vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TorusPipeline);
-			vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TorusPipelineLayout, 
-				0, 1, &m_DebugRenderTransformDescriptorSet, 0, nullptr);
+			{
+				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TorusPipeline);
 
-			struct TorusPC {
-				const Mat4 c_InverseCameraMatrix;
-				const float c_CameraNear;
-				const float c_CameraFar;
-			};
+				Mat4 inverseCameraMat = Inverse(m_World.m_CameraMatricesMap->m_Projection * m_World.m_CameraMatricesMap->m_View);
 
-			TorusPC pc {
-				.c_InverseCameraMatrix = Inverse(m_World.m_CameraMatricesMap->m_Projection * m_World.m_CameraMatricesMap->m_View),
-				.c_CameraNear = World::default_camera_near,
-				.c_CameraFar = World::default_camera_far,
-			};
+				struct TorusPC_V {
+					const Mat4 c_InverseCameraMatrix;
+					const float c_CameraNear;
+					const float c_CameraFar;
+				};
 
-			vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_TorusPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
-				0, sizeof(TorusPC), &pc);
+				TorusPC_V t_pc_v {
+					.c_InverseCameraMatrix = inverseCameraMat,
+					.c_CameraNear = World::default_camera_near,
+					.c_CameraFar = World::default_camera_far,
+				};
 
+				float alpha = 0.5f;
 
-			Renderer::DrawIndexed(drawData.m_CommandBuffer, m_QuadMesh2DData);
-			*/
+				Vec4 colors[3] {
+					{ 1.0f, 0.0f, 0.0f, alpha },
+					{ 0.0f, 1.0f, 0.0f, alpha },
+					{ 0.0f, 0.0f, 1.0f, alpha },
+				};
 
-			vkCmdEndRendering(drawData.m_CommandBuffer);
+				VkImage depthImages[2] {
+					m_DepthImagesSDF1[drawData.m_CurrentFrame],
+					m_DepthImagesSDF2[drawData.m_CurrentFrame],
+				};
+
+				VkImageView depthImageAttachments[2] {
+					m_DepthImageViewsSDF2[drawData.m_CurrentFrame],
+					m_DepthImageViewsSDF1[drawData.m_CurrentFrame],
+				};
+
+				VkDescriptorSet depthImageDescriptorSets[2] {
+					m_DepthImageDescriptorSetsSDF1[drawData.m_CurrentFrame],
+					m_DepthImageDescriptorSetsSDF2[drawData.m_CurrentFrame],
+				};
+
+				VkImageLayout depthImageLayouts[2] {
+					VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+					VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				};
+
+				uint32_t imagePairIndex = 0;
+
+				{
+					VkImageMemoryBarrier imageMemoryBarriers[3] {
+						{
+							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+							.pNext = nullptr,
+							.srcAccessMask = 0,
+							.dstAccessMask = 0,
+							.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+							.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.image = depthImages[0],
+							.subresourceRange {
+								.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+								.baseMipLevel = 0,
+								.levelCount = 1,
+								.baseArrayLayer = 0,
+								.layerCount = 1,
+							},
+						},
+						{
+							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+							.pNext = nullptr,
+							.srcAccessMask = 0,
+							.dstAccessMask = 0,
+							.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+							.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.image = depthImages[1],
+							.subresourceRange {
+								.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+								.baseMipLevel = 0,
+								.levelCount = 1,
+								.baseArrayLayer = 0,
+								.layerCount = 1,
+							},
+						},
+						{
+							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+							.pNext = nullptr,
+							.srcAccessMask = 0,
+							.dstAccessMask = 0,
+							.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+							.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.image = m_World.m_DepthImages[drawData.m_CurrentFrame],
+							.subresourceRange {
+								.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+								.baseMipLevel = 0,
+								.levelCount = 1,
+								.baseArrayLayer = 0,
+								.layerCount = 1,
+							},
+						},
+					};
+
+					vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+						0, 0, nullptr, 0, nullptr, 3, imageMemoryBarriers);
+
+					VkRenderingAttachmentInfo colorAttachmentInfos[2]
+					{
+						{
+							.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
+							.pNext = nullptr,
+							.imageView = depthImageAttachments[0],
+							.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+							.resolveMode = VK_RESOLVE_MODE_NONE,
+							.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+							.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+							.clearValue { .color { .float32 { 5.0f, 0.0f, 0.0f, 1.0f, } } },
+						},
+						{
+							.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
+							.pNext = nullptr,
+							.imageView = depthImageAttachments[1],
+							.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+							.resolveMode = VK_RESOLVE_MODE_NONE,
+							.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+							.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+							.clearValue { .color { .float32 { 5.0f, 0.0f, 0.0f, 1.0f, } } },
+						},
+
+					};
+
+					VkRenderingInfo renderingInfo {
+						.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
+						.layerCount = 1,
+						.viewMask = 0,
+						.colorAttachmentCount = 2,
+						.pColorAttachments = colorAttachmentInfos,
+						.pDepthAttachment = nullptr,
+						.pStencilAttachment = nullptr,
+					};
+
+					vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
+					vkCmdEndRendering(drawData.m_CommandBuffer);
+				}
+
+				for (uint32_t i = 0; i < 3; i++) {
+
+					uint32_t otherIndex = (imagePairIndex + 1) % 2;
+
+					VkImageMemoryBarrier imageMemoryBarriers1[2] {
+						{
+							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+							.pNext = nullptr,
+							.srcAccessMask = 0,
+							.dstAccessMask = 0,
+							.oldLayout = depthImageLayouts[imagePairIndex],
+							.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.image = depthImages[imagePairIndex],
+							.subresourceRange {
+								.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+								.baseMipLevel = 0,
+								.levelCount = 1,
+								.baseArrayLayer = 0,
+								.layerCount = 1,
+							},
+						},
+						{
+							.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+							.pNext = nullptr,
+							.srcAccessMask = 0,
+							.dstAccessMask = 0,
+							.oldLayout = depthImageLayouts[otherIndex],
+							.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+							.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+							.image = depthImages[otherIndex],
+							.subresourceRange {
+								.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+								.baseMipLevel = 0,
+								.levelCount = 1,
+								.baseArrayLayer = 0,
+								.layerCount = 1,
+							},
+						},
+					};
+
+					vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+						0, 0, nullptr, 0, nullptr, 2, imageMemoryBarriers1);
+
+					depthImageLayouts[imagePairIndex] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+					depthImageLayouts[otherIndex] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+					VkRenderingAttachmentInfo colorAttachmentInfos[2] 
+					{
+						{
+							.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
+							.pNext = nullptr,
+							.imageView = drawData.m_SwapchainImageView,
+							.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+							.resolveMode = VK_RESOLVE_MODE_NONE,
+							.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+							.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+							.clearValue { .color { .uint32 { 0, 0, 0, 0 } } },
+						},
+						{
+							.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
+							.pNext = nullptr,
+							.imageView = depthImageAttachments[imagePairIndex],
+							.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+							.resolveMode = VK_RESOLVE_MODE_NONE,
+							.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+							.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+							.clearValue { .color { .float32 { 5.0f } } },
+						},
+					};
+
+					VkRenderingInfo renderingInfo {
+						.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+						.pNext = nullptr,
+						.flags = 0,
+						.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
+						.layerCount = 1,
+						.viewMask = 0,
+						.colorAttachmentCount = 2,
+						.pColorAttachments = colorAttachmentInfos,
+						.pDepthAttachment = nullptr,
+						.pStencilAttachment = nullptr,
+					};
+
+					vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
+
+					VkDescriptorSet sets[3] {
+						m_RenderTransformDescriptorSetSDF,
+						depthImageDescriptorSets[imagePairIndex],
+						m_RotatorDescriptorSets[i],
+					};
+
+					vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_TorusPipelineLayout, 
+						0, 3, sets, 0, nullptr);
+
+					struct TorusPC_F {
+						const Vec4 c_Color;
+						const float c_Radius;
+						const float c_Thickness;
+					};
+
+					TorusPC_F pc_f {
+						.c_Color = colors[i],
+						.c_Radius = 0.4f,
+						.c_Thickness = 0.005f,
+					};
+
+					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_TorusPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+						0, sizeof(TorusPC_V), &t_pc_v);
+					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_TorusPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+						80, sizeof(TorusPC_F), &pc_f);
+
+					Renderer::DrawIndexed(drawData.m_CommandBuffer, m_QuadMesh2DData);
+
+					vkCmdEndRendering(drawData.m_CommandBuffer);
+
+					imagePairIndex = (imagePairIndex + 1) % 2;
+				}
+			}
 		}
 	};
 
@@ -7350,7 +7660,7 @@ void main() {
 			s_engine_instance->m_RenderResolution = { (uint32_t)(renderResHeight * aspectRatio), renderResHeight};
 			s_engine_instance->m_UI.SwapchainCreateCallback({ swapchainExtent.width, swapchainExtent.height }, aspectRatio, imageCount);
 			s_engine_instance->m_World.SwapchainCreateCallback(swapchainExtent, s_engine_instance->m_RenderResolution, aspectRatio, imageCount);
-			s_engine_instance->m_Editor.SwapchainCreateCallback(aspectRatio);
+			s_engine_instance->m_Editor.SwapchainCreateCallback(swapchainExtent, imageCount);
 		}
 
 		static inline EngineMode UpdateEngineInstance(Engine* engine, EngineMode mode) {

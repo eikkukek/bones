@@ -112,6 +112,7 @@ namespace engine {
 		WorldRenderData* data = m_World.GetRenderData(ID);
 		assert(data);
 		data->m_Transform = m_Transform * *transform;
+		return true;
 	}
 
 	void Obstacle::UpdateTransforms() {
@@ -135,6 +136,7 @@ namespace engine {
 		WorldRenderData* data = m_World.GetRenderData(ID);
 		assert(data);
 		data->m_Transform = m_Transform * *transform;
+		return true;
 	}
 
 	void RayTarget::UpdateRenderTransforms() {
@@ -156,6 +158,7 @@ namespace engine {
 		WorldRenderData* data = m_World.GetRenderData(ID);
 		assert(data);
 		data->m_Transform = m_Transform * *transform;
+		return true;
 	}
 
 	void Body::UpdateTransforms() {
@@ -620,7 +623,7 @@ namespace engine {
 		if (m_ColorImageResourcesFormat == VK_FORMAT_UNDEFINED) {
 			VkFormat colorImageResourcesFormatCandidates[2] = { VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_B8G8R8A8_SRGB };
 			m_ColorImageResourcesFormat = m_Renderer.FindSupportedFormat(1, colorImageResourcesFormatCandidates, 
-				VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
+				VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
 			if (m_ColorImageResourcesFormat == VK_FORMAT_UNDEFINED) {
 				CriticalError(ErrorOrigin::Renderer, 
 					"couldn't find suitable format for color image resources (function Renderer::FindSupportedFormat in function World::SwapchainCreateCallback)!");
@@ -828,7 +831,7 @@ namespace engine {
 				VkImageView& imageView = m_DepthImageViews[i];
 				image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, depthFormat, imageExtent, 1, 1, 
 					VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
-						VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_SHARING_MODE_EXCLUSIVE, 1, &m_Renderer.m_GraphicsQueueFamilyIndex);
+						VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_SHARING_MODE_EXCLUSIVE, 1, &m_Renderer.m_GraphicsQueueFamilyIndex);
 				if (image == VK_NULL_HANDLE) {
 					CriticalError(ErrorOrigin::Renderer, 
 						"failed to create world depth image (function Renderer::CreateImage in function World::SwapchainCreateCallback)!");
@@ -913,5 +916,227 @@ namespace engine {
 				vkRes);
 		}
 		commandBuffer->m_Flags = Renderer::CommandBufferFlag_FreeAfterSubmit;
+	}
+
+	void Editor::SwapchainCreateCallback(VkExtent2D extent, uint32_t imageCount) {
+
+		assert(imageCount < 5);
+
+		if (m_Pipelines.m_RenderTransformDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
+
+			VkDescriptorSetLayoutBinding binding { 
+				m_Renderer.GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT),
+			};
+
+			m_Pipelines.m_RenderTransformDescriptorSetLayoutSDF = m_Renderer.CreateDescriptorSetLayout(nullptr, 1, &binding);
+
+			if (m_Pipelines.m_RenderTransformDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create SDF transform descriptor set layout (function Renderer::CreateDescriptorSetLayout in function Editor::SwapchainCreateCallback)!");
+			}
+
+			if (!m_RenderTransformBufferSDF.Create(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create debug render transform buffer (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
+			}
+			if (!m_RenderTransformBufferSDF.MapMemory(0, 64, (void**)&m_DebugRenderTransformMap)) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to map debug render transform buffer (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)");
+			}
+			VkDescriptorPoolSize poolSize {
+				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				.descriptorCount = 1,
+			};
+			m_RenderTransformDescriptorPoolSDF = m_Renderer.CreateDescriptorPool(0, 1, 1, &poolSize);
+			if (m_RenderTransformDescriptorPoolSDF  == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create debug render transform descriptor pool (function Renderer::CreateDescriptorPool in function Editor::SwapchainCreateCallback)!");
+			}
+			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_RenderTransformDescriptorPoolSDF, 1, 
+					&m_Pipelines.m_RenderTransformDescriptorSetLayoutSDF, &m_RenderTransformDescriptorSetSDF)) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to allocate debug render transform descriptor set (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
+			}
+			VkDescriptorBufferInfo bufferInfo {
+				.buffer = m_RenderTransformBufferSDF.m_Buffer,
+				.offset = 0,
+				.range = 64,
+			};
+			VkWriteDescriptorSet write = Renderer::GetDescriptorWrite(nullptr, 0, m_RenderTransformDescriptorSetSDF,
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &bufferInfo);
+			m_Renderer.UpdateDescriptorSets(1, &write);
+		}
+
+		*m_DebugRenderTransformMap = Mat4(1.0f);
+
+		if (m_Pipelines.m_DepthImageDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
+
+			VkDescriptorSetLayoutBinding bindings[1] {
+				m_Renderer.GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT),
+			};
+
+			m_Pipelines.m_DepthImageDescriptorSetLayoutSDF = m_Renderer.CreateDescriptorSetLayout(nullptr, 1, bindings);
+
+			if (m_Pipelines.m_DepthImageDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer, 
+					"failed to create SDF SDF depth image descriptor set layout (funtion Renderer::CreateDescriptorSetLayout in function Editor::SwapchainCreateCallback)");
+			}
+		}
+
+		if (m_Sampler == VK_NULL_HANDLE) {
+			m_Sampler = m_Renderer.CreateSampler(Renderer::GetDefaultSamplerInfo());
+		}
+
+		if (m_DepthImageFormatSDF == VK_FORMAT_UNDEFINED) {
+			const VkFormat candidates[2] { VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_B8G8R8A8_SRGB, };
+			m_DepthImageFormatSDF = m_Renderer.FindSupportedFormat(2, candidates, VK_IMAGE_TILING_OPTIMAL,
+				VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+			if (m_DepthImageFormatSDF == VK_FORMAT_UNDEFINED) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to find suitable format for SDF depth images (function Renderer::FindSupportedFormat in function Editor::SwapchainCreateCallback)!");
+			}
+		}
+
+		m_Renderer.DestroyDescriptorPool(m_DepthImageDescriptorPoolSDF);
+		m_DepthImageDescriptorPoolSDF = VK_NULL_HANDLE;
+
+		for (uint32_t i = 0; i < m_DepthImageCountSDF; i++) {
+
+			VkImage& image1 = m_DepthImagesSDF1[i];
+			VkDeviceMemory deviceMemory1 = m_DepthVulkanDeviceMemorySDF1[i];
+			VkImageView& imageView1 = m_DepthImageViewsSDF1[i];
+			VkImage& image2 = m_DepthImagesSDF2[i];
+			VkDeviceMemory deviceMemory2 = m_DepthVulkanDeviceMemorySDF2[i];
+			VkImageView& imageView2 = m_DepthImageViewsSDF2[i];
+
+			m_Renderer.DestroyImageView(imageView1);
+			imageView1 = VK_NULL_HANDLE;
+			m_Renderer.DestroyImage(image1);
+			image1 = VK_NULL_HANDLE;
+			m_Renderer.FreeVulkanDeviceMemory(deviceMemory1);
+			deviceMemory1 = VK_NULL_HANDLE;
+			m_Renderer.DestroyImageView(imageView2);
+			imageView2 = VK_NULL_HANDLE;
+			m_Renderer.DestroyImage(image2);
+			image2 = VK_NULL_HANDLE;
+			m_Renderer.FreeVulkanDeviceMemory(deviceMemory2);
+			deviceMemory2 = VK_NULL_HANDLE;
+		}
+
+		VkExtent3D imageExtent {
+			extent.width,
+			extent.height,
+			1,
+		};
+
+		VkDescriptorImageInfo imageInfos1[5];
+		VkDescriptorImageInfo imageInfos2[5];
+
+		for (uint32_t i = 0; i < imageCount; i++) {
+
+			VkImage& image1 = m_DepthImagesSDF1[i];
+			VkDeviceMemory& deviceMemory1 = m_DepthVulkanDeviceMemorySDF1[i];
+			VkImageView& imageView1 = m_DepthImageViewsSDF1[i];
+
+			image1 = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_DepthImageFormatSDF, imageExtent, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
+						VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_SHARING_MODE_EXCLUSIVE, 1, &m_Renderer.m_GraphicsQueueFamilyIndex);
+			if (image1 == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create SDF depth image (funtion Renderer::CreateImage in function Editor::SwapchainCreateCallback)!");
+			}
+			deviceMemory1 = m_Renderer.AllocateImageMemory(image1, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+			if (deviceMemory1 == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to allocate SDF depth image memory (function Renderer::AllocateImageMemory in function Editor::SwapchainCreateCallback)");
+			}
+			imageView1 = m_Renderer.CreateImageView(image1, VK_IMAGE_VIEW_TYPE_2D, m_DepthImageFormatSDF, VK_IMAGE_ASPECT_COLOR_BIT);
+			if (imageView1 == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create SDF depth image view (function Renderer::CreateImageView in function Editor::SwapchainCreateCallback)!");
+			}
+			imageInfos1[i] = {
+				.sampler = m_Sampler,
+				.imageView = imageView1,
+				.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			};
+
+			VkImage& image2 = m_DepthImagesSDF2[i];
+			VkDeviceMemory& deviceMemory2 = m_DepthVulkanDeviceMemorySDF2[i];
+			VkImageView& imageView2 = m_DepthImageViewsSDF2[i];
+
+			image2 = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_DepthImageFormatSDF, imageExtent, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
+						VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_SHARING_MODE_EXCLUSIVE, 1, &m_Renderer.m_GraphicsQueueFamilyIndex);
+			if (image2 == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create SDF depth image (funtion Renderer::CreateImage in function Editor::SwapchainCreateCallback)!");
+			}
+			deviceMemory2 = m_Renderer.AllocateImageMemory(image2, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+			if (deviceMemory2 == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to allocate SDF depth image memory (function Renderer::AllocateImageMemory in function Editor::SwapchainCreateCallback)");
+			}
+			imageView2 = m_Renderer.CreateImageView(image2, VK_IMAGE_VIEW_TYPE_2D, m_DepthImageFormatSDF, VK_IMAGE_ASPECT_COLOR_BIT);
+			if (imageView2 == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create SDF depth image view (function Renderer::CreateImageView in function Editor::SwapchainCreateCallback)!");
+			}
+			imageInfos2[i] = {
+				.sampler = m_Sampler,
+				.imageView = imageView2,
+				.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			};
+		}
+
+		uint32_t descriptorCount = imageCount * 2;
+
+		VkDescriptorPoolSize poolSizes[10];
+
+		for (uint32_t i = 0; i < descriptorCount; i++) {
+			poolSizes[i] = {
+				.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				.descriptorCount = 1,
+			};
+		}
+
+		m_DepthImageDescriptorPoolSDF = m_Renderer.CreateDescriptorPool(0, descriptorCount, descriptorCount, poolSizes);
+		if (m_DepthImageDescriptorPoolSDF == VK_NULL_HANDLE) {
+			CriticalError(ErrorOrigin::Renderer,
+				"failed to create SDF depth image descriptor pool (function Renderer::CreateDescriptorPool in function Editor::SwapchainCreateCallback)!");
+		}
+
+		VkDescriptorSetLayout depthImageSetLayouts[5];
+
+		for (uint32_t i = 0; i < imageCount; i++) {
+			depthImageSetLayouts[i] = m_Pipelines.m_DepthImageDescriptorSetLayoutSDF;
+		}
+
+		if (!m_Renderer.AllocateDescriptorSets(nullptr, m_DepthImageDescriptorPoolSDF, imageCount,
+				depthImageSetLayouts, m_DepthImageDescriptorSetsSDF1)) {
+			CriticalError(ErrorOrigin::Renderer,
+				"failed to allocate SDF depth image descriptor sets (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
+		}
+
+		if (!m_Renderer.AllocateDescriptorSets(nullptr, m_DepthImageDescriptorPoolSDF, imageCount,
+				depthImageSetLayouts, m_DepthImageDescriptorSetsSDF2)) {
+			CriticalError(ErrorOrigin::Renderer,
+				"failed to allocate SDF depth image descriptor sets (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
+		}
+
+		VkWriteDescriptorSet writes[10];
+
+		for (uint32_t i = 0; i < imageCount; i++) {
+
+			uint32_t index = i * 2;
+
+			writes[index] = Renderer::GetDescriptorWrite(nullptr, 0, m_DepthImageDescriptorSetsSDF1[i], VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				&imageInfos1[i], nullptr);
+
+			writes[index + 1] = Renderer::GetDescriptorWrite(nullptr, 0, m_DepthImageDescriptorSetsSDF2[i], VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				&imageInfos2[i], nullptr);
+		}
+		m_Renderer.UpdateDescriptorSets(descriptorCount, writes);
+
+		m_DepthImageCountSDF = imageCount;
 	}
 }
