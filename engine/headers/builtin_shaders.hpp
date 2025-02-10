@@ -220,13 +220,17 @@ layout(set = 0, binding = 0) uniform Transform {
 } transform;
 
 void main() {
-	outUV = inUV;
-	gl_Position = transform.c_RectTransform * vec4(inPosition.x, -inPosition.y, inPosition.z, 1.0f);
+
 	const float near = pc.c_CameraNear;
 	const float far = pc.c_CameraFar;
+
 	vec2 pos = vec2(inPosition.x, -inPosition.y);
 	outRayOrigin = (pc.c_InverseCameraMatrix * vec4(pos, -1.0f, 1.0f) * near).xyz;
 	outRayDirection = (pc.c_InverseCameraMatrix * vec4(pos * (far - near), far + near, far - near)).xyz;
+
+	outUV = inUV;
+
+	gl_Position = transform.c_RectTransform * vec4(inPosition.x, -inPosition.y, inPosition.z, 1.0f);
 }
 		)";
 
@@ -246,9 +250,15 @@ layout(set = 2, binding = 0) uniform Transform {
 	mat4 c_InverseTransform;
 } transform;
 
+layout(std140, set = 2, binding = 1) buffer MouseHitBuffer {
+	uint m_Hit;
+} hitBuffer;
+
 layout(push_constant) uniform PushConstant {
 	layout(offset = 80)
 	vec4 c_Color;
+	uvec2 c_Resolution;
+	uvec2 c_MousePosition;
 	float c_Radius;
 	float c_Thickness;
 } pc;
@@ -267,7 +277,7 @@ void main() {
 	const vec3 ro = inRayOrigin;
 	const vec3 rd = normalize(inRayDirection);
 
-	const float tmax = 5.0f;
+	const float tmax = 100.0f;
 	float t = 0.0f;
 	for (int i = 0; i < 256; i++) {
 		vec3 pos = ro + rd * t;
@@ -282,6 +292,7 @@ void main() {
 	if (t < sdfDepth) {
 		col = pc.c_Color;
 		outDepth = vec4(t, 0.0f, 0.0f, 1.0f);
+		hitBuffer.m_Hit = ((pc.c_Resolution * inUV) == pc.c_MousePosition) ? 1 : hitBuffer.m_Hit;
 	}
 	else {
 		outDepth = vec4(sdfDepth, 0.0f, 0.0f, 1.0f);

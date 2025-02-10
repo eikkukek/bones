@@ -298,20 +298,22 @@ namespace pipelines {
 	void Editor::Initialize(engine::Renderer& renderer, VkFormat sdfDepthFormat) {
 		using namespace engine;
 
-		VkDescriptorSetLayoutBinding torusBinding 
-			= Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT);
+		VkDescriptorSetLayoutBinding torusBindings[2]{
+			Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT),
+			Renderer::GetDescriptorSetLayoutBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT),
+		};
 
-		m_TorusInverseTransformDescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 1, &torusBinding);
+		m_TorusSet2DescriptorSetLayout = renderer.CreateDescriptorSetLayout(nullptr, 2, torusBindings);
 
-		if (m_TorusInverseTransformDescriptorSetLayout == VK_NULL_HANDLE) {
+		if (m_TorusSet2DescriptorSetLayout == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
-				"failed to create torus inverse transform descriptor set layout (function Renderer::CreateDescriptorSetLayout in function pipelines::Editor::Initialize)!");
+				"failed to create torus set 2 descriptor set layout (function Renderer::CreateDescriptorSetLayout in function pipelines::Editor::Initialize)!");
 		}
 
 		VkDescriptorSetLayout torusSetLayouts[3] {
 			m_RenderTransformDescriptorSetLayoutSDF,
 			m_DepthImageDescriptorSetLayoutSDF,
-			m_TorusInverseTransformDescriptorSetLayout,
+			m_TorusSet2DescriptorSetLayout,
 		};
 
 		const VkPushConstantRange torusPushConstantRanges[2] {
@@ -323,13 +325,13 @@ namespace pipelines {
 			{
 				.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
 				.offset = 80,
-				.size = 24,
+				.size = 40,
 			},
 		};
 
 		m_TorusPipelineLayout = renderer.CreatePipelineLayout(3, torusSetLayouts, 2, torusPushConstantRanges);
 
-		if (m_TorusPipelineLayout == VK_NULL_HANDLE) {
+		if (m_TorusPipelineLayout == VK_NULL_HANDLE) { 
 			CriticalError(ErrorOrigin::Renderer,
 				"failed to create torus pipeline layout (function Renderer::CreatePipelineLayout in function pipelines::Editor::Initialize)!");
 		}

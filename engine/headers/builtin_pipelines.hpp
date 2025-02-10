@@ -67,7 +67,7 @@ namespace pipelines {
 		VkDescriptorSetLayout m_RenderTransformDescriptorSetLayoutSDF = VK_NULL_HANDLE;
 
 		VkDescriptorSetLayout m_DepthImageDescriptorSetLayoutSDF = VK_NULL_HANDLE;
-		VkDescriptorSetLayout m_TorusInverseTransformDescriptorSetLayout = VK_NULL_HANDLE;
+		VkDescriptorSetLayout m_TorusSet2DescriptorSetLayout = VK_NULL_HANDLE;
 
 		void Initialize(engine::Renderer& renderer, VkFormat sdfDepthFormat);
 
@@ -76,8 +76,8 @@ namespace pipelines {
 			m_TorusPipeline = VK_NULL_HANDLE;
 			renderer.DestroyPipelineLayout(m_TorusPipelineLayout);
 			m_TorusPipelineLayout = VK_NULL_HANDLE;
-			renderer.DestroyDescriptorSetLayout(m_TorusInverseTransformDescriptorSetLayout);
-			m_TorusInverseTransformDescriptorSetLayout = VK_NULL_HANDLE;
+			renderer.DestroyDescriptorSetLayout(m_TorusSet2DescriptorSetLayout);
+			m_TorusSet2DescriptorSetLayout = VK_NULL_HANDLE;
 			renderer.DestroyDescriptorSetLayout(m_RenderTransformDescriptorSetLayoutSDF);
 			m_RenderTransformDescriptorSetLayoutSDF = VK_NULL_HANDLE;
 			renderer.DestroyDescriptorSetLayout(m_DepthImageDescriptorSetLayoutSDF);

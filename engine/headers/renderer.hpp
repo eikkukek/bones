@@ -1038,7 +1038,7 @@ namespace engine {
 		}
 
 		static void PrintWarning(const char* warn) {
-			fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold, "Renderer warning: %s\n", warn);
+			fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold, "Renderer warning: {}\n", warn);
 		}
 
 		static void PrintError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS) {

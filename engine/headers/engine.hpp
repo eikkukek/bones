@@ -3444,6 +3444,10 @@ namespace engine {
 			return s_ContentArea;
 		}
 
+		static Vec2_T<double> GetMousePosition() {
+			return s_CursorPosition;
+		}
+
 		static Vec2_T<double> GetDeltaMousePosition() {
 			return s_DeltaCursorPosition;
 		}
@@ -6588,7 +6592,7 @@ void main() {
 		GLFWwindow* const m_GLFWwindow;
 		ObjectID m_InspectedArea{};
 		uint32_t m_SelectedObjectIndex = UINT64_MAX;
-		MeshData m_CubeMeshData;
+		MeshData m_CubeMeshData{};
 
 		VkImage m_DepthImagesSDF1[5]{};
 		VkImageView m_DepthImageViewsSDF1[5]{};
@@ -6599,16 +6603,18 @@ void main() {
 		VkDescriptorSet m_DepthImageDescriptorSetsSDF1[5]{};
 		VkDescriptorSet m_DepthImageDescriptorSetsSDF2[5]{};
 		VkDescriptorSet m_RotatorDescriptorSets[3] { 0, 0, 0 };
-		MeshData m_QuadMesh2DData;
+		MeshData m_QuadMesh2DData{};
 
 		Mat4* m_DebugRenderTransformMap = nullptr;
-		Mat4* m_RotatorBufferMaps[3] { 0, 0, 0 };
+		Mat4* m_RotatorUniformBufferMaps[3] { 0, 0, 0 };
+		uint32_t* m_RotatorStorageBufferMaps[3] { 0, 0, 0 };
 
 		ImGuiContext* m_ImGuiContext = nullptr;
 		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
 		VkFormat m_ImGuiColorAttachmentFormat = VK_FORMAT_UNDEFINED;
 		Renderer::Buffer m_RenderTransformBufferSDF;
-		Renderer::Buffer m_RotatorBuffers[3];
+		Renderer::Buffer m_RotatorUniformBuffers[3];
+		Renderer::Buffer m_RotatorStorageBuffers[3];
 		VkSampler m_Sampler = VK_NULL_HANDLE;
 		uint32_t m_DepthImageCountSDF = 0;
 		VkDeviceMemory m_DepthVulkanDeviceMemorySDF1[5]{};
@@ -6620,7 +6626,8 @@ void main() {
 
 		Editor(World& world, Renderer& renderer, GLFWwindow* glfwWindow) 
 			: m_World(world), m_Renderer(renderer), m_GLFWwindow(glfwWindow), m_RenderTransformBufferSDF(m_Renderer),
-				m_RotatorBuffers { m_Renderer, m_Renderer, m_Renderer } {}
+				m_RotatorUniformBuffers { m_Renderer, m_Renderer, m_Renderer },
+				m_RotatorStorageBuffers { m_Renderer, m_Renderer, m_Renderer } {}
 
 		Editor(const Editor&) = delete;
 
@@ -6726,31 +6733,48 @@ void main() {
 
 			m_Pipelines.Initialize(m_Renderer, m_DepthImageFormatSDF);
 
-			VkDescriptorPoolSize rotatorPoolSizes[3];
 			VkDescriptorSetLayout rotatorSetLayouts[3];
-			VkDescriptorBufferInfo rotatorBufferInfos[3];
+			VkDescriptorBufferInfo rotatorUniformBufferInfos[3];
+			VkDescriptorBufferInfo rotatorStorageBufferInfos[3];
 			for (uint32_t i = 0; i < 3; i++) {
-				if (!m_RotatorBuffers[i].Create(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				if (!m_RotatorUniformBuffers[i].Create(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
 					CriticalError(ErrorOrigin::Renderer,
 						"failed to create editor rotator buffers (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
 				}
-				if (!m_RotatorBuffers[i].MapMemory(0, 64, (void**)&m_RotatorBufferMaps[i])) {
+				if (!m_RotatorUniformBuffers[i].MapMemory(0, 64, (void**)&m_RotatorUniformBufferMaps[i])) {
 					CriticalError(ErrorOrigin::Renderer,
 						"failed to map editor rotator buffers (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)!");
 				}
+				rotatorUniformBufferInfos[i] = {
+					.buffer = m_RotatorUniformBuffers[i].m_Buffer,
+					.offset = 0,
+					.range = 64,
+				};
+				if (!m_RotatorStorageBuffers[i].Create(4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to create editor rotator buffers (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
+				}
+				if (!m_RotatorStorageBuffers[i].MapMemory(0, 4, (void**)&m_RotatorStorageBufferMaps[i])) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to map editor rotator buffers (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)!");
+				}
+				rotatorStorageBufferInfos[i] = {
+					.buffer = m_RotatorStorageBuffers[i].m_Buffer,
+					.offset = 0,
+					.range = 4,
+				};
+				rotatorSetLayouts[i] = m_Pipelines.m_TorusSet2DescriptorSetLayout;
+			}
+			VkDescriptorPoolSize rotatorPoolSizes[6];
+			for (uint32_t i = 0; i < 6; i++) {
 				rotatorPoolSizes[i] = {
 					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 					.descriptorCount = 1,
 				};
-				rotatorSetLayouts[i] = m_Pipelines.m_TorusInverseTransformDescriptorSetLayout;
-				rotatorBufferInfos[i] = {
-					.buffer = m_RotatorBuffers[i].m_Buffer,
-					.offset = 0,
-					.range = 64,
-				};
 			}
-			m_RotatorBuffersDescriptorPool = m_Renderer.CreateDescriptorPool(0, 3, 3, rotatorPoolSizes);
+			m_RotatorBuffersDescriptorPool = m_Renderer.CreateDescriptorPool(0, 3, 6, rotatorPoolSizes);
 			if (m_RotatorBuffersDescriptorPool == VK_NULL_HANDLE) {
 				CriticalError(ErrorOrigin::Renderer,
 					"failed to create rotator descriptor pool (function Renderer::CreateDescriptorPool in function Editor::SwapchainCreateCallback)!");
@@ -6759,14 +6783,18 @@ void main() {
 				CriticalError(ErrorOrigin::Renderer,
 					"failed to allocate rotator descriptor sets (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
 			}
-			VkWriteDescriptorSet rotatorWrites[3];
+			VkWriteDescriptorSet rotatorWrites[6];
 			for (uint32_t i = 0; i < 3; i++) {
-				rotatorWrites[i] = Renderer::GetDescriptorWrite(nullptr, 0, m_RotatorDescriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &rotatorBufferInfos[i]);
+				rotatorWrites[i] = Renderer::GetDescriptorWrite(nullptr, 0, m_RotatorDescriptorSets[i], VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &rotatorUniformBufferInfos[i]);
+				rotatorWrites[i + 3] = Renderer::GetDescriptorWrite(nullptr, 1, m_RotatorDescriptorSets[i], VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &rotatorStorageBufferInfos[i]);
 			}
-			m_Renderer.UpdateDescriptorSets(3, rotatorWrites);
-			*m_RotatorBufferMaps[0] = Inverse(Mat4::AxisRotation(Vec3::Forward(), pi / 2));
-			*m_RotatorBufferMaps[1] = Inverse(Mat4(1));
-			*m_RotatorBufferMaps[2] = Inverse(Mat4::AxisRotation(Vec3::Right(), pi/2));
+			m_Renderer.UpdateDescriptorSets(6, rotatorWrites);
+			*m_RotatorUniformBufferMaps[0] = Inverse(Mat4::AxisRotation(Vec3::Forward(), pi / 2));
+			*m_RotatorUniformBufferMaps[1] = Inverse(Mat4(1));
+			*m_RotatorUniformBufferMaps[2] = Inverse(Mat4::AxisRotation(Vec3::Right(), pi/2));
+			*m_RotatorStorageBufferMaps[0] = 0;
+			*m_RotatorStorageBufferMaps[1] = 0;
+			*m_RotatorStorageBufferMaps[2] = 0;
 		}
 
 		void Terminate() {
@@ -6806,8 +6834,10 @@ void main() {
 			m_Renderer.DestroySampler(m_Sampler);
 			m_Sampler = VK_NULL_HANDLE;
 			for (uint32_t i = 0; i < 3; i++) {
-				m_RotatorBuffers[i].Terminate();
-				m_RotatorBufferMaps[i] = nullptr;
+				m_RotatorUniformBuffers[i].Terminate();
+				m_RotatorUniformBufferMaps[i] = nullptr;
+				m_RotatorStorageBuffers[i].Terminate();
+				m_RotatorStorageBufferMaps[i] = nullptr;
 			}
 			m_Pipelines.Terminate(m_Renderer);
 		}
@@ -7072,7 +7102,7 @@ void main() {
 							.resolveMode = VK_RESOLVE_MODE_NONE,
 							.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
 							.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-							.clearValue { .color { .float32 { 5.0f, 0.0f, 0.0f, 1.0f, } } },
+							.clearValue { .color { .float32 { 100.0f, 0.0f, 0.0f, 1.0f, } } },
 						},
 						{
 							.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
@@ -7082,7 +7112,7 @@ void main() {
 							.resolveMode = VK_RESOLVE_MODE_NONE,
 							.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
 							.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-							.clearValue { .color { .float32 { 5.0f, 0.0f, 0.0f, 1.0f, } } },
+							.clearValue { .color { .float32 { 100.0f, 0.0f, 0.0f, 1.0f, } } },
 						},
 
 					};
@@ -7203,12 +7233,22 @@ void main() {
 
 					struct TorusPC_F {
 						const Vec4 c_Color;
+						Vec2_T<uint32_t> c_Resolution;
+						Vec2_T<uint32_t> c_MousePosition;
 						const float c_Radius;
 						const float c_Thickness;
 					};
 
+					Vec4 color = colors[i];
+
+					if (*m_RotatorStorageBufferMaps[i]) {
+						color.w = 1.0f;
+					}
+
 					TorusPC_F pc_f {
-						.c_Color = colors[i],
+						.c_Color = color,
+						.c_Resolution = Input::GetContentArea(),
+						.c_MousePosition = Input::GetMousePosition(),
 						.c_Radius = 0.4f,
 						.c_Thickness = 0.005f,
 					};
