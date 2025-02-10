@@ -60,14 +60,16 @@ namespace pipelines {
 
 	class Editor {
 	public:
-		
+	
 		VkPipeline m_TorusPipeline = VK_NULL_HANDLE;
 		VkPipelineLayout m_TorusPipelineLayout = VK_NULL_HANDLE;
 
-		VkDescriptorSetLayout m_DebugRenderTransformDescriptorSetLayout = VK_NULL_HANDLE;
+		VkDescriptorSetLayout m_RenderTransformDescriptorSetLayoutSDF = VK_NULL_HANDLE;
+
+		VkDescriptorSetLayout m_DepthImageDescriptorSetLayoutSDF = VK_NULL_HANDLE;
 		VkDescriptorSetLayout m_TorusInverseTransformDescriptorSetLayout = VK_NULL_HANDLE;
 
-		void Initialize(engine::Renderer& renderer);
+		void Initialize(engine::Renderer& renderer, VkFormat sdfDepthFormat);
 
 		void Terminate(engine::Renderer& renderer) {
 			renderer.DestroyPipeline(m_TorusPipeline);
@@ -76,8 +78,10 @@ namespace pipelines {
 			m_TorusPipelineLayout = VK_NULL_HANDLE;
 			renderer.DestroyDescriptorSetLayout(m_TorusInverseTransformDescriptorSetLayout);
 			m_TorusInverseTransformDescriptorSetLayout = VK_NULL_HANDLE;
-			renderer.DestroyDescriptorSetLayout(m_DebugRenderTransformDescriptorSetLayout);
-			m_DebugRenderTransformDescriptorSetLayout = VK_NULL_HANDLE;
+			renderer.DestroyDescriptorSetLayout(m_RenderTransformDescriptorSetLayoutSDF);
+			m_RenderTransformDescriptorSetLayoutSDF = VK_NULL_HANDLE;
+			renderer.DestroyDescriptorSetLayout(m_DepthImageDescriptorSetLayoutSDF);
+			m_DepthImageDescriptorSetLayoutSDF = VK_NULL_HANDLE;
 		}
 	};
 }

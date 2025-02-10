@@ -198,7 +198,7 @@ void main() {
 	class Editor {
 	public:
 
-		static constexpr const char* torus_pipeline_vertex_shader = R"(
+		static constexpr const char* sdf_pipeline_vertex_shader = R"(
 #version 450
 
 layout(location = 0) in vec3 inPosition;
@@ -220,6 +220,7 @@ layout(set = 0, binding = 0) uniform Transform {
 } transform;
 
 void main() {
+	outUV = inUV;
 	gl_Position = transform.c_RectTransform * vec4(inPosition.x, -inPosition.y, inPosition.z, 1.0f);
 	const float near = pc.c_CameraNear;
 	const float far = pc.c_CameraFar;
@@ -237,8 +238,11 @@ layout(location = 1) in vec3 inRayOrigin;
 layout(location = 2) in vec3 inRayDirection;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec4 outDepth;
 
-layout(set = 1, binding = 0) uniform Transform {
+layout(set = 1, binding = 0) uniform sampler2D sdf_depth_image;
+
+layout(set = 2, binding = 0) uniform Transform {
 	mat4 c_InverseTransform;
 } transform;
 
@@ -273,9 +277,14 @@ void main() {
 		}
 		t += h;
 	}
+	float sdfDepth = texture(sdf_depth_image, inUV).r;
 	vec4 col = vec4(0.0f);
-	if (t < tmax) {
+	if (t < sdfDepth) {
 		col = pc.c_Color;
+		outDepth = vec4(t, 0.0f, 0.0f, 1.0f);
+	}
+	else {
+		outDepth = vec4(sdfDepth, 0.0f, 0.0f, 1.0f);
 	}
 	outColor = col;
 }

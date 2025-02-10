@@ -295,21 +295,8 @@ namespace pipelines {
 		m_WirePipeline = pipelines[3];
 	}
 
-	void Editor::Initialize(engine::Renderer& renderer) {
+	void Editor::Initialize(engine::Renderer& renderer, VkFormat sdfDepthFormat) {
 		using namespace engine;
-
-		const VkPushConstantRange torusPushConstantRanges[2] {
-			{
-				.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-				.offset = 0,
-				.size = 72,
-			},
-			{
-				.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-				.offset = 80,
-				.size = 36,
-			},
-		};
 
 		VkDescriptorSetLayoutBinding torusBinding 
 			= Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -321,51 +308,74 @@ namespace pipelines {
 				"failed to create torus inverse transform descriptor set layout (function Renderer::CreateDescriptorSetLayout in function pipelines::Editor::Initialize)!");
 		}
 
-		VkDescriptorSetLayout torusSetLayouts[2] {
-			m_DebugRenderTransformDescriptorSetLayout,
+		VkDescriptorSetLayout torusSetLayouts[3] {
+			m_RenderTransformDescriptorSetLayoutSDF,
+			m_DepthImageDescriptorSetLayoutSDF,
 			m_TorusInverseTransformDescriptorSetLayout,
 		};
 
-		m_TorusPipelineLayout = renderer.CreatePipelineLayout(2, torusSetLayouts, 2, torusPushConstantRanges);
+		const VkPushConstantRange torusPushConstantRanges[2] {
+			{
+				.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+				.offset = 0,
+				.size = 72,
+			},
+			{
+				.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+				.offset = 80,
+				.size = 24,
+			},
+		};
+
+		m_TorusPipelineLayout = renderer.CreatePipelineLayout(3, torusSetLayouts, 2, torusPushConstantRanges);
 
 		if (m_TorusPipelineLayout == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
 				"failed to create torus pipeline layout (function Renderer::CreatePipelineLayout in function pipelines::Editor::Initialize)!");
 		}
 
-		Renderer::Shader torusShaders[2] { 
-			{ renderer, VK_SHADER_STAGE_VERTEX_BIT },
-			{ renderer, VK_SHADER_STAGE_FRAGMENT_BIT },
-		};
+		Renderer::Shader sdfVertexShader(renderer, VK_SHADER_STAGE_VERTEX_BIT);
 
-		if (!torusShaders[0].Compile(shaders::Editor::torus_pipeline_vertex_shader)) {
+		if (!sdfVertexShader.Compile(shaders::Editor::sdf_pipeline_vertex_shader)) {
 			CriticalError(ErrorOrigin::Renderer,
-				"failed to compile torus vertex shader (function Renderer::Shader::Compile in function pipelines::Editor::Initialize)!");
+				"failed to compile SDF vertex shader (function Renderer::Shader::Compile in function pipelines::Editor::Initialize)!");
 		}
 
-		if (!torusShaders[1].Compile(shaders::Editor::torus_pipeline_fragment_shader)) {
+		Renderer::Shader torusFragmentShader(renderer, VK_SHADER_STAGE_FRAGMENT_BIT);
+
+		if (!torusFragmentShader.Compile(shaders::Editor::torus_pipeline_fragment_shader)) {
 			CriticalError(ErrorOrigin::Renderer,
 				"failed to compile torus fragment shader (function Renderer::Shader::Compile in function pipelines::Editor::Initialize)!");
 		}
 
 		VkPipelineShaderStageCreateInfo torusShaderStageInfos[2] {
-			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(torusShaders[0]),
-			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(torusShaders[1]),
+			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(sdfVertexShader),
+			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(torusFragmentShader),
+		};
+
+		VkFormat torusAttachmentFormats[2] {
+			renderer.m_SwapchainSurfaceFormat.format,
+			sdfDepthFormat,
 		};
 
 		VkPipelineRenderingCreateInfo torusRenderingInfo {
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
 			.pNext = nullptr,
 			.viewMask = 0,
-			.colorAttachmentCount = 1,
-			.pColorAttachmentFormats = &renderer.m_SwapchainSurfaceFormat.format,
+			.colorAttachmentCount = 2,
+			.pColorAttachmentFormats = torusAttachmentFormats,
 			.depthAttachmentFormat = VK_FORMAT_UNDEFINED,
 			.stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
 		};
 
+		VkPipelineColorBlendAttachmentState torusBlendStates[2] {
+			Renderer::GraphicsPipelineDefaults::color_blend_attachment_state,
+			Renderer::GraphicsPipelineDefaults::color_blend_attachment_state,
+		};
+
 		VkPipelineColorBlendStateCreateInfo torusBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
-		torusBlendState.attachmentCount = 1;
-		torusBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
+		torusBlendState.attachmentCount = 2;
+		torusBlendState.pAttachments = torusBlendStates;
 
 		VkGraphicsPipelineCreateInfo graphicsPipelineInfos[1] {
 			{
