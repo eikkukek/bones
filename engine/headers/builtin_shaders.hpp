@@ -255,7 +255,7 @@ layout(set = 1, binding = 0) uniform RotatorInfo {
 } rotator_info;
 
 layout(std140, set = 2, binding = 0) buffer MouseHitBuffer {
-	int m_Hit;
+	uint m_Hit;
 } hitBuffer;
 
 layout(push_constant) uniform PushConstant {
@@ -270,9 +270,10 @@ float SdTorus(vec3 pos, float r, float t) {
 }
 
 vec4 color;
-int hit = 0;
+uint hit = 0;
 
 float Map(vec3 pos) {
+
 	float x = SdTorus((rotator_info.c_InverseTransformX * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
 	float y = SdTorus((rotator_info.c_InverseTransformY * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
 	float z = SdTorus((rotator_info.c_InverseTransformZ * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
