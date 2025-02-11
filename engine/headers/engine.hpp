@@ -6609,6 +6609,13 @@ void main() {
 			float c_Thickness;
 		};
 
+		enum class HoveredSDF {
+			None = 0,
+			RotatorX = 1,
+			RotatorY = 2,
+			RotatorZ = 3,
+		};
+
 		World& m_World;
 		Renderer& m_Renderer;
 
@@ -6619,6 +6626,7 @@ void main() {
 		GLFWwindow* const m_GLFWwindow;
 		ObjectID m_InspectedArea{};
 		uint32_t m_SelectedObjectIndex = UINT64_MAX;
+		HoveredSDF m_HoveredSDF = HoveredSDF::None;
 		MeshData m_CubeMeshData{};
 
 		pipelines::Editor m_Pipelines{};
@@ -6630,7 +6638,7 @@ void main() {
 
 		Mat4* m_QuadTransformBufferMapSDF = nullptr;
 		RotatorInfoBufferSDF* m_RotatorInfoBufferMapSDF = nullptr;
-		int32_t* m_MouseHitBufferMapsSDF[5]{};
+		uint32_t* m_MouseHitBufferMapsSDF[5]{};
 
 		ImGuiContext* m_ImGuiContext = nullptr;
 		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
@@ -7038,7 +7046,7 @@ void main() {
 					0, 3, sets, 0, nullptr);
 
 				if (*m_MouseHitBufferMapsSDF[mouseHitBufferIndex]) {
-					int32_t& map = *m_MouseHitBufferMapsSDF[mouseHitBufferIndex];
+					uint32_t& map = *m_MouseHitBufferMapsSDF[mouseHitBufferIndex];
 					switch (map) {
 						case 1:
 							m_RotatorInfoBufferMapSDF->c_ColorX.w = 1.0f;
