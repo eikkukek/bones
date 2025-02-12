@@ -6609,11 +6609,53 @@ void main() {
 			float c_Thickness;
 		};
 
+<<<<<<< HEAD
 		enum class HoveredSDF {
 			None = 0,
 			RotatorX = 1,
 			RotatorY = 2,
 			RotatorZ = 3,
+=======
+		struct SerializedObject {
+
+			enum class Type {
+				None = 0,
+				Body = 1,
+				Obstacle = 2,
+				RayTarget = 3,
+			};
+
+			ObjectID m_ID;
+			Type m_Type;
+
+			bool Rotate(World& world, uint32_t axis, float amount) {
+				switch (m_Type) {
+					case Type::None:
+						return false;
+					case Type::Body:
+						return RotateBody(world, axis, amount);
+					case Type::Obstacle:
+						return true;
+					case Type::RayTarget:
+						return true;
+				}
+			}
+
+			bool RotateBody(World& world, uint32_t axis, float amount) {
+				Body* body = world.GetBody(m_ID);
+				if (!body) {
+					PrintError(ErrorOrigin::Editor,
+						"couldn't find body (function World::GetBody in function Editor::SerializedObject::RotateBody)!");
+					return false;
+				}
+				if (axis != 1) {
+					return false;
+				}
+				float rot = body->GetYRotation();
+				body->Rotate(rot + amount);
+				return true;
+			}
+>>>>>>> 03d226c (Stuff)
 		};
 
 		World& m_World;
@@ -7003,7 +7045,7 @@ void main() {
 				m_RotatorInfoBufferMapSDF->c_ColorY = { 0.0f, 1.0f, 0.0f, alpha };
 				m_RotatorInfoBufferMapSDF->c_ColorZ = { 0.0f, 0.0f, 1.0f, alpha };
 				m_RotatorInfoBufferMapSDF->c_Radius = 0.4f;
-				m_RotatorInfoBufferMapSDF->c_Thickness = 0.01f;
+				m_RotatorInfoBufferMapSDF->c_Thickness = 0.005f;
 
 				VkRenderingAttachmentInfo colorAttachmentInfos[1]
 				{
