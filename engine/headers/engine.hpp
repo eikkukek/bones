@@ -6609,13 +6609,13 @@ void main() {
 			float c_Thickness;
 		};
 
-<<<<<<< HEAD
 		enum class HoveredSDF {
 			None = 0,
 			RotatorX = 1,
 			RotatorY = 2,
 			RotatorZ = 3,
-=======
+		};
+
 		struct SerializedObject {
 
 			enum class Type {
@@ -6655,7 +6655,6 @@ void main() {
 				body->Rotate(rot + amount);
 				return true;
 			}
->>>>>>> 03d226c (Stuff)
 		};
 
 		World& m_World;
