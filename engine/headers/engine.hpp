@@ -9,6 +9,8 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_impl_glfw.h"
+#include "PxPhysicsAPI.h"
+#include "extensions/PxDefaultAllocator.h"
 #include <assert.h>
 #include <cstdio>
 #include <cstdlib>
@@ -48,6 +50,7 @@ namespace engine {
 		IndexOutOfBounds,
 		Vulkan,
 		Stb,
+		PhysX,
 		FileParsing,
 		FileWriting,
 		GameLogic,
@@ -67,7 +70,8 @@ namespace engine {
 			"NullDereference",
 			"IndexOutOfBounds",
 			"Vulkan",
-			"stb",
+			"STB",
+			"PhysX",
 			"FileParsing",
 			"FileWriting",
 			"GameLogic",
@@ -78,13 +82,16 @@ namespace engine {
 		return strings[(size_t)origin];
 	}
 
-	void CriticalError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS);
+	void CriticalError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS, physx::PxErrorCode::Enum physXErr = physx::PxErrorCode::eNO_ERROR);
 
-	inline void PrintError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS) {
+	inline void PrintError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS, physx::PxErrorCode::Enum physXErr = physx::PxErrorCode::eNO_ERROR) {
 		fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
 			"Engine called an error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
 		if (vkErr != VK_SUCCESS) {
 			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "Vulkan error code: {}\n", (int)vkErr);
+		}
+		if (physXErr != physx::PxErrorCode::eNO_ERROR) {
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "PhysX error code: {}\n", physXErr);
 		}
 	}
 
@@ -343,7 +350,7 @@ namespace engine {
 		}
 
 		ConstIterator end() const {
-			return m_Data ? &m_Data[m_Size] : nullptr;
+			return m_Data + m_Size;
 		}
 
 		T& operator[](size_t index) {
@@ -776,7 +783,7 @@ namespace engine {
 	};
 
 	template<typename KeyType, typename ValueType>
-	class OrderedArray {
+	class OrderedDictionary {
 	private:
 
 		uint32_t m_Size;
@@ -791,15 +798,15 @@ namespace engine {
 		typedef KeyType* KeyIterator;
 		typedef const KeyType* ConstKeyIterator;
 
-		OrderedArray() noexcept 
+		OrderedDictionary() noexcept 
 			: m_Size(0), m_Capacity(0), m_Data(nullptr) {}
 
-		OrderedArray(uint32_t capacity) 
+		OrderedDictionary(uint32_t capacity) 
 			: m_Size(0), m_Capacity(0), m_Data(nullptr) {
 			Reserve(capacity);
 		}
 
-		OrderedArray(const OrderedArray& other) 
+		OrderedDictionary(const OrderedDictionary& other) 
 			: m_Size(0), m_Capacity(0), m_Data(nullptr) {
 			if (!other.m_Data) {
 				return;
@@ -816,14 +823,14 @@ namespace engine {
 			}
 		}
 
-		OrderedArray(OrderedArray&& other) 
+		OrderedDictionary(OrderedDictionary&& other) 
 			: m_Size(other.m_Size), m_Capacity(other.m_Capacity), m_Data(other.m_Data) {
 			other.m_Size = 0;
 			other.m_Capacity = 0;
 			other.m_Data = nullptr;
 		}
 
-		OrderedArray& operator=(const OrderedArray& other) {
+		OrderedDictionary& operator=(const OrderedDictionary& other) {
 			Clear();
 			if (!other.m_Data) {
 				return *this;
@@ -841,7 +848,7 @@ namespace engine {
 			return *this;
 		}
 
-		OrderedArray& operator=(OrderedArray&& other) {
+		OrderedDictionary& operator=(OrderedDictionary&& other) {
 			Clear();
 			m_Size = other.m_Size;
 			m_Capacity = other.m_Capacity;
@@ -851,24 +858,8 @@ namespace engine {
 			return *this;
 		}
 
-		~OrderedArray() {
+		~OrderedDictionary() {
 			Clear();
-		}
-
-		OrderedArray& Clear() {
-			if (m_Data) {
-				KeyType* keys = _Keys();
-				ValueType* values = _Values();
-				for (uint32_t i = 0; i < m_Size; i++) {
-					(&keys[i])->~KeyType();
-					(&values[i])->~ValueType();
-				}
-				free(m_Data);
-			}
-			m_Size = 0;
-			m_Capacity = 0;
-			m_Data = nullptr;
-			return* this;
 		}
 
 		uint32_t Size() {
@@ -877,14 +868,14 @@ namespace engine {
 
 		uint32_t Capacity() {
 			return m_Capacity;
-		}	
+		}
 
-		OrderedArray& Reserve(uint32_t capacity) {
+		OrderedDictionary& Reserve(uint32_t capacity) {
 			if (capacity <= m_Capacity) {
 				return *this;
 			}
 			uint8_t* temp = (uint8_t*)malloc(capacity * sizeof(KeyType) + capacity * sizeof(ValueType));
-			assert(temp && "allocation failed!");
+			assert(temp && "malloc failed!");
 			if (m_Data) {
 				KeyType* keys = _Keys();
 				ValueType* values = _Values();
@@ -899,6 +890,22 @@ namespace engine {
 			m_Data = temp;
 			m_Capacity = capacity;
 			return *this;
+		}
+
+		OrderedDictionary& Clear() {
+			if (m_Data) {
+				KeyType* keys = _Keys();
+				ValueType* values = _Values();
+				for (uint32_t i = 0; i < m_Size; i++) {
+					(&keys[i])->~KeyType();
+					(&values[i])->~ValueType();
+				}
+				free(m_Data);
+			}
+			m_Size = 0;
+			m_Capacity = 0;
+			m_Data = nullptr;
+			return* this;
 		}
 
 		ValueType* Insert(const KeyType& key, const ValueType& value) {
@@ -952,6 +959,12 @@ namespace engine {
 			ValueType* values = _Values();
 			(&keys[index])->~KeyType();
 			(&values[index])->~ValueType();
+			--m_Size;
+			for (uint32_t i = index; i < m_Size; i++) {
+				new(&keys[i]) KeyType(std::move(keys[i + 1]));
+				new(&values[i]) ValueType(std::move(values[i + 1]));
+			}
+			return true;
 		}
 
 		bool Contains(const KeyType& key) {
@@ -1077,11 +1090,11 @@ namespace engine {
 				new(&keys[i]) KeyType(std::move(keys[i - 1]));
 				new(&values[i]) ValueType(std::move(values[i - 1]));
 			}
-			ValueType& newValue = values[index];
+			ValueType& newValueSpot = values[index];
 			new(&keys[index]) KeyType(key);
-			new(&newValue) ValueType(value);
+			new(&newValueSpot) ValueType(value);
 			++m_Size;
-			return &newValue;
+			return &newValueSpot;
 		}
 
 		template<typename... Args>
@@ -1093,11 +1106,234 @@ namespace engine {
 				new(&keys[i]) KeyType(std::move(keys[i - 1]));
 				new(&values[i]) ValueType(std::move(values[i - 1]));
 			}
-			ValueType& newValue = values[index];
+			ValueType& newValueSpot = values[index];
 			new(&keys[index]) KeyType(key);
-			new(&newValue) ValueType(std::forward<Args>(args)...);
+			new(&newValueSpot) ValueType(std::forward<Args>(args)...);
 			++m_Size;
-			return &newValue;
+			return &newValueSpot;
+		}
+	};
+
+	template<typename T>
+	class OrderedArray {
+	private:
+		
+		uint32_t m_Size;
+		uint32_t m_Capacity;
+		T* m_Data;
+
+	public:
+
+		typedef T* Iterator;
+		typedef const T* ConstIterator;
+
+		OrderedArray() : m_Size(0), m_Capacity(0), m_Data(nullptr) {}
+
+		OrderedArray(const OrderedArray& other) : m_Size(0), m_Capacity(0), m_Data(0) {
+			Reserve(other.m_Capacity);
+			for (uint32_t i = 0; i < other.m_Size; i++) {
+				m_Data[i] = other.m_Data[i];
+			}
+		}
+
+		OrderedArray(OrderedArray&& other) 
+			: m_Size(other.m_Size), m_Capacity(other.m_Capacity), m_Data(other.m_Data) {
+			other.m_Size = 0;
+			other.m_Capacity = 0;
+			other.m_Data = 0;
+		}
+
+		OrderedArray& operator==(const OrderedArray& other) {
+			Clear();
+			Reserve(other.m_Capacity);
+			for (uint32_t i = 0; i < other.m_Size; i++) {
+				m_Data[i] = other.m_Data[i];
+			}
+		}
+
+		OrderedArray& operator==(OrderedArray&& other) {
+			Clear();
+			m_Size = other.m_Size;
+			m_Capacity = other.m_Capacity;
+			m_Data = other.m_Data;
+			other.m_Size = 0;
+			other.m_Capacity = 0;
+			other.m_Data = nullptr;
+		}
+
+		~OrderedArray() {
+			Clear();
+		}
+
+		OrderedArray& Reserve(uint32_t capacity) {
+			if (m_Capacity >= capacity) {
+				return *this;
+			}
+			T* temp = (T*)malloc(capacity * sizeof(T));
+			assert(temp && "malloc failed!");
+			for (uint32_t i = 0; i < m_Size; i++) {
+				temp[i] = m_Data[i];
+			}
+			free(m_Data);
+			m_Data = temp;
+			m_Capacity = capacity;
+			return *this;
+		}
+
+		OrderedArray& Clear() {
+			for (uint32_t i = 0; i < m_Size; i++) {
+				(&m_Data[i])->~T();
+			}
+			m_Size = 0;
+			m_Capacity = 0;
+			free(m_Data);
+			m_Data = nullptr;
+			return *this;
+		}
+
+		T* Insert(const T& value) {
+			if (!m_Data) {
+				Reserve(4);
+				*m_Data = value;
+				++m_Size;
+				return m_Data;
+			}
+			if (m_Capacity == m_Size) {
+				Reserve(m_Capacity * 2);
+			}
+			int64_t index = _FindNewIndex(value);
+			if (index == -1) {
+				return nullptr;
+			}
+			return _InsertToIndex(index, std::move(value));
+		}
+
+		template<typename... Args>
+		T* Emplace(Args&&... args) {
+			if (!m_Data) {
+				Reserve(4);
+				new(m_Data) T(std::forward<Args>(args)...);
+				++m_Size;
+				return m_Data;
+			}
+			if (m_Capacity == m_Size) {
+				Reserve(m_Capacity * 2);
+			}
+			T value(std::forward(args)...);
+			int64_t index = _FindNewIndex();
+			if (index == -1) {
+				return nullptr;
+			}
+			return _EmplaceToIndex(index, std::move(value));
+		}
+
+		bool Erase(const T& value) {
+			if (!m_Data) {
+				return false;
+			}
+			int64_t index = _FindIndex(value);
+			if (index == -1) {
+				return false;
+			}
+			(&m_Data[index])->~T();
+			--m_Size;
+			for (uint32_t i = index; i < m_Size; i++) {
+				new(&m_Data[i]) T(std::move(m_Data[i + 1]));
+			}
+			return true;
+		}
+
+		bool Contains(const T& value) {
+			return _FindIndex(value) != -1;
+		}
+
+		T* Find(const T& value) {
+			if (!m_Data) {
+				return nullptr;
+			}
+			uint32_t index = _FindIndex(value);
+			if (index == -1) {
+				return nullptr;
+			}
+			return m_Data + index;
+		}
+
+		Iterator begin() {
+			return m_Data;
+		}
+
+		ConstIterator begin() const {
+			return m_Data;
+		}
+
+		ConstIterator end() const {
+			return m_Data + m_Size;
+		}
+
+	private:
+
+		int64_t _FindIndex(const T& value) {
+			assert(m_Data);
+			uint32_t left = 0;
+			uint32_t right = m_Size - 1;
+			uint32_t index = 0;
+			while (left <= right) {
+				index = (left + right) / 2;
+				if (m_Data[index] < value) {
+					left = index + 1;
+					continue;
+				}
+				if (value < m_Data[index]) {
+					right = index - 1;
+					continue;
+				}
+				return index;
+			}
+			return -1;
+		}
+
+	
+		int64_t _FindNewIndex(const T& value) {
+			assert(m_Data);
+			int64_t left = 0;
+			int64_t right = (int64_t)m_Size - 1;
+			uint32_t index = 0;
+			while (left <= right) {
+				index = (left + right) / 2;
+				if (m_Data[index] < value) {
+					left = index + 1;
+					continue;
+				}
+				if (value < m_Data[index]) {
+					right = (int64_t)index - 1;
+					continue;
+				}
+				return -1;
+			}
+			return left;
+		}
+
+		T* _InsertToIndex(uint32_t index, const T& value) {
+			assert(m_Data);
+			for (uint32_t i = m_Size; i > index; i--) {
+				new(&m_Data[i]) T(std::move(m_Data[i - 1]));
+			}
+			T& newSpot = m_Data[index];
+			new(&newSpot) T(value);
+			++m_Size;
+			return &newSpot;
+		}
+
+		template<typename... Args>
+		T* _EmplaceToIndex(uint32_t index, T&& value) {
+			assert(m_Data);
+			for (uint32_t i = m_Size; i > index; i--) {
+				new(&m_Data[i]) T(std::move(m_Data[i - 1]));
+			}
+			T& newSpot = m_Data[index];
+			new(&newSpot) T(std::move(value));
+			++m_Size;
+			return &newSpot;
 		}
 	};
 
@@ -2309,6 +2545,28 @@ namespace engine {
 			return {};
 		}
 
+		static bool ColliderToStaticColliderCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
+			Box aBox = a.GetBoundingBox();
+			Box bBox = b.GetBoundingBox();
+			if (!aBox.OverLaps(bBox)) {
+				return false;
+			}
+			if (a.m_Type == Type::Fence) {
+				if (b.m_Type == Type::Fence) {
+					return FenceToStaticFenceCollides(a, b, outAPushBack);
+				}
+			}
+			if (a.m_Type == Type::Pole) {
+				if (b.m_Type == Type::Fence) {
+					return PoleToStaticFenceCollides(a, b, outAPushBack);
+				}
+				if (b.m_Type == Type::Pole) {
+					return PoleToStaticPoleCollides(a, b, outAPushBack);
+				}
+			}
+			return false;
+		}
+
 		static bool PoleToStaticPoleCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
 			const Pole& aPole = a.u_Collider.m_Pole;
 			const Pole& bPole = b.u_Collider.m_Pole;
@@ -2600,23 +2858,6 @@ namespace engine {
 				//fmt::print("colliding!");
 
 				return true;
-			}
-			return false;
-		}
-
-		static bool ColliderToStaticColliderCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
-			if (a.m_Type == Type::Fence) {
-				if (b.m_Type == Type::Fence) {
-					return FenceToStaticFenceCollides(a, b, outAPushBack);
-				}
-			}
-			if (a.m_Type == Type::Pole) {
-				if (b.m_Type == Type::Fence) {
-					return PoleToStaticFenceCollides(a, b, outAPushBack);
-				}
-				if (b.m_Type == Type::Pole) {
-					return PoleToStaticPoleCollides(a, b, outAPushBack);
-				}
 			}
 			return false;
 		}
@@ -5124,7 +5365,7 @@ void main() {
 
 		friend class World;
 		friend class Area;
-		friend class OrderedArray<ObjectID, Obstacle>;
+		friend class OrderedDictionary<ObjectID, Obstacle>;
 
 	public:
 
@@ -5135,6 +5376,7 @@ void main() {
 		};
 
 		World& m_World;
+		Area& m_Area;
 
 		String m_Name;
 
@@ -5146,10 +5388,10 @@ void main() {
 		Collider m_Collider;
 
 		Mat4 m_Transform;
-		OrderedArray<RenderID, Mat4> m_RenderDataTransforms{};
+		OrderedDictionary<RenderID, Mat4> m_RenderDataTransforms{};
 
-		Obstacle(World& world, const char* name, const CreateInfo& info) noexcept 
-			: m_World(world), m_Name(name), m_Position(info.m_Position),
+		Obstacle(World& world, Area& area, const char* name, const CreateInfo& info) noexcept 
+			: m_World(world), m_Area(area), m_Name(name), m_Position(info.m_Position),
 				m_YRotation(info.m_YRotation), m_Collider(m_Position, m_YRotation, m_Velocity, info.m_ColliderInfo),
 				m_Transform(Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4()) {
 			m_Transform[3] = Vec4(m_Position, 1.0f);
@@ -5158,14 +5400,10 @@ void main() {
 		Obstacle(const Obstacle&) = delete;
 
 		Obstacle(Obstacle&& other) noexcept 
-			: m_World(other.m_World), m_Name(std::move(other.m_Name)),
+			: m_World(other.m_World), m_Area(other.m_Area), m_Name(std::move(other.m_Name)),
 				m_Position(other.m_Position), m_YRotation(other.m_YRotation), 
 				m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)),
 				m_Transform(other.m_Transform), m_RenderDataTransforms(std::move(other.m_RenderDataTransforms)) {}
-
-		bool Collides(const Collider& collider, Vec3& outColliderPushBack) const {
-			return Collider::ColliderToStaticColliderCollides(collider, m_Collider, outColliderPushBack);
-		}
 
 	public:
 
@@ -5173,7 +5411,7 @@ void main() {
 			return m_Collider.GetBoundingBox();
 		}
 
-		Vec3 GetPosition() const {
+		const Vec3& GetPosition() const {
 			return m_Position;
 		}
 
@@ -5186,18 +5424,35 @@ void main() {
 			return m_YRotation;
 		}
 
-		void SetYRotation(float yRotation) {
+		void SetRotation(float yRotation) {
 			m_YRotation = yRotation;
 			UpdateTransforms();
 		}
 
-		void SetPositionAndYRotation(const Vec3& position, float yRotation) {
+		void Move(const Vec3& position) {
+			m_Position = position;
+			CheckCollisions();
+			UpdateTransforms();
+		}
+
+		void Rotate(float yRotation) {
+			m_YRotation = yRotation;
+			CheckCollisions();
+			UpdateTransforms();
+		}
+
+		void MoveAndRotate(const Vec3& position, float yRotation) {
 			m_Position = position;
 			m_YRotation = yRotation;
+			CheckCollisions();
 			UpdateTransforms();
 		}
 
 	private:
+
+		bool Collides(const Collider& collider, Vec3& outColliderPushBack) const {
+			return Collider::ColliderToStaticColliderCollides(collider, m_Collider, outColliderPushBack);
+		}
 
 		bool AddRenderDataTransform(RenderID ID, const Mat4& transform) {
 			bool res = m_RenderDataTransforms.Insert(ID, transform);
@@ -5211,6 +5466,7 @@ void main() {
 			return m_RenderDataTransforms.Erase(ID);
 		}
 
+		void CheckCollisions();
 		bool UpdateRenderTransform(RenderID ID);
 		void UpdateTransforms();
 	};
@@ -5218,7 +5474,7 @@ void main() {
 	class RayTarget {
 
 		friend class World;
-		friend class OrderedArray<ObjectID, RayTarget>;
+		friend class OrderedDictionary<ObjectID, RayTarget>;
 
 	public:
 		
@@ -5232,8 +5488,11 @@ void main() {
 	private:
 
 		LogicMesh m_LogicMesh;
+		Vec3 m_Position;
+		Quaternion m_Rotation;
+		Vec3 m_Scale;
 		Mat4 m_Transform;
-		OrderedArray<RenderID, Mat4> m_RenderDataTransforms{};
+		OrderedDictionary<RenderID, Mat4> m_RenderDataTransforms{};
 
 		RayTarget(World& world, const CreateInfo& createInfo) 
 			: m_World(world), m_LogicMesh(createInfo.m_LogicMesh), m_Transform(createInfo.m_Transform) {
@@ -5244,6 +5503,36 @@ void main() {
 		RayTarget(RayTarget&&) = default;
 
 	public:
+
+		const Vec3& GetPosition() const {
+			return m_Position;
+		}
+
+		void SetPosition(const Vec3& position) {
+			m_Position = position;
+			UpdateRenderTransforms();
+			m_LogicMesh.UpdateTransform(m_Transform);
+		}
+
+		const Quaternion& GetRotation() const {
+			return m_Rotation;
+		}
+
+		void SetRotation(const Quaternion& rotation) {
+			m_Rotation = rotation;
+			UpdateRenderTransforms();
+			m_LogicMesh.UpdateTransform(m_Transform);
+		}
+
+		const Vec3& GetScale() const {
+			return m_Scale;
+		}
+
+		void SetScale(const Vec3& scale) {
+			m_Scale = scale;
+			UpdateRenderTransforms();
+			m_LogicMesh.UpdateTransform(m_Transform);
+		}
 
 		bool AABBCheck(const Vec3& position) const {
 			return m_LogicMesh.AABBCheck(position);
@@ -5259,12 +5548,6 @@ void main() {
 
 		bool RayCheck(const Ray& ray, RayHitInfo& outHitInfo) const {
 			return m_LogicMesh.IsRayHit(ray, outHitInfo);
-		}
-
-		void UpdateTransform(const Mat4& transform) {
-			m_Transform = transform;
-			m_LogicMesh.UpdateTransform(m_Transform);
-			UpdateRenderTransforms();
 		}
 
 	private:
@@ -5295,8 +5578,9 @@ void main() {
 
 		friend class World;
 		friend class Editor;
+		friend class Obstacle;
 
-		friend class OrderedArray<ObjectID, Area>;
+		friend class OrderedDictionary<ObjectID, Area>;
 
 	public:
 
@@ -5305,8 +5589,9 @@ void main() {
 	private:
 
 		Box<float> m_BoundingBox{};
-		OrderedArray<ObjectID, Obstacle> m_Obstacles{};
-		OrderedArray<ObjectID, RayTarget> m_RayTargets{};
+		OrderedDictionary<ObjectID, Obstacle> m_Obstacles{};
+		OrderedDictionary<ObjectID, RayTarget> m_RayTargets{};
+		OrderedArray<ObjectID> m_Bodies{};
 		
 		Area(World& world, AreaFlags flags) noexcept
 			: m_World(world) {}
@@ -5357,12 +5642,16 @@ void main() {
 			}
 			return false;
 		}
+
+	private:
+		
+		void CheckCollisions(const Obstacle& obstacle) const;
 	};
 
 	class Body {
 
 		friend class World;
-		friend class OrderedArray<ObjectID, Body>;
+		friend class OrderedDictionary<ObjectID, Body>;
 
 	public:	
 	
@@ -5378,7 +5667,7 @@ void main() {
 		Collider m_Collider;
 
 		Mat4 m_Transform;
-		OrderedArray<RenderID, Mat4> m_RenderDataTransforms{};
+		OrderedDictionary<RenderID, Mat4> m_RenderDataTransforms{};
 
 		Body(World& world, const Vec3& position, float height, ObjectID areaID, const Collider::CreateInfo& colliderInfo)
 			: m_World(world), m_AreaID(areaID), m_Position(position), m_Velocity(0),
@@ -5398,8 +5687,18 @@ void main() {
 			return m_Position;
 		}
 
+		void SetPosition(const Vec3& position) {
+			m_Position = position;
+			UpdateTransforms();
+		}
+
 		float GetYRotation() const {
 			return m_YRotation;
+		}
+
+		void SetRotation(float yRotation) {
+			m_YRotation = yRotation;
+			UpdateTransforms();
 		}
 
 		void Move(const Vec3& position);
@@ -5893,8 +6192,8 @@ void main() {
 		RenderID m_NextRenderID = 0;
 		VkDescriptorSet m_NullTextureDescriptorSet = VK_NULL_HANDLE;
 		DynamicArray<Entity*> m_Entities{};
-		OrderedArray<ObjectID, Area> m_Areas{};
-		OrderedArray<ObjectID, Body> m_Bodies{};
+		OrderedDictionary<ObjectID, Area> m_Areas{};
+		OrderedDictionary<ObjectID, Body> m_Bodies{};
 		float m_EditorCameraSensitivity = pi / 2;
 		float m_EditorCameraSpeed = 5.0f;
 		static constexpr float editor_min_camera_speed = 1.0f;
@@ -5910,7 +6209,7 @@ void main() {
 		pipelines::World m_Pipelines{};
 		CameraMatricesBuffer m_EditorCamera{};
 		CameraMatricesBuffer m_GameCamera{};
-		OrderedArray<RenderID, WorldRenderData> m_RenderDatas{};
+		OrderedDictionary<RenderID, WorldRenderData> m_RenderDatas{};
 		VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
 		DynamicArray<VkDescriptorSet> m_RenderPBRImagesDescriptorSets{};
 		DynamicArray<DebugRenderData> m_WireRenderDatas{};
@@ -6625,34 +6924,87 @@ void main() {
 				RayTarget = 3,
 			};
 
-			ObjectID m_ID;
+			ObjectID m_ObjectID;
+			ObjectID m_AreaID;
 			Type m_Type;
 
-			bool Rotate(World& world, uint32_t axis, float amount) {
+			bool Rotate(World& world, uint32_t axis, float amount) const {
 				switch (m_Type) {
 					case Type::None:
 						return false;
 					case Type::Body:
 						return RotateBody(world, axis, amount);
 					case Type::Obstacle:
-						return true;
+						return RotateObstacle(world, axis, amount);
 					case Type::RayTarget:
 						return true;
 				}
 			}
 
-			bool RotateBody(World& world, uint32_t axis, float amount) {
-				Body* body = world.GetBody(m_ID);
+			bool RotateBody(World& world, uint32_t axis, float amount) const {
+				if (axis != 1) {
+					return false;
+				}
+				Body* body = world.GetBody(m_ObjectID);
 				if (!body) {
 					PrintError(ErrorOrigin::Editor,
 						"couldn't find body (function World::GetBody in function Editor::SerializedObject::RotateBody)!");
 					return false;
 				}
+				float rot = body->GetYRotation();
+				body->SetRotation(rot + amount);
+				return true;
+			}
+
+			bool RotateObstacle(World& world, uint32_t axis, float amount) const {
 				if (axis != 1) {
 					return false;
 				}
-				float rot = body->GetYRotation();
-				body->Rotate(rot + amount);
+				Area* area = world.GetArea(m_AreaID);
+				if (!area) {
+					PrintError(ErrorOrigin::Editor,
+						"couldn't find area (function World::GetArea in function Editor::SerializedObject::RotateObstacle)!");
+					return false;
+				}
+				Obstacle* obstacle = area->GetObstacle(m_ObjectID);
+				if (!obstacle) {
+					PrintError(ErrorOrigin::Editor,
+						"couldn't find obstacle (function Area::GetObstacle in function Editor::SerializedObject::RotateObstacle)!");
+					return false;
+				}
+				float rot = obstacle->GetYRotation();
+				obstacle->SetRotation(rot + amount);
+				return true;
+			}
+
+			bool RotateRayTarget(World& world, uint32_t axis, float amount) const {
+				Area* area = world.GetArea(m_AreaID);
+				if (!area) {
+					PrintError(ErrorOrigin::Editor,
+						"couldn't find area (function World::GetArea in function Editor::SerializedObject::RotateObstacle)!");
+					return false;
+				}
+				RayTarget* rayTarget = area->GetRayTarget(m_ObjectID);
+				if (!rayTarget) {
+					PrintError(ErrorOrigin::Editor,
+						"couldn't find ray target (function Area::GetRayTarget in function Editor::SerializedObject::RotateRayTarget)!");
+					return false;
+				}
+				Quaternion rot = rayTarget->GetRotation();
+				switch (axis) {
+					case 1:
+						rot = rot * Quaternion::AxisRotation(Vec3::Right(), amount);
+						break;
+					case 2:
+						rot = rot * Quaternion::AxisRotation(Vec3::Up(), amount);
+						break;
+					case 3:
+						rot = rot * Quaternion::AxisRotation(Vec3::Forward(), amount);
+						break;
+					default:
+						return false;
+				}
+				rayTarget->SetRotation(rot);
 				return true;
 			}
 		};
@@ -7116,6 +7468,13 @@ void main() {
 		}
 	};
 
+	class PhysXErrorCallback : physx::PxErrorCallback {
+
+		void reportError(physx::PxErrorCode::Enum code, const char* message, const char* file, int line) {
+			PrintError(ErrorOrigin::PhysX, message, VK_SUCCESS, code);
+		}
+	};
+
 	enum EngineModeBits {
 		EngineMode_Initialized = 1,
 		EngineMode_Play = 2,
@@ -7127,7 +7486,7 @@ void main() {
 
 	class Engine {
 
-		friend void CriticalError(ErrorOrigin origin, const char* err, VkResult vkErr);
+		friend void CriticalError(ErrorOrigin origin, const char* err, VkResult vkErr, physx::PxErrorCode::Enum physxErr);
 
 	private:
 	

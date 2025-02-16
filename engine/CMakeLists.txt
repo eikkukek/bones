@@ -11,6 +11,8 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_STATIC_VULKAN ON CACHE BOOL "" FORCE)
 set(ALLOW_EXTERNAL_SPIRV_TOOLS ON)
 
+option(DEBUG ON)
+
 add_subdirectory(libraries/vulkan/Vulkan-Headers-main)
 add_subdirectory(libraries/vulkan/Vulkan-Loader-main)
 add_subdirectory(libraries/glfw/glfw-3.3.9)
@@ -34,12 +36,31 @@ add_library(engine STATIC
 
 target_link_libraries(engine vulkan glfw glslang freetype fmt::fmt)
 
-target_include_directories(engine
-	PUBLIC headers 
-	PUBLIC headers/imgui
-	PUBLIC libraries/vulkan/Vulkan-Headers-main/include
-	PUBLIC libraries/glfw/glfw-3.3.9/include
-	PUBLIC libraries/glslang/glslang/include
-	PUBLIC libraries/freetype/include
-	PUBLIC libraries/fmt/include
+if (WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+	message("building for win64")
+	set(PHYSX_DIR ${PROJECT_SOURCE_DIR}/libraries/physx/win64/checked)
+	target_link_libraries(engine
+		${PHYSX_DIR}/libs/PhysXExtensions_static_64.lib
+		${PHYSX_DIR}/libs/PhysX_64.lib
+		${PHYSX_DIR}/libs/PhysXPvdSDK_static_64.lib
+		${PHYSX_DIR}/libs/PhysXCommon_64.lib
+		${PHYSX_DIR}/libs/PhysXFoundation_64.lib
+	)
+endif()
+
+if (DEBUG)
+	add_compile_definitions(_DEBUG)
+else ()
+	add_compile_definitions(NDEBUG)
+endif ()
+
+target_include_directories(engine PUBLIC
+	headers 
+	headers/imgui
+	libraries/vulkan/Vulkan-Headers-main/include
+	libraries/glfw/glfw-3.3.9/include
+	libraries/glslang/glslang/include
+	libraries/freetype/include
+	libraries/fmt/include
+	libraries/physx/include
 )
