@@ -6,12 +6,15 @@
 namespace engine {
 
 
-	void CriticalError(ErrorOrigin origin, const char *err, VkResult vkErr) {
+	void CriticalError(ErrorOrigin origin, const char *err, VkResult vkErr, physx::PxErrorCode::Enum physXErr) {
 		fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
 			"Engine called a critical error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
 		if (vkErr != VK_SUCCESS) {
 			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
 				"Vulkan error code: {}\n", (int)vkErr);
+		}
+		if (physXErr != physx::PxErrorCode::eNO_ERROR) {
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "PhysX error code: {}\n", physXErr);
 		}
 		Engine::s_engine_instance->~Engine();
 		Engine::s_engine_instance = nullptr;
@@ -35,18 +38,59 @@ namespace engine {
 		return true;
 	}
 
-	ObjectID Area::AddObstacle(const char* name, const Obstacle::CreateInfo& info) {
-		Obstacle* obstacle = m_Obstacles.Emplace(m_World.m_NextObjectID, m_World, name, info);
-		assert(obstacle);
-		UpdateBoundingBox(obstacle->GetBoundingBox());
-		return m_World.m_NextObjectID++;
+	void Obstacle::CheckCollisions() {
+		m_Area.CheckCollisions(*this);
 	}
 
-	ObjectID Area::AddRayTarget(const RayTarget::CreateInfo& info) {
-		RayTarget* rayTarget = m_RayTargets.Emplace(m_World.m_NextObjectID, m_World, info);
-		assert(rayTarget);
-		UpdateBoundingBox(rayTarget->GetBoundingBox());
-		return m_World.m_NextObjectID++;
+	bool Obstacle::UpdateRenderTransform(RenderID ID) {
+		Mat4* transform = m_RenderDataTransforms.Find(ID);
+		if (!transform) {
+			return false;
+		}
+		WorldRenderData* data = m_World.GetRenderData(ID);
+		assert(data);
+		data->m_Transform = m_Transform * *transform;
+		return true;
+	}
+
+	void Obstacle::UpdateTransforms() {
+		m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
+		m_Transform[3] = Vec4(m_Position, 1.0f);
+		uint32_t transformCount = m_RenderDataTransforms.Size();
+		uint64_t* keyIter = m_RenderDataTransforms.KeysBegin();
+		Mat4* valueIter = m_RenderDataTransforms.ValuesBegin();
+		for (uint32_t i = 0; i < transformCount; i++) {
+			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
+			assert(data);
+			data->m_Transform = m_Transform * valueIter[i];
+		}
+	}
+
+	bool RayTarget::UpdateRenderTransform(RenderID ID) {
+		Mat4* renderTransform = m_RenderDataTransforms.Find(ID);
+		if (!renderTransform) {
+			return false;
+		}
+		WorldRenderData* data = m_World.GetRenderData(ID);
+		assert(data);
+		data->m_Transform = m_Transform * *renderTransform;
+		return true;
+	}
+
+	void RayTarget::UpdateRenderTransforms() {
+		m_Transform = m_Rotation.AsMat4();
+		m_Transform[0] *= m_Scale.x;
+		m_Transform[1] *= m_Scale.y;
+		m_Transform[2] *= m_Scale.z;
+		m_Transform[3] = Vec4(m_Position, 1.0f);
+		uint32_t transformCount = m_RenderDataTransforms.Size();
+		uint64_t* keyIter = m_RenderDataTransforms.KeysBegin();
+		Mat4* valueIter = m_RenderDataTransforms.ValuesBegin();
+		for (uint32_t i = 0; i < transformCount; i++) {
+			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
+			assert(data);
+			data->m_Transform = m_Transform * valueIter[i];
+		}
 	}
 
 	void Body::Move(const Vec3& position) {
@@ -104,52 +148,6 @@ namespace engine {
 		UpdateTransforms();
 	}
 
-	bool Obstacle::UpdateRenderTransform(RenderID ID) {
-		Mat4* transform = m_RenderDataTransforms.Find(ID);
-		if (!transform) {
-			return false;
-		}
-		WorldRenderData* data = m_World.GetRenderData(ID);
-		assert(data);
-		data->m_Transform = m_Transform * *transform;
-		return true;
-	}
-
-	void Obstacle::UpdateTransforms() {
-		m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
-		m_Transform[3] = Vec4(m_Position, 1.0f);
-		uint32_t transformCount = m_RenderDataTransforms.Size();
-		uint64_t* keyIter = m_RenderDataTransforms.KeysBegin();
-		Mat4* valueIter = m_RenderDataTransforms.ValuesBegin();
-		for (uint32_t i = 0; i < transformCount; i++) {
-			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
-			assert(data);
-			data->m_Transform = m_Transform * valueIter[i];
-		}
-	}
-
-	bool RayTarget::UpdateRenderTransform(RenderID ID) {
-		Mat4* transform = m_RenderDataTransforms.Find(ID);
-		if (!transform) {
-			return false;
-		}
-		WorldRenderData* data = m_World.GetRenderData(ID);
-		assert(data);
-		data->m_Transform = m_Transform * *transform;
-		return true;
-	}
-
-	void RayTarget::UpdateRenderTransforms() {
-		uint32_t transformCount = m_RenderDataTransforms.Size();
-		uint64_t* keyIter = m_RenderDataTransforms.KeysBegin();
-		Mat4* valueIter = m_RenderDataTransforms.ValuesBegin();
-		for (uint32_t i = 0; i < transformCount; i++) {
-			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
-			assert(data);
-			data->m_Transform = m_Transform * valueIter[i];
-		}
-	}
-
 	bool Body::UpdateRenderTransform(RenderID ID) {
 		Mat4* transform = m_RenderDataTransforms.Find(ID);
 		if (!transform) {
@@ -171,6 +169,35 @@ namespace engine {
 			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
 			assert(data);
 			data->m_Transform = m_Transform * valueIter[i];
+		}
+	}
+
+	ObjectID Area::AddObstacle(const char* name, const Obstacle::CreateInfo& info) {
+		Obstacle* obstacle = m_Obstacles.Emplace(m_World.m_NextObjectID, m_World, *this, name, info);
+		assert(obstacle);
+		UpdateBoundingBox(obstacle->GetBoundingBox());
+		return m_World.m_NextObjectID++;
+	}
+
+	ObjectID Area::AddRayTarget(const RayTarget::CreateInfo& info) {
+		RayTarget* rayTarget = m_RayTargets.Emplace(m_World.m_NextObjectID, m_World, info);
+		assert(rayTarget);
+		UpdateBoundingBox(rayTarget->GetBoundingBox());
+		return m_World.m_NextObjectID++;
+	}
+
+	void Area::CheckCollisions(const Obstacle& obstacle) const {
+		for (ObjectID bodyID : m_Bodies) {
+			Body* body = m_World.GetBody(bodyID);
+			if (!body) {
+				PrintError(ErrorOrigin::GameLogic,
+					"couldn't find body (function World::GetBody in function Area::CheckCollisions)!");
+				continue;
+			}
+			Vec3 pushBack;
+			if (obstacle.Collides(body->GetCollider(), pushBack)) {
+				body->SetPosition(body->GetPosition() + pushBack);
+			}
 		}
 	}
 
