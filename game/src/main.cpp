@@ -1,6 +1,5 @@
 #include "engine.hpp"
 #include "random.hpp"
-#include <chrono>
 
 class Player : public engine::World::Entity {
 public:
