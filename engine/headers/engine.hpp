@@ -1378,7 +1378,7 @@ namespace engine {
 				m_Data = m_SmallStringBuffer;
 			}
 			else {
-				Reserve(len * 2);
+				Reserve(len + 1);
 			}
 			for (uint32_t i = 0; i != len; i++) {
 				m_Data[i] = str[i];
@@ -1394,13 +1394,35 @@ namespace engine {
 				m_Data = m_SmallStringBuffer;
 			}
 			else {
-				Reserve(m_Length * 2);
+				Reserve(m_Length + 1);
 			}
 			uint32_t index = 0;
 			for (; begin != end; begin++) {
 				m_Data[index++] = buf[begin];
 			}
 			m_Data[m_Length] = '\0';
+		}
+
+		String(FILE* fileStream) {
+			if (!fileStream || feof(fileStream) || ferror(fileStream)) {
+				PrintError(ErrorOrigin::FileParsing,
+					"invalid file stream passed to String (in String constructor)!");
+			}
+			uint32_t length;
+			if (!fread(&length, sizeof(uint32_t), 1, fileStream) != 1) {
+				PrintError(ErrorOrigin::FileParsing,
+					"failed to read string length from file stream (in String constructor)!");
+				return;
+			}
+			Reserve(length + 1);
+			uint32_t readLength = fread(&m_Data, sizeof(char), length, fileStream);
+			if (readLength != length) {
+				PrintError(ErrorOrigin::FileParsing,
+					"failed to read entire string from file stream (in String constructor)!");
+			}
+			assert(length >= readLength);
+			m_Data[readLength] = '\0';
+			m_Length = readLength;
 		}
 
 		~String() {
@@ -1496,22 +1518,23 @@ namespace engine {
 
 		friend String operator+(const String& a, const String& b) {
 			String result{};
-			uint32_t length = a.m_Length + b.m_Length;
-			result.Reserve(length + 1);
+			uint32_t rLength = a.m_Length + b.m_Length;
+			result.Reserve(rLength + 1);
 			memcpy(result.m_Data, a.m_Data, a.m_Length * sizeof(char));
 			memcpy(result.m_Data + a.m_Length, b.m_Data, b.m_Length * sizeof(char));
-			result.m_Length = length;
-			result.m_Data[length] = '\0';
+			result.m_Length = rLength;
+			result.m_Data[result.m_Length] = '\0';
 			return result;
 		}
 
 		friend String operator+(const String& a, const char* b) {
 			String result{};
 			uint32_t bLength = strlen(b);
-			result.Reserve(a.m_Length + bLength + 1);
+			uint32_t rLength = a.m_Length + bLength;
+			result.Reserve(rLength + 1);
 			memcpy(result.m_Data, a.m_Data, a.m_Length * sizeof(char));
 			memcpy(result.m_Data + a.m_Length, b, bLength * sizeof(char));
-			result.m_Length = a.m_Length + bLength;
+			result.m_Length = rLength;
 			result.m_Data[result.m_Length] = '\0';
 			return result;
 		}
@@ -6760,19 +6783,13 @@ void main() {
 		}
 
 		bool LoadObstacle(Area& area, FILE* fileStream) {
-			String name{};
-			if (FileHandler::SkipLine(fileStream) == EOF ||
-				FileHandler::GetLine(fileStream, name) == EOF) {
-				PrintError(ErrorOrigin::FileParsing,
-					"hit end of file when parsing obstacle (in function LoadObstacle)!");
-			}
+			String name(fileStream);
+			float transform[7];
+			int res = fread(transform, sizeof(float), 7, fileStream);
 			Obstacle::CreateInfo createInfo{};
-			int res = fscanf(fileStream, "{%f%f%f%f\n",
-				&createInfo.m_Position.x, &createInfo.m_Position.y, &createInfo.m_Position.z,
-				&createInfo.m_YRotation);
-			if (res != 4) {
+			if (res != 7) {
 				PrintError(ErrorOrigin::FileParsing, 
-					"failed to parse obstacle (function fscanf in function World::LoadObstacle)!");
+					"failed to parse obstacle (function fread in function World::LoadObstacle)!");
 				return false;
 			}
 			if (!Collider::CreateInfo::FromFile(fileStream, createInfo.m_ColliderInfo)) {
@@ -6789,6 +6806,7 @@ void main() {
 					PrintError(ErrorOrigin::FileParsing, 
 						"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
 					return false;
+
 				}
 				if (c == '{') {
 					while (true) {
@@ -6814,7 +6832,7 @@ void main() {
 									"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
 								return false;
 							}
-							String line;
+							String line{};
 							if (FileHandler::GetLine(fileStream, line) == EOF) {
 								PrintError(ErrorOrigin::FileParsing,
 									"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
@@ -6850,14 +6868,17 @@ void main() {
 			}
 			Area* area = m_Areas.Emplace(m_NextObjectID++, *this, 0);
 			assert(area);
-			uint32_t obstacleCount, rayTargetCount;
-			if (fscanf(fileStream, "O count=%u R count=%u", &obstacleCount, &rayTargetCount) != 2) {
+			uint32_t counts[2];
+			if (fread(counts, sizeof(uint32_t), 2, fileStream) != 2) {
 				PrintError(ErrorOrigin::FileParsing,
-					"failed to load area from file stream due to invalid format t(in function World::LoadArea)");
+					"failed to load area from file stream (eof) (function fread in function World::LoadArea)!");
 				return Invalid_ID;
 			}
 			while (true) {
-				char c = fgetc(fileStream);
+				char c;
+				if (fread(&c, sizeof(char), 1, fileStream) != 1) {
+					break;
+				}
 				switch (c) {
 					case 'O':
 						LoadObstacle(*area, fileStream);
