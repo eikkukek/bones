@@ -11,8 +11,6 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_STATIC_VULKAN ON CACHE BOOL "" FORCE)
 set(ALLOW_EXTERNAL_SPIRV_TOOLS ON)
 
-option(DEBUG ON)
-
 add_subdirectory(libraries/vulkan/Vulkan-Headers-main)
 add_subdirectory(libraries/vulkan/Vulkan-Loader-main)
 add_subdirectory(libraries/glfw/glfw-3.3.9)
@@ -34,25 +32,66 @@ add_library(engine STATIC
 	src/imgui/imgui_widgets.cpp
 )
 
+option(PHYSX_DEBUG ON)
+
+if (PHYSX_DEBUG)
+	message(STATUS "building physx in debug mode")
+	target_compile_definitions(engine PUBLIC _DEBUG)
+else()
+	message(STATUS "building physx in non-debug mode")
+	target_compile_definitions(engine PUBLIC NDEBUG)
+endif()
+
+set_property(TARGET engine PROPERTY
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+If (MSVC)
+	message(STATUS "setting MSVC switches")
+
+	string(REPLACE "/MTd" "/MDd" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+	set(CMAKE_CXX_FLAGS_DEBUG ${CMAKE_CXX_FLAGS_DEBUG})
+
+	string(REPLACE "/MT" "/MD" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}_INIT")
+	set(CMAKE_CXX_FLAGS_RELEASE ${CMAKE_CXX_FLAGS_RELEASE})
+
+    string(REPLACE "/MD" "/MT" CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL}")
+    set(CMAKE_CXX_FLAGS_MINSIZEREL ${CMAKE_CXX_FLAGS_MINSIZEREL})
+
+    string(REPLACE "/MD" "/MT" CMAKE_CXX_FLAGS_RELEASE  "${CMAKE_C_FLAGS_RELEASE}_INIT")
+    set(CMAKE_CXX_FLAGS_RELEASE ${CMAKE_CXX_FLAGS_RELEASE})
+
+    string(REPLACE "/MD" "/MT" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO ${CMAKE_CXX_FLAGS_RELWITHDEBINFO})
+
+    string(REPLACE "/MD" "/MT" CMAKE_C_FLAGS_MINSIZEREL "${CMAKE_C_FLAGS_MINSIZEREL}")
+    set(CMAKE_C_FLAGS_MINSIZEREL ${CMAKE_C_FLAGS_MINSIZEREL})
+
+    string(REPLACE "/MD" "/MT" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+    set(CMAKE_C_FLAGS_RELEASE ${CMAKE_C_FLAGS_RELEASE})
+
+    string(REPLACE "/MD" "/MT" CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO}")
+    set(CMAKE_C_FLAGS_RELWITHDEBINFO ${CMAKE_C_FLAGS_RELWITHDEBINFO})
+
+Endif (MSVC)
+
+
+
+target_compile_options(engine PRIVATE "/MT")
+
 target_link_libraries(engine vulkan glfw glslang freetype fmt::fmt)
 
 if (WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-	message("building for win64")
+	message(STATUS "building physx for win64")
 	set(PHYSX_DIR ${PROJECT_SOURCE_DIR}/libraries/physx/win64/checked)
 	target_link_libraries(engine
+		${PHYSX_DIR}/libs/PhysX_static_64.lib
 		${PHYSX_DIR}/libs/PhysXExtensions_static_64.lib
-		${PHYSX_DIR}/libs/PhysX_64.lib
+		${PHYSX_DIR}/libs/PhysXCooking_static_64.lib
 		${PHYSX_DIR}/libs/PhysXPvdSDK_static_64.lib
-		${PHYSX_DIR}/libs/PhysXCommon_64.lib
-		${PHYSX_DIR}/libs/PhysXFoundation_64.lib
+		${PHYSX_DIR}/libs/PhysXCommon_static_64.lib
+		${PHYSX_DIR}/libs/PhysXFoundation_static_64.lib
 	)
 endif()
-
-if (DEBUG)
-	add_compile_definitions(_DEBUG)
-else ()
-	add_compile_definitions(NDEBUG)
-endif ()
 
 target_include_directories(engine PUBLIC
 	headers 

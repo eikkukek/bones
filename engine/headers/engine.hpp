@@ -1,5 +1,7 @@
 #pragma once
 
+//#define PX_PHYSX_STATIC_LIB
+
 #include "renderer.hpp"
 #include "text_renderer.hpp"
 #include "math.hpp"
@@ -10,7 +12,7 @@
 #include "imgui_impl_vulkan.h"
 #include "imgui_impl_glfw.h"
 #include "PxPhysicsAPI.h"
-#include "extensions/PxDefaultAllocator.h"
+#include "extensions/PxExtensionsAPI.h"
 #include <assert.h>
 #include <cstdio>
 #include <cstdlib>
@@ -91,7 +93,7 @@ namespace engine {
 			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "Vulkan error code: {}\n", (int)vkErr);
 		}
 		if (physXErr != physx::PxErrorCode::eNO_ERROR) {
-			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "PhysX error code: {}\n", physXErr);
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "PhysX error code: {}\n", (int)physXErr);
 		}
 	}
 
@@ -240,7 +242,7 @@ namespace engine {
 		T* Data() noexcept {
 			return m_Data;
 		}
- 
+
 		const T* Data() const noexcept {
 			return m_Data;
 		}
@@ -1060,7 +1062,7 @@ namespace engine {
 			}
 			return -1;
 		}
-	
+
 		int64_t _FindNewIndex(const KeyType& key) {
 			assert(m_Data);
 			KeyType* ptr = _Keys();
@@ -1292,7 +1294,7 @@ namespace engine {
 			return -1;
 		}
 
-	
+
 		int64_t _FindNewIndex(const T& value) {
 			assert(m_Data);
 			int64_t left = 0;
@@ -1409,7 +1411,7 @@ namespace engine {
 					"invalid file stream passed to String (in String constructor)!");
 			}
 			uint32_t length;
-			if (!fread(&length, sizeof(uint32_t), 1, fileStream) != 1) {
+			if (fread(&length, sizeof(uint32_t), 1, fileStream) != 1) {
 				PrintError(ErrorOrigin::FileParsing,
 					"failed to read string length from file stream (in String constructor)!");
 				return;
@@ -2388,7 +2390,7 @@ namespace engine {
 	class Collider {
 
 		friend class Engine;
-	
+
 	public:
 
 		enum class Type {
@@ -3875,7 +3877,7 @@ layout(location = 0) out vec2 outUV;
 
 layout(push_constant) uniform PushConstant {
 layout(offset = 0) 
-mat4 c_Transform;
+	mat4 c_Transform;
 } pc;
 
 void main() {
@@ -3914,7 +3916,7 @@ layout(location = 1) in vec2 inUV;
 layout(location = 0) out vec2 outUV;
 
 layout(push_constant) uniform PushConstant {
-layout(offset = 0)
+	layout(offset = 0)
 	mat4 c_Transform;
 } pc;
 
@@ -5677,7 +5679,7 @@ void main() {
 		friend class OrderedDictionary<ObjectID, Body>;
 
 	public:	
-	
+
 		World& m_World;
 
 	private:
@@ -6238,7 +6240,7 @@ void main() {
 		DynamicArray<DebugRenderData> m_WireRenderDatas{};
 		UnidirectionalLight m_DirectionalLight;
 		MeshData m_StaticQuadMeshDataPBR{};
-	
+
 		VkDescriptorSet m_DefaultAlbedoDescriptorSet{};
 		VkFormat m_ColorImageResourcesFormat{};
 		DynamicArray<VkImage> m_DiffuseImages{};
@@ -6461,7 +6463,7 @@ void main() {
 				1.0f,
 			};
 		}
- 
+
 		void EditorUpdate(GLFWwindow* glfwWindow) {
 
 			using Key = Input::Key;
@@ -7036,7 +7038,7 @@ void main() {
 		Vec4 m_WireColor = { 45.0f / 255, 173.0f / 255, 137.0f / 255, 1.0f };
 
 	private:
-	
+
 		GLFWwindow* const m_GLFWwindow;
 		ObjectID m_InspectedArea{};
 		uint32_t m_SelectedObjectIndex = UINT64_MAX;
@@ -7489,10 +7491,44 @@ void main() {
 		}
 	};
 
-	class PhysXErrorCallback : physx::PxErrorCallback {
+	class PhysicsEngine {
+	public:
 
-		void reportError(physx::PxErrorCode::Enum code, const char* message, const char* file, int line) {
-			PrintError(ErrorOrigin::PhysX, message, VK_SUCCESS, code);
+		class PhysXErrorCallback : public physx::PxErrorCallback {
+			void reportError(physx::PxErrorCode::Enum code, const char* message, const char* file, int line) {
+				PrintError(ErrorOrigin::PhysX, message, VK_SUCCESS, code);
+			}
+		};
+
+		physx::PxDefaultAllocator m_AllocatorCallbackPx{};
+		PhysXErrorCallback m_ErrorCallbackPx{};
+		physx::PxFoundation* m_FoundationPx = nullptr;
+		physx::PxPhysics* m_PhysicsPx = nullptr;
+
+		void Initialize() {
+
+			m_FoundationPx = PxCreateFoundation(PX_PHYSICS_VERSION, m_AllocatorCallbackPx, m_ErrorCallbackPx);
+			if (!m_FoundationPx) {
+				CriticalError(ErrorOrigin::PhysX,
+					"failed to create PhysX foundation (function PxCreateFoundation in function PhysicsEngine::Initialize)!");
+			}
+
+			m_PhysicsPx = PxCreatePhysics(PX_PHYSICS_VERSION, *m_FoundationPx, physx::PxTolerancesScale(), true);
+			if (!m_PhysicsPx) {
+				CriticalError(ErrorOrigin::PhysX,
+					"failed to create PhysX physics object (function PxCreatePhysics in function PhysicsEngine::Initialize)!");
+			}
+
+			if (!PxInitExtensions(*m_PhysicsPx, nullptr)) {
+				CriticalError(ErrorOrigin::PhysX,
+					"failed to init PhysX extensions (function PxInitExtensions in function PhysicsEngine::Initialize)!");
+			}
+		}
+
+		void Terminate() {
+			PxCloseExtensions();
+			m_PhysicsPx->release();
+			m_FoundationPx->release();
 		}
 	};
 
@@ -7518,6 +7554,7 @@ void main() {
 
 		UI m_UI;
 		World m_World;
+		PhysicsEngine m_PhysicsEngine;
 		Editor m_Editor;
 		Renderer m_Renderer;
 		TextRenderer m_TextRenderer;
@@ -7717,6 +7754,7 @@ void main() {
 				m_Mode(UpdateEngineInstance(this, mode)),
 				m_UI(m_Renderer, m_TextRenderer, maxUIWindows),
 				m_World(m_AssetManager, m_Renderer),
+				m_PhysicsEngine(),
 				m_Renderer(projectName.CString(), VK_MAKE_API_VERSION(0, 1, 0, 0), glfwWindow, RendererCriticalErrorCallback, SwapchainCreateCallback),
 				m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
 				m_AssetManager(projectName, m_Renderer),
@@ -7762,6 +7800,7 @@ void main() {
 			}
 
 			m_World.Initialize(m_StaticQuadMesh2D);
+			m_PhysicsEngine.Initialize();
 			m_UI.Initialize(m_StaticQuadMesh2D);
 			m_Editor.Initialize(glfwWindow, m_StaticBoxMesh.GetMeshData(), m_StaticQuadMesh2D.GetMeshData());
 		}
@@ -7776,6 +7815,7 @@ void main() {
 			m_StaticBoxMesh.Terminate();
 			m_UI.Terminate();
 			m_Editor.Terminate();
+			m_PhysicsEngine.Terminate();
 			m_Renderer.DestroySampler(FontAtlas::s_Sampler);
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
@@ -7940,6 +7980,5 @@ void main() {
 			s_engine_instance = engine;
 			return mode;
 		}
-
 	};
 }

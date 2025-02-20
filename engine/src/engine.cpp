@@ -14,7 +14,7 @@ namespace engine {
 				"Vulkan error code: {}\n", (int)vkErr);
 		}
 		if (physXErr != physx::PxErrorCode::eNO_ERROR) {
-			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "PhysX error code: {}\n", physXErr);
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "PhysX error code: {}\n", (int)physXErr);
 		}
 		Engine::s_engine_instance->~Engine();
 		Engine::s_engine_instance = nullptr;
