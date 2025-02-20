@@ -7,7 +7,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_subdirectory(../engine [EXCLUDE_FROM_ALL])
 
-add_executable(game 
+target_compile_options(engine PRIVATE "/MT")
+
+add_executable(game
 	src/main.cpp
 )
 
