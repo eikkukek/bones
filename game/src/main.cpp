@@ -10,12 +10,14 @@ public:
 	engine::ObjectID m_BodyID;
 	engine::RenderID m_RenderData;
 
+	/*
+
 	Player(engine::World& world, engine::StaticMesh& mesh) 
 		: m_World(world), 
 			m_BodyID(world.AddBody({ 3.0f, 0.0f, 0.0f }, 2.0f,
 				{ 
 					.m_LocalPosition {}, 
-					.m_Type { engine::Collider::Type::Pole },
+					.m_Type = engine::Collider::Type::Pole,
 					.u_TypeInfo { .m_PoleInfo { .m_Radius = 1, .m_Height = 2 } },
 				}
 			)),
@@ -44,6 +46,7 @@ public:
 
 	void Terminate() {
 	}
+	*/
 };
 
 class UIElement : public engine::UI::Entity {
@@ -157,16 +160,20 @@ int main() {
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
-
 	Engine engine(engine::EngineMode_Editor, "Test", pWindow, 1000);
+
 	Renderer& renderer = engine.GetRenderer();
 	TextRenderer textRenderer = engine.GetTextRenderer();
 
-	GlyphAtlas atlas{};
-	textRenderer.CreateGlyphAtlas("resources\\fonts\\arial_mt.ttf", 40, atlas);
+	GlyphAtlas atlas {};
+	if (!textRenderer.CreateGlyphAtlas("resources\\fonts\\arial_mt.ttf", 40, atlas)) {
+		LogError("failed to create glyph atlas!");
+	}
 
 	FontAtlas fontAtlas(renderer, textRenderer);
-	assert(fontAtlas.LoadFont("resources\\fonts\\arial_mt.ttf", 40));
+	if (!fontAtlas.LoadFont("resources\\fonts\\arial_mt.ttf", 40)) {
+		LogError("failed to load font!");
+	}
 
 	UI& UI = engine.GetUI();
 
@@ -176,24 +183,26 @@ int main() {
 	UI.AddEntity(&element);
 	UI.AddEntity(&inputText);
 
-	Array<Vertex, 4> quadVertices;
-	Array<uint32_t, 6> quadIndices;
-
 	uint8_t* brickWallImage;
 	Vec2_T<uint32_t> brickWallExtent;
-	assert(LoadImage("resources\\textures\\brick_wall\\albedo.png", 4, brickWallImage, brickWallExtent));
+	if (!LoadImage("resources\\textures\\brick_wall\\albedo.png", 4, brickWallImage, brickWallExtent)) {
+		LogError("failed to load brick wall texture!");
+	}
 	StaticTexture brickWallTexture(renderer);
-	assert(brickWallTexture.Create(VK_FORMAT_R8G8B8A8_SRGB, brickWallExtent, brickWallImage));
+	if (!brickWallTexture.Create(VK_FORMAT_R8G8B8A8_SRGB, brickWallExtent, brickWallImage)) {
+		LogError("failed to create brick wall texture!");
+	}
 	engine::FreeImage(brickWallImage);
 
 	World& world = engine.GetWorld();
 
 	World::TextureMap textureMap{};
-	assert(world.CreateTextureMap(brickWallTexture, textureMap));
+	if (!world.CreateTextureMap(brickWallTexture, textureMap)) {
+		LogError("failed to create texture map!");
+	}
 
 	ObjectID areaID = world.AddArea(AreaFlag_NoSave);
 	Area* pArea = world.GetArea(areaID);
-	assert(pArea);
 	Area& area = *pArea;
 
 	StaticMesh cubeMesh(renderer);
@@ -202,58 +211,69 @@ int main() {
 	Engine::GetBoxMesh(cubeVertices, cubeIndices);
 	cubeMesh.CreateBuffers(cubeVertices.Size(), cubeVertices.Data(), cubeIndices.Size(), cubeIndices.Data());
 
+	Array<Vertex, 4> quadVertices;
+	Array<uint32_t, 6> quadIndices;
+
 	Engine::GetQuadMesh(quadVertices, quadIndices);
 
 	LogicMesh logicQuadMesh(quadVertices, quadIndices);
 
-	ObjectID obstacleID = area.AddObstacle(
-		"Obstacle",
+	ObjectID obstcaleID = area.AddBody(
+		"Body",
+		Vec3(0.0f, 20.0f, 0.0f),
+		Quaternion::Identity(),
+		PhysicsLayer::Moving,
 		{
-			.m_Position { 0, 0, 0 },
-			.m_YRotation = pi / 4,
-			.m_ColliderInfo {
-				.m_LocalPosition = {},
-				.m_Type = Collider::Type::Fence,
-				.u_TypeInfo {
-					.m_FenceInfo {
-						.m_Dimensions { 2, 2, 2 },
-						.m_YRotation = 0,
-					}
-				}
-			}
-		}
+			.m_ColliderShape = Body::ColliderShape::Box,
+			.u_ShapeCreateInfo {
+				.m_Box { 
+					.m_HalfExtent = Vec3(1.0f, 1.0f, 1.0f) ,
+					.m_ConvexRadius = 0.05f,
+				},
+			},
+		},
+		nullptr
 	);
 
-	Obstacle* obstacle = area.GetObstacle(obstacleID);
-	assert(obstacle);
+	Body* obstacle = area.GetBody(obstcaleID);
 
 	RenderID obstacleRenderID = world.AddRenderData(WorldRenderDataFlag_NoSave, *obstacle, Mat4(1), cubeMesh.GetMeshData());
 	world.GetRenderData(obstacleRenderID)->m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
+
+	ObjectID groundID = area.AddBody(
+		"Ground",
+		Vec3(0.0f, -1.0f, 0.0f),
+		Quaternion::Identity(),
+		PhysicsLayer::NonMoving,
+		{
+			.m_ColliderShape = Body::ColliderShape::Box,
+			.u_ShapeCreateInfo {
+				.m_Box {
+					.m_HalfExtent = Vec3(50.0f, 1.0f, 50.0f),
+					.m_ConvexRadius = 0.05f,
+				},
+			},
+		},
+		nullptr
+	);
+
+	Body* ground = area.GetBody(groundID);
+
+	MeshData groundMesh = engine.GetQuadMesh().GetMeshData();
 
 	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), -pi / 2).AsMat4();
 
 	groundTransform[0] *= 10;
 	groundTransform[1] *= 10;
 	groundTransform[2] *= 10;
-	groundTransform[3].y = -1.0f;
+	groundTransform[3].y = 0.0f;
 
-	ObjectID groundID = area.AddRayTarget(
-		{
-			.m_LogicMesh = logicQuadMesh,
-			.m_Transform = groundTransform,
-		}
-	);
-
-	RayTarget* ground = area.GetRayTarget(groundID);
-
-	MeshData groundMesh = engine.GetQuadMesh().GetMeshData();
-
-	RenderID groundRenderID = world.AddRenderData(WorldRenderDataFlag_NoSave, *ground, Mat4(1), engine.GetQuadMesh().GetMeshData());
+	RenderID groundRenderID = world.AddRenderData(WorldRenderDataFlag_NoSave, *ground, groundTransform, engine.GetQuadMesh().GetMeshData());
 	world.GetRenderData(groundRenderID)->m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 
 	Obj cubeObj{};
 	FILE* fileStream = fopen("resources\\meshes\\cube.obj", "r");
-	assert(cubeObj.Load(fileStream));
+	cubeObj.Load(fileStream);
 	fclose(fileStream);
 
 	/*
