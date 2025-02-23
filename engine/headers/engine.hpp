@@ -21,6 +21,7 @@
 #include "Jolt/Physics/Collision/Shape/CapsuleShape.h"
 #include "Jolt/Physics/Collision/Shape/ConvexHullShape.h"
 #include "Jolt/Physics/Body/BodyCreationSettings.h"
+#include "Jolt/Renderer/DebugRenderer.h"
 #include <assert.h>
 #include <cstdio>
 #include <cstdlib>
@@ -4897,9 +4898,10 @@ void main() {
 
 			static constexpr ObjectLayer NonMoving = 0;
 			static constexpr ObjectLayer Moving = 1;
+			static constexpr ObjectLayer Kinematic = 2;
 
 			static constexpr ObjectLayer Default = Moving;
-			static constexpr uint LayerCount = 2;
+			static constexpr uint LayerCount = 3;
 
 			ObjectLayer m_Value;
 
@@ -4921,9 +4923,10 @@ void main() {
 
 			static constexpr BroadPhaseLayer NonMoving { 0 };
 			static constexpr BroadPhaseLayer Moving { 1 };
+			static constexpr BroadPhaseLayer Kinematic { 2 };
 
 			static constexpr const BroadPhaseLayer& Default = Moving;
-			static constexpr uint LayerCount = 2;
+			static constexpr uint LayerCount = 3;
 		};
 
 	private:
@@ -4973,6 +4976,8 @@ void main() {
 						return b == Layer::Moving;
 					case Layer::Moving:
 						return true;
+					case Layer::Kinematic:
+						return true;
 					default:
 						JPH_ASSERT(false);
 						return false;
@@ -5008,6 +5013,8 @@ void main() {
 						return "NonMoving";
 					case (BroadPhaseLayer::Type)BroadPhaseLayers::Moving:
 						return "Moving";
+					case (BroadPhaseLayer::Type)BroadPhaseLayers::Kinematic:
+						return "Kinematic";
 					default:
 						JPH_ASSERT(false);
 						return "Invalid";
@@ -5022,6 +5029,8 @@ void main() {
 					case Layer::NonMoving:
 						return b == BroadPhaseLayers::Moving;
 					case Layer::Moving:
+						return true;
+					case Layer::Kinematic:
 						return true;
 					default:
 						JPH_ASSERT(false);
@@ -5055,6 +5064,24 @@ void main() {
 			}
 
 			virtual void OnBodyDeactivated(const BodyID& bodyID, JPH::uint64 inBodyUserData) override {
+			}
+		};
+
+		class JoltDebugRenderer : public JPH::DebugRenderer {
+		public:
+
+			using Base = JPH::DebugRenderer;
+
+			JoltDebugRenderer() {
+				Initialize();
+			}
+
+			virtual Base::Batch CreateTriangleBatch(const Base::Vertex* vertices, int vertexCount, const uint32_t* indices, int indexCount) override {
+			}
+
+			virtual void DrawGeometry(JPH::RMat44Arg modelMat, const JPH::AABox& worldSpaceBounds, float LODScale,
+				JPH::ColorArg modelColor, const GeometryRef& geometry, ECullMode cullMode, ECastShadow castShadow, EDrawMode drawMode) override {
+				(*geometry).GetLOD({}, worldSpaceBounds, LODScale).mTriangleBatch.GetPtr();
 			}
 		};
 
@@ -5402,6 +5429,9 @@ void main() {
 				case PhysicsLayer::Moving:
 					motionType = EMotionType::Dynamic;
 					break;
+				case PhysicsLayer::Kinematic:
+					motionType = EMotionType::Kinematic;
+					break;
 				default:
 					assert(false);
 					return false;
@@ -5484,6 +5514,20 @@ void main() {
 
 		Box<float> GetBoundingBox() const {
 			return {};
+		}
+
+		//! @brief Adds force to body
+		void AddForce(const Vec3& force) {
+			assert(!m_BodyID.IsInvalid());
+			m_PhysicsManager.GetBodyInterface().AddForce(m_BodyID, force);
+		}
+
+		//! @brief Moves body to target position/rotation in delta time seconds
+		//! @param position: Target position
+		//!	@param rotation: Target rotation
+		//! @param seconds: Delta time in seconds
+		void Move(const Vec3& position, const Quaternion& rotation, float deltaTime) {
+			m_PhysicsManager.GetBodyInterface().MoveKinematic(m_BodyID, position, rotation, deltaTime);
 		}
 
 	private:
