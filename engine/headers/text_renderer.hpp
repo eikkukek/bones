@@ -31,7 +31,7 @@ namespace engine {
 			return strings[(size_t)origin];
 		}
 
-		typedef void (*CriticalErrorCallback)(const TextRenderer* renderer, ErrorOrigin origin, const char* err, FT_Error ftErr);
+		using CriticalErrorCallback = void(*)(const TextRenderer* renderer, ErrorOrigin origin, const char* err, FT_Error ftErr);
 
 		static void PrintError(ErrorOrigin origin, const char* err, FT_Error ftErr = 0, VkResult vkErr = VK_SUCCESS) {
 			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
@@ -573,7 +573,7 @@ namespace engine {
 		}
 	};
 
-	typedef TextRenderer::GlyphAtlas GlyphAtlas;
-	typedef TextRenderer::TextImage TextImage;
+	typedef TextRenderer::GlyphAtlas GlyphAtlas ;
+	typedef TextRenderer::TextImage TextImage ;
 	typedef TextRenderer::TextAlignment TextAlignment;
 }
