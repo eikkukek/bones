@@ -2,6 +2,7 @@
 
 #include "algorithm.hpp"
 #include "fmt/color.h"
+#include "Jolt/Jolt.h"
 #include <cstdio>
 #include <math.h>
 #include <assert.h>
@@ -169,6 +170,10 @@ namespace engine {
 		constexpr inline Vec3_T(const Vec2_T<T>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(0)) {}
 
 		constexpr inline Vec3_T(const Vec4_T<T>& other) noexcept : x(Cast(other.x)), y(Cast(other.y)), z(Cast(other.z)) {}
+
+		constexpr inline Vec3_T(const JPH::Vec3& other) noexcept : x(other.GetX()), y(other.GetY()), z(other.GetZ()) {}
+
+		constexpr inline operator JPH::Vec3() const { return { x, y, z }; }
 
 		template<typename U>
 		Vec3_T& RotateX(U radians) {
@@ -748,15 +753,30 @@ namespace engine {
 	template<typename T>
 	struct Quaternion_T {
 
-		static constexpr inline const Quaternion_T& Identity() noexcept { 
+		static constexpr inline Quaternion_T Identity() noexcept { 
 			return Quaternion_T(Cast(0), Cast(0), Cast(0), Cast(1));
 		}
 
 		T x, y, z, w;
 
 		constexpr inline Quaternion_T() noexcept : x(Cast(0)), y(Cast(0)), z(Cast(0)), w(Cast(0)) {}
+
 		constexpr inline Quaternion_T(T x, T y, T z, T w) noexcept : x(x), y(y), z(z), w(w) {}
+
 		constexpr inline Quaternion_T(Vec4_T<T> other) noexcept : x(other.x), y(other.y), z(other.z), w(other.w) {}
+
+		constexpr inline Quaternion_T(const JPH::Quat& other) noexcept 
+			: x(Cast(other.GetX())), y(Cast(other.GetY())), z(Cast(other.GetZ())), w(Cast(other.GetW())) {}
+
+		constexpr inline Quaternion_T& operator=(const JPH::Quat& other) noexcept {
+			x = other.GetX();
+			y = other.GetY();
+			z = other.GetZ();
+			w = other.GetW();
+			return *this;
+		}
+
+		constexpr inline operator JPH::Quat() { return { x, y, z, w }; }
 
 		static constexpr inline T Dot(const Quaternion_T& a, const Quaternion_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 
