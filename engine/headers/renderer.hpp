@@ -34,9 +34,9 @@ namespace engine {
 	class Renderer {
 	public:
 
-		typedef void (*SwapchainCreateCallback)(const Renderer& renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews);
-		typedef std::lock_guard<std::mutex> LockGuard;
-		typedef uint32_t Bool32;
+		using SwapchainCreateCallback = void (*)(const Renderer& renderer, VkExtent2D extent, uint32_t imageCount, VkImageView* imageViews);
+		using LockGuard = std::lock_guard<std::mutex>;
+		using Bool32 = uint32_t;
 
 		enum class ErrorOrigin {
 			Uncategorized = 0,
@@ -71,7 +71,7 @@ namespace engine {
 			return strings[(size_t)origin];
 		}
 
-		typedef void (*CriticalErrorCallback)(const Renderer* renderer, ErrorOrigin origin, const char* err, VkResult vkErr);
+		using CriticalErrorCallback = void (*)(const Renderer* renderer, ErrorOrigin origin, const char* err, VkResult vkErr);
 
 		struct Stack {
 
@@ -201,8 +201,8 @@ namespace engine {
 		template<typename T, uint32_t max_count_T>
 		struct OneTypeStack {
 
-			typedef T* Iterator;
-			typedef T* const ConstItererator;
+			using Iterator = T*;
+			using ConstItererator = T* const;
 
 			T* const m_Data;
 			uint32_t m_Count;
