@@ -193,6 +193,9 @@ namespace pipelines {
 		debugPipelineColorBlendState.attachmentCount = 1;
 		debugPipelineColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
 
+		VkPipelineRasterizationStateCreateInfo udPipelineRasterizationState = Renderer::GraphicsPipelineDefaults::rasterization_state;
+		udPipelineRasterizationState.cullMode = VK_CULL_MODE_BACK_BIT;
+
 		VkPipelineRasterizationStateCreateInfo wirePipelineRasterizationState = Renderer::GraphicsPipelineDefaults::rasterization_state;
 		wirePipelineRasterizationState.polygonMode = VK_POLYGON_MODE_LINE;
 
@@ -229,7 +232,7 @@ namespace pipelines {
 				.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
 				.pTessellationState = nullptr,
 				.pViewportState = &Renderer::GraphicsPipelineDefaults::viewport_state,
-				.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
+				.pRasterizationState = &udPipelineRasterizationState,
 				.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
 				.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
 				.pColorBlendState = &Renderer::GraphicsPipelineDefaults::color_blend_state,
