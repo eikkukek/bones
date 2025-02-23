@@ -776,7 +776,7 @@ namespace engine {
 			return *this;
 		}
 
-		constexpr inline operator JPH::Quat() { return { x, y, z, w }; }
+		constexpr inline operator JPH::Quat() const { return { x, y, z, w }; }
 
 		static constexpr inline T Dot(const Quaternion_T& a, const Quaternion_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 
