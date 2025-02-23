@@ -6,15 +6,16 @@
 namespace engine {
 
 
-	void CriticalError(ErrorOrigin origin, const char *err, VkResult vkErr, physx::PxErrorCode::Enum physXErr) {
-		fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
+	void CriticalError(ErrorOrigin origin, const char *err, VkResult vkErr, const char* libErr) {
+		fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
 			"Engine called a critical error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
 		if (vkErr != VK_SUCCESS) {
 			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
 				"Vulkan error code: {}\n", (int)vkErr);
 		}
-		if (physXErr != physx::PxErrorCode::eNO_ERROR) {
-			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "PhysX error code: {}\n", (int)physXErr);
+		if (libErr) {
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+				"Library error message: {}\n", libErr);
 		}
 		Engine::s_engine_instance->~Engine();
 		Engine::s_engine_instance = nullptr;
@@ -38,167 +39,44 @@ namespace engine {
 		return true;
 	}
 
-	void Obstacle::CheckCollisions() {
-		m_Area.CheckCollisions(*this);
-	}
-
-	bool Obstacle::UpdateRenderTransform(RenderID ID) {
-		Mat4* transform = m_RenderDataTransforms.Find(ID);
-		if (!transform) {
-			return false;
-		}
-		WorldRenderData* data = m_World.GetRenderData(ID);
-		assert(data);
-		data->m_Transform = m_Transform * *transform;
-		return true;
-	}
-
-	void Obstacle::UpdateTransforms() {
-		m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
-		m_Transform[3] = Vec4(m_Position, 1.0f);
-		uint32_t transformCount = m_RenderDataTransforms.Size();
-		uint64_t* keyIter = m_RenderDataTransforms.KeysBegin();
-		Mat4* valueIter = m_RenderDataTransforms.ValuesBegin();
-		for (uint32_t i = 0; i < transformCount; i++) {
-			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
-			assert(data);
-			data->m_Transform = m_Transform * valueIter[i];
-		}
-	}
-
-	bool RayTarget::UpdateRenderTransform(RenderID ID) {
-		Mat4* renderTransform = m_RenderDataTransforms.Find(ID);
-		if (!renderTransform) {
-			return false;
-		}
-		WorldRenderData* data = m_World.GetRenderData(ID);
-		assert(data);
-		data->m_Transform = m_Transform * *renderTransform;
-		return true;
-	}
-
-	void RayTarget::UpdateRenderTransforms() {
-		m_Transform = m_Rotation.AsMat4();
-		m_Transform[0] *= m_Scale.x;
-		m_Transform[1] *= m_Scale.y;
-		m_Transform[2] *= m_Scale.z;
-		m_Transform[3] = Vec4(m_Position, 1.0f);
-		uint32_t transformCount = m_RenderDataTransforms.Size();
-		uint64_t* keyIter = m_RenderDataTransforms.KeysBegin();
-		Mat4* valueIter = m_RenderDataTransforms.ValuesBegin();
-		for (uint32_t i = 0; i < transformCount; i++) {
-			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
-			assert(data);
-			data->m_Transform = m_Transform * valueIter[i];
-		}
-	}
-
-	void Body::Move(const Vec3& position) {
-		Area* area = m_World.GetArea(m_AreaID);
-		if (!area) {
-			PrintError(ErrorOrigin::GameLogic,
-				"area was null when attempting to move body (in function World::Body::Move)!");
-			return;
-		}
-		if (position == m_Position) {
-			return;
-		}
-		m_Position = position;
-		Vec3 pushBack;
-		if (area->CollisionCheck(m_Collider, pushBack)) {
-			m_Position += pushBack;
-		}
-		UpdateTransforms();
-	}
-
-	void Body::Rotate(float yRotation) {
-		Area* area = m_World.GetArea(m_AreaID);
-		if (!area) {
-			PrintError(ErrorOrigin::GameLogic,
-				"area was null when attempting to move body (in function World::Body::Move)!");
-			return;
-		}
-		if (yRotation == m_YRotation) {
-			return;
-		}
-		m_YRotation = yRotation;
-		Vec3 pushBack;
-		if (area->CollisionCheck(m_Collider, pushBack)) {
-			m_Position += pushBack;
-		}
-		UpdateTransforms();
-	}
-
-	void Body::MoveAndRotate(const Vec3& position, float yRotation) {
-		Area* area = m_World.GetArea(m_AreaID);
-		if (!area) {
-			PrintError(ErrorOrigin::GameLogic,
-				"area was null when attempting to move body (in function World::Body::Move)!");
-			return;
-		}
-		if (position == m_Position && yRotation == m_YRotation) {
-			return;
-		}
-		m_Position = position;
-		m_YRotation = yRotation;
-		Vec3 pushBack;
-		if (area->CollisionCheck(m_Collider, pushBack)) {
-			m_Position += pushBack;
-		}
-		UpdateTransforms();
-	}
-
 	bool Body::UpdateRenderTransform(RenderID ID) {
 		Mat4* transform = m_RenderDataTransforms.Find(ID);
 		if (!transform) {
 			return false;
 		}
-		WorldRenderData* data = m_World.GetRenderData(ID);
+		WorldRenderData* data = m_Area.m_World.GetRenderData(ID);
 		assert(data);
 		data->m_Transform = m_Transform * *transform;
 		return true;
 	}
 
 	void Body::UpdateTransforms() {
-		m_Transform = Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4();
+		m_Transform = m_Rotation.AsMat4();
 		m_Transform[3] = Vec4(m_Position, 1.0f);
 		uint32_t transformCount = m_RenderDataTransforms.Size();
 		uint64_t* keyIter = m_RenderDataTransforms.KeysBegin();
 		Mat4* valueIter = m_RenderDataTransforms.ValuesBegin();
 		for (uint32_t i = 0; i < transformCount; i++) {
-			WorldRenderData* data = m_World.GetRenderData(keyIter[i]);
+			WorldRenderData* data = m_Area.m_World.GetRenderData(keyIter[i]);
 			assert(data);
 			data->m_Transform = m_Transform * valueIter[i];
 		}
 	}
 
-	ObjectID Area::AddObstacle(const char* name, const Obstacle::CreateInfo& info) {
-		Obstacle* obstacle = m_Obstacles.Emplace(m_World.m_NextObjectID, m_World, *this, name, info);
-		assert(obstacle);
-		UpdateBoundingBox(obstacle->GetBoundingBox());
+	ObjectID Area::AddBody(const char* name, const Vec3& position, const Quaternion& rotation, PhysicsLayer physicsLayer,
+			const Body::ColliderCreateInfo& colliderInfo, const JPH::PhysicsMaterial* physicsMaterial) {
+		Body* body = m_Bodies.Emplace(m_World.m_NextObjectID, *this, m_World.m_PhysicsManager, name, position, rotation);
+		assert(body);
+		body->PhysInitialize(physicsLayer, colliderInfo, physicsMaterial);
 		return m_World.m_NextObjectID++;
 	}
 
-	ObjectID Area::AddRayTarget(const RayTarget::CreateInfo& info) {
-		RayTarget* rayTarget = m_RayTargets.Emplace(m_World.m_NextObjectID, m_World, info);
-		assert(rayTarget);
-		UpdateBoundingBox(rayTarget->GetBoundingBox());
-		return m_World.m_NextObjectID++;
-	}
-
-	void Area::CheckCollisions(const Obstacle& obstacle) const {
-		for (ObjectID bodyID : m_Bodies) {
-			Body* body = m_World.GetBody(bodyID);
-			if (!body) {
-				PrintError(ErrorOrigin::GameLogic,
-					"couldn't find body (function World::GetBody in function Area::CheckCollisions)!");
-				continue;
-			}
-			Vec3 pushBack;
-			if (obstacle.Collides(body->GetCollider(), pushBack)) {
-				body->SetPosition(body->GetPosition() + pushBack);
-			}
+	bool Area::RemoveBody(ObjectID ID) {
+		Body* body = m_Bodies.Find(ID);
+		if (body) {
+			body->Terminate();
 		}
+		return m_Bodies.Erase(ID);
 	}
 
 	UnidirectionalLight::UnidirectionalLight(World& world, uint64_t objectID, Type type, Vec2_T<uint32_t> shadowMapResolution) 
@@ -219,23 +97,23 @@ namespace engine {
 				= renderer.m_EarlyGraphicsCommandBufferQueue.New();
 			if (!commandBuffer) {
 				CriticalError(ErrorOrigin::Renderer,
-					"renderer graphics command buffer was out of memory (in function World::Initialize)!");
+					"renderer graphics command buffer was out of memory (in function UnidirectionalLight::Initialize)!");
 			}
 			if (!renderer.AllocateCommandBuffers(Renderer::GetDefaultCommandBufferAllocateInfo(
 					renderer.GetCommandPool<Renderer::Queue::Graphics>(), 1), 
 					&commandBuffer->m_CommandBuffer)) {
 				CriticalError(ErrorOrigin::Renderer, 
-					"failed to allocate command buffer (function Renderer::AllocateCommandBuffers in function World::Initialize)");
+					"failed to allocate command buffer (function Renderer::AllocateCommandBuffers in function UnidirectionalLight::Initialize)");
 			}
 			if (!renderer.BeginCommandBuffer(commandBuffer->m_CommandBuffer)) {
 				CriticalError(ErrorOrigin::Renderer, 
-					"failed to begin command buffer (function Renderer::BeginCommandBuffer in function World::Initialize)");
+					"failed to begin command buffer (function Renderer::BeginCommandBuffer in function UnidirectionalLight::Initialize)");
 			}
 			SwapchainCreateCallback(framesInFlight, commandBuffer->m_CommandBuffer);
 			VkResult vkRes = vkEndCommandBuffer(commandBuffer->m_CommandBuffer);
 			if (vkRes != VK_SUCCESS) {
-				CriticalError(ErrorOrigin::Vulkan, 
-					"failed to end command buffer (function vkEndCommandBuffer in function World::Initialize)!",
+				CriticalError(ErrorOrigin::Vulkan,
+					"failed to end command buffer (function vkEndCommandBuffer in function UnidirectionalLight::Initialize)!",
 				vkRes);
 			}
 			commandBuffer->m_Flags = Renderer::CommandBufferFlag_FreeAfterSubmit;
@@ -271,11 +149,11 @@ namespace engine {
 			if (!m_FragmentBuffer.Create(GetFragmentBufferSize(),
 					VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
 				CriticalError(ErrorOrigin::Renderer, 
-					"failed to create buffer for directional light (function Renderer::Buffer::Create in function World::DirectionalLight::SwapchainCreateCallback)!");
+					"failed to create buffer for directional light (function Renderer::Buffer::Create in function UnidirectionalLight::SwapchainCreateCallback)!");
 			}
 			if (!m_FragmentBuffer.MapMemory(0, m_FragmentBuffer.m_BufferSize, (void**)&m_FragmentMap)) {
 				CriticalError(ErrorOrigin::Renderer, 
-					"failed to map buffer memory for directional light (function Renderer::Buffer::MapMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
+					"failed to map buffer memory for directional light (function Renderer::Buffer::MapMemory in function UnidirectionalLight::SwapchainCreateCallback)!");
 			}
 		}
 
@@ -300,17 +178,17 @@ namespace engine {
 						VK_SHARING_MODE_EXCLUSIVE, 1, &renderer.m_GraphicsQueueFamilyIndex);
 					if (image == VK_NULL_HANDLE) {
 						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create depth image for directional light (function Renderer::CreateImage in function World::DirectionalLight::SwapchainCreateCallback)!");
+							"failed to create depth image for directional light (function Renderer::CreateImage in function UnidirectionalLight::SwapchainCreateCallback)!");
 					}
 					memory = renderer.AllocateImageMemory(image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 					if (memory == VK_NULL_HANDLE) {
 						CriticalError(ErrorOrigin::Renderer, 
-							"failed to allocate depth image memory for directional light (function Renderer::AllocateImageMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
+							"failed to allocate depth image memory for directional light (function Renderer::AllocateImageMemory in function UnidirectionalLight::SwapchainCreateCallback)!");
 					}
 					imageView = renderer.CreateImageView(image, VK_IMAGE_VIEW_TYPE_2D, renderer.m_DepthOnlyFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
 					if (imageView == VK_NULL_HANDLE) {
 						CriticalError(ErrorOrigin::Renderer, 
-							"failed to create depth image view for directional light (function Renderer::AllocateImageMemory in function World::DirectionalLight::SwapchainCreateCallback)!");
+							"failed to create depth image view for directional light (function Renderer::AllocateImageMemory in function UnidirectionalLight::SwapchainCreateCallback)!");
 					}
 
 					VkImageMemoryBarrier memoryBarrier = {
@@ -352,7 +230,7 @@ namespace engine {
 				m_ShadowMapSampler = renderer.CreateSampler(samplerInfo);
 				if (m_ShadowMapSampler == VK_NULL_HANDLE) {
 					CriticalError(ErrorOrigin::Renderer, 
-						"failed to create shadow map sampler for directional light (function Renderer::CreateSampler in function World::DirectionalLight::SwapchainCreateCallback)!");
+						"failed to create shadow map sampler for directional light (function Renderer::CreateSampler in function UnidirectionalLight::SwapchainCreateCallback)!");
 				}
 			}
 			if (m_ShadowMapDescriptorPool != VK_NULL_HANDLE) {
@@ -372,7 +250,7 @@ namespace engine {
 			m_ShadowMapDescriptorPool = renderer.CreateDescriptorPool(0, imageCount, poolSizes.Size(), poolSizes.Data());
 			if (m_ShadowMapDescriptorPool == VK_NULL_HANDLE) {
 				CriticalError(ErrorOrigin::Renderer, 
-					"failed to create descriptor pool for directional light (function Renderer::CreateDescriptorPool in function World::DirectionalLight::SwapchainCreateCallback)!");
+					"failed to create descriptor pool for directional light (function Renderer::CreateDescriptorPool in function UnidirectionalLight::SwapchainCreateCallback)!");
 			}
 			m_ShadowMapDescriptorSets.Resize(imageCount);
 			DynamicArray<VkDescriptorSetLayout> setLayouts(imageCount);
@@ -382,7 +260,7 @@ namespace engine {
 			if (!renderer.AllocateDescriptorSets(nullptr, m_ShadowMapDescriptorPool, imageCount, 
 					setLayouts.Data(), m_ShadowMapDescriptorSets.Data())) {
 				CriticalError(ErrorOrigin::Renderer, 
-					"failed to allocate descriptor sets for directional light (function Renderer::AllocateDescriptorSets in function World::DirectionalLight::SwapchainCreateCallback)!");
+					"failed to allocate descriptor sets for directional light (function Renderer::AllocateDescriptorSets in function UnidirectionalLight::SwapchainCreateCallback)!");
 			}
 			VkDescriptorBufferInfo descriptorBufferInfo {
 				.buffer = m_FragmentBuffer.m_Buffer,
@@ -575,7 +453,7 @@ namespace engine {
 		m_Renderer.UpdateDescriptorSets(1, &cameraDescriptorSetWrite);
 
 		m_DirectionalLight.Initialize(
-			Mat4::Orthogonal(-40.0f, 40.0f, -40.0f, 40.0f, 0.1f, 500.0f),
+			Mat4::Orthogonal(-10.0f, 10.0f, -10.0f, 10.0f, 0.1f, 50.0f),
 			Mat4::LookAt(Vec3(10.0f, 10.0f, 2.0f), Vec3::Up(), Vec3(0.0f, 0.0f, 0.0f)),
 			Vec3(201.0f / 255.0f, 226.0f / 255.0f, 255.0f / 255.0f));
 
