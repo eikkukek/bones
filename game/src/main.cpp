@@ -220,15 +220,15 @@ int main() {
 
 	ObjectID obstcaleID = area.AddBody(
 		"Body",
-		Vec3(0.0f, 20.0f, 0.0f),
+		Vec3(0.0f, 0.0f, 0.0f),
 		Quaternion::Identity(),
-		PhysicsLayer::Moving,
+		PhysicsLayer::Kinematic,
 		{
-			.m_ColliderShape = Body::ColliderShape::Box,
+			.m_ColliderShape = Body::ColliderShape::Capsule,
 			.u_ShapeCreateInfo {
-				.m_Box { 
-					.m_HalfExtent = Vec3(1.0f, 1.0f, 1.0f) ,
-					.m_ConvexRadius = 0.05f,
+				.m_Capsule { 
+					.m_HalfHeight = 1.0f,
+					.m_Radius = 0.5f,
 				},
 			},
 		},
@@ -236,6 +236,9 @@ int main() {
 	);
 
 	Body* obstacle = area.GetBody(obstcaleID);
+
+	//obstacle->AddForce(Vec3(10000.0f, 0.0f, 0.0f));
+	obstacle->Move(Vec3(3.0f, 0.0f, 0.0f), Quaternion::Identity(), 5.0f);
 
 	RenderID obstacleRenderID = world.AddRenderData(WorldRenderDataFlag_NoSave, *obstacle, Mat4(1), cubeMesh.GetMeshData());
 	world.GetRenderData(obstacleRenderID)->m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
