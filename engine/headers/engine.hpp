@@ -1,7 +1,5 @@
 #pragma once
 
-//#define PX_PHYSX_STATIC_LIB
-
 #include "renderer.hpp"
 #include "text_renderer.hpp"
 #include "math.hpp"
@@ -11,8 +9,18 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_impl_glfw.h"
-#include "PxPhysicsAPI.h"
-#include "extensions/PxExtensionsAPI.h"
+#include "Jolt/Jolt.h"
+#include "Jolt/RegisterTypes.h"
+#include "Jolt/Core/TempAllocator.h"
+#include "Jolt/Core/JobSystemThreadPool.h"
+#include "Jolt/Physics/PhysicsSettings.h"
+#include "Jolt/Physics/PhysicsSystem.h"
+#include "Jolt/Physics/Body/BodyActivationListener.h"
+#include "Jolt/Physics/Collision/Shape/SphereShape.h"
+#include "Jolt/Physics/Collision/Shape/BoxShape.h"
+#include "Jolt/Physics/Collision/Shape/CapsuleShape.h"
+#include "Jolt/Physics/Collision/Shape/ConvexHullShape.h"
+#include "Jolt/Physics/Body/BodyCreationSettings.h"
 #include <assert.h>
 #include <cstdio>
 #include <cstdlib>
@@ -20,14 +28,18 @@
 #include <utility>
 #include <chrono>
 
+#ifndef JOLT_DEBUG
+JPH_SUPPRESS_WARNINGS
+#endif
+
 namespace engine {
 
 	class Engine;
 	class UI;
 
-	typedef uint64_t UID;
-	typedef std::lock_guard<std::mutex> LockGuard;
-	typedef Renderer::MeshData MeshData;
+	using UID = uint64_t;
+	using LockGuard = std::lock_guard<std::mutex>;
+	using MeshData = Renderer::MeshData;
 
 	template<typename T, typename U>
 	struct IsSame {
@@ -52,7 +64,7 @@ namespace engine {
 		IndexOutOfBounds,
 		Vulkan,
 		Stb,
-		PhysX,
+		Jolt,
 		FileParsing,
 		FileWriting,
 		GameLogic,
@@ -73,7 +85,7 @@ namespace engine {
 			"IndexOutOfBounds",
 			"Vulkan",
 			"STB",
-			"PhysX",
+			"Jolt",
 			"FileParsing",
 			"FileWriting",
 			"GameLogic",
@@ -84,22 +96,27 @@ namespace engine {
 		return strings[(size_t)origin];
 	}
 
-	void CriticalError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS, physx::PxErrorCode::Enum physXErr = physx::PxErrorCode::eNO_ERROR);
+	void CriticalError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS, const char* libErr = nullptr);
 
-	inline void PrintError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS, physx::PxErrorCode::Enum physXErr = physx::PxErrorCode::eNO_ERROR) {
+	inline void PrintError(ErrorOrigin origin, const char* err, VkResult vkErr = VK_SUCCESS, const char* libErr = nullptr) {
 		fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, 
 			"Engine called an error!\nError origin: {}\nError: {}\n", ErrorOriginString(origin), err);
 		if (vkErr != VK_SUCCESS) {
 			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "Vulkan error code: {}\n", (int)vkErr);
 		}
-		if (physXErr != physx::PxErrorCode::eNO_ERROR) {
-			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "PhysX error code: {}\n", (int)physXErr);
+		if (libErr) {
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold, "Library error: {}\n", libErr);
 		}
 	}
 
 	inline void PrintWarning(const char* warn) {
 		fmt::print(fmt::fg(fmt::color::yellow) | fmt::emphasis::bold, 
 			"Engine called a warning:\n {}\n", warn);
+	}
+
+	inline void LogError(const char* err) {
+		fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+			"error: {}", err);
 	}
 
 	template<typename T>
@@ -131,8 +148,8 @@ namespace engine {
 	class Array {
 	public:
 
-		typedef T* Iterator;
-		typedef const T* ConstIterator;
+		using Iterator = T*;
+		using ConstIterator = const T*;
 
 		T m_Data[size_T]{};
 
@@ -175,8 +192,8 @@ namespace engine {
 	class DynamicArray {
 	public:
 
-		typedef T* Iterator;
-		typedef const T* ConstIterator;
+		using Iterator = T*;
+		using ConstIterator = const T*;
 
 	private:
 
@@ -304,6 +321,9 @@ namespace engine {
 		}
 
 		DynamicArray& Clear() {
+			for (uint32_t i = 0; i < m_Size; i++) {
+				(m_Data + i)->~T();
+			}
 			free(m_Data);
 			m_Data = nullptr;
 			m_Size = 0;
@@ -449,7 +469,7 @@ namespace engine {
 	class Set {
 	public:
 
-		typedef T Bucket[BucketCapacity];
+		using Bucket = T[BucketCapacity];
 
 		struct Iterator;
 
@@ -794,11 +814,11 @@ namespace engine {
 
 	public:
 
-		typedef ValueType* ValueIterator;
-		typedef const ValueType* ConstValueIterator;
+		using ValueIterator = ValueType*;
+		using ConstValueIterator = const ValueType*;
 
-		typedef KeyType* KeyIterator;
-		typedef const KeyType* ConstKeyIterator;
+		using KeyIterator = KeyType*;
+		using ConstKeyIterator = const KeyType*;
 
 		OrderedDictionary() noexcept 
 			: m_Size(0), m_Capacity(0), m_Data(nullptr) {}
@@ -1126,8 +1146,8 @@ namespace engine {
 
 	public:
 
-		typedef T* Iterator;
-		typedef const T* ConstIterator;
+		using Iterator = T*;
+		using ConstIterator = const T*;
 
 		OrderedArray() : m_Size(0), m_Capacity(0), m_Data(nullptr) {}
 
@@ -1638,10 +1658,10 @@ namespace engine {
 
 		static constexpr uint32_t max_bucket_size = 4;
 
-		typedef String KeyType;
-		typedef T ValueType;
-		typedef KeyType KeyBucket[max_bucket_size];
-		typedef ValueType ValueBucket[max_bucket_size];
+		using KeyType = String;
+		using ValueType = T;
+		using KeyBucket = KeyType[max_bucket_size];
+		using ValueBucket = ValueType[max_bucket_size];
 
 	private:
 
@@ -1793,6 +1813,12 @@ namespace engine {
 		}
 
 		void Clear() {
+			if (m_KeyBuckets) {
+				for (const auto& pair : *this) {
+					(&pair.first)->~KeyType();
+					(&pair.second)->~ValueType();
+				}
+			}
 			m_Capacity = 0;
 			free(m_KeyBuckets);
 			m_KeyBuckets = nullptr;
@@ -2387,507 +2413,6 @@ namespace engine {
 		}
 	};
 
-	class Collider {
-
-		friend class Engine;
-
-	public:
-
-		enum class Type {
-			None = 0,
-			Fence = 1,
-			Pole = 2,
-		};
-
-		struct Fence {
-
-			struct CreateInfo {
-
-				Vec3 m_Dimensions{};
-				float m_YRotation{};
-
-				static bool FromFile(FILE* fileStream, CreateInfo& outInfo) {
-					return fscanf(fileStream, "{%f%f%f%f}", 
-							&outInfo.m_Dimensions.x, &outInfo.m_Dimensions.y, &outInfo.m_Dimensions.z,
-							&outInfo.m_YRotation) == 4;
-				}
-			};
-
-			void Create(const CreateInfo& info) {
-				m_HalfDimensions = info.m_Dimensions / 2;
-				m_YRotation = info.m_YRotation;
-			}
-
-			Vec3 m_HalfDimensions{};
-			float m_YRotation{};
-		};
-
-		struct Pole {
-
-			struct CreateInfo {
-
-				float m_Radius{};
-				float m_Height{};
-
-				static bool FromFile(FILE* fileStream, CreateInfo& outInfo) {
-					return fscanf(fileStream, "{%f%f}", 
-						&outInfo.m_Radius, &outInfo.m_Height) == 2;
-				}
-			};
-
-			void Create(const CreateInfo& info) {
-				m_Radius = info.m_Radius;
-				m_HalfHeight = info.m_Height / 2;
-			}
-
-			float m_Radius{};
-			float m_HalfHeight{};
-		};
-
-		union TypeCreateInfo_U {
-			Fence::CreateInfo m_FenceInfo;
-			Pole::CreateInfo m_PoleInfo;
-		};
-
-		union Collider_U {
-
-			Collider_U(Type type, const TypeCreateInfo_U& typeInfo) {
-				switch (type) {
-					case Type::Fence:
-						m_Fence.Create(typeInfo.m_FenceInfo);
-						break;
-					case Type::Pole:
-						m_Pole.Create(typeInfo.m_PoleInfo);
-						break;
-					case Type::None:
-						break;
-				}
-			}
-
-			Fence m_Fence;
-			Pole m_Pole;
-		};
-
-		struct CreateInfo {
-
-			Vec3 m_LocalPosition;
-			Type m_Type;
-			TypeCreateInfo_U u_TypeInfo;
-
-			static bool FromFile(FILE* fileStream, CreateInfo& outInfo) {
-				int res = fscanf(fileStream, "{%f%f%f\n",
-					&outInfo.m_LocalPosition.x, &outInfo.m_LocalPosition.y, &outInfo.m_LocalPosition.z);
-				if (res != 3) {
-					return false;
-				}
-				char type = fgetc(fileStream);
-				switch (type) {
-					case 'F':
-						if (!Fence::CreateInfo::FromFile(fileStream, outInfo.u_TypeInfo.m_FenceInfo)) {
-							PrintError(ErrorOrigin::FileParsing, 
-								"failed to parse fence collider (function Collider::Fence::CreateInfo::FromFile)!");
-							return false;
-						}
-						break;
-					case 'P':
-						if (!Pole::CreateInfo::FromFile(fileStream, outInfo.u_TypeInfo.m_PoleInfo)) {
-							PrintError(ErrorOrigin::FileParsing, 
-								"failed to parse pole collider (function Collider::Pole::CreateInfo::FromFile)!");
-							return false;
-						}
-						break;
-					default:
-						return false;
-				}
-				if (FileHandler::Skip(fileStream, Array<char, 1> { '}' }) == EOF) {
-					PrintError(ErrorOrigin::FileParsing, 
-						"missing '}' when parsing collider (function Collider::CreateInfo::FromFile)!");
-				}
-				return true;
-			}
-		};
-
-	private:
-
-		const Type m_Type;
-		Collider_U u_Collider;
-		Vec3 m_LocalPosition{};
-		const Vec3& m_BodyPosition;
-		const float& m_BodyYRotation;
-		const Vec3& m_BodyVelocity;
-
-	public:
-
-		Collider(Vec3& bodyPosition, float& bodyYRotation, Vec3& bodyVelocity, const CreateInfo& info) 
-			: m_BodyPosition(bodyPosition), m_BodyYRotation(bodyYRotation), m_BodyVelocity(bodyVelocity),
-				m_LocalPosition(info.m_LocalPosition), m_Type(info.m_Type), u_Collider(info.m_Type, info.u_TypeInfo) {}
-
-		Collider(Vec3& bodyPosition, float& bodyYRotation, Vec3& bodyVelocity, Collider&& other) 
-			: m_Type(other.m_Type), u_Collider(other.u_Collider), m_LocalPosition(other.m_LocalPosition),
-				m_BodyYRotation(bodyYRotation), m_BodyPosition(bodyPosition), m_BodyVelocity(other.m_BodyVelocity) {
-			other.~Collider();
-		}
-
-		Collider(const Collider& other) = delete;
-		Collider(Collider&& other) = delete;
-
-	public:
-
-		Box<float> GetBoundingBox() const {
-			if (m_Type == Type::Fence) {
-				const Fence& fence = u_Collider.m_Fence;
-				Vec3 pos = m_BodyPosition + m_LocalPosition;
-				float yRot = fence.m_YRotation + m_BodyYRotation;
-				Vec2 vecs[4] {
-					Vec2(pos.x - fence.m_HalfDimensions.x, pos.z - fence.m_HalfDimensions.z).Rotated(yRot),
-					Vec2(pos.x - fence.m_HalfDimensions.x, pos.z + fence.m_HalfDimensions.z).Rotated(yRot),
-					Vec2(pos.x + fence.m_HalfDimensions.x, pos.z - fence.m_HalfDimensions.z).Rotated(yRot),
-					Vec2(pos.x + fence.m_HalfDimensions.x, pos.z + fence.m_HalfDimensions.z).Rotated(yRot),
-				};
-				Box<float> result { 
-					.m_Min { float_max, pos.y - fence.m_HalfDimensions.y, float_max },
-					.m_Max { float_min, pos.y + fence.m_HalfDimensions.y, float_min },
-				};
-				for (uint32_t i = 0; i < 4; i++) {
-					Vec3& min = result.m_Min;
-					min.x = Min(vecs[i].x, min.x);
-					min.z = Min(vecs[i].y, min.z);
-					Vec3& max = result.m_Max;
-					max.x = Max(vecs[i].x, max.x);
-					max.z = Max(vecs[i].y, max.z);
-				}
-				return result;
-			}
-			else if (m_Type == Type::Pole) {
-				const Pole& pole = u_Collider.m_Pole;
-				Vec3 pos = m_BodyPosition + m_LocalPosition;
-				Box<float> result {
-					.m_Min { pos.x - pole.m_Radius, pos.z - pole.m_Radius, pos.y - pole.m_HalfHeight },
-					.m_Max { pos.x + pole.m_Radius, pos.z + pole.m_Radius, pos.y + pole.m_HalfHeight },
-				};
-				return result;
-			}
-			return {};
-		}
-
-		static bool ColliderToStaticColliderCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
-			Box aBox = a.GetBoundingBox();
-			Box bBox = b.GetBoundingBox();
-			if (!aBox.OverLaps(bBox)) {
-				return false;
-			}
-			if (a.m_Type == Type::Fence) {
-				if (b.m_Type == Type::Fence) {
-					return FenceToStaticFenceCollides(a, b, outAPushBack);
-				}
-			}
-			if (a.m_Type == Type::Pole) {
-				if (b.m_Type == Type::Fence) {
-					return PoleToStaticFenceCollides(a, b, outAPushBack);
-				}
-				if (b.m_Type == Type::Pole) {
-					return PoleToStaticPoleCollides(a, b, outAPushBack);
-				}
-			}
-			return false;
-		}
-
-		static bool PoleToStaticPoleCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
-			const Pole& aPole = a.u_Collider.m_Pole;
-			const Pole& bPole = b.u_Collider.m_Pole;
-			const Vec3 aPos = a.m_BodyPosition + a.m_LocalPosition;
-			const Vec3 bPos = b.m_BodyPosition + b.m_LocalPosition;
-			float yMaxs[2] {
-				aPos.y + aPole.m_HalfHeight,
-				bPos.y + bPole.m_HalfHeight,
-			};
-			float yMins[2] { 
-				aPos.y - aPole.m_HalfHeight,
-				bPos.y - bPole.m_HalfHeight,
-			};
-			if (yMaxs[0] > yMins[1] && yMaxs[1] > yMins[0]) {
-				Vec2 centerDiff = Vec2(bPos.x - aPos.x, bPos.z - aPos.z);
-				float centerDistanceSqr 
-					= centerDiff.SqrMagnitude();
-				float radDiff = (aPole.m_Radius - bPole.m_Radius);
-				float radSum = (aPole.m_Radius + bPole.m_Radius);
-				if (radDiff * radDiff < centerDistanceSqr && centerDistanceSqr < radSum * radSum) {
-					outAPushBack = Vec3(centerDiff.x, 0.0f, centerDiff.y).Normalized() * (radSum - sqrt(centerDistanceSqr));
-					return true;
-				}
-			}
-			return false;
-		}
-
-		static bool PoleToStaticFenceCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
-			const Pole& aPole = a.u_Collider.m_Pole;
-			const Fence& bFence = b.u_Collider.m_Fence;
-			const Vec3 aPos = a.m_BodyPosition + a.m_LocalPosition;
-			const Vec3 bPos = b.m_BodyPosition + b.m_LocalPosition;
-			float yMaxs[2] {
-				aPos.y + aPole.m_HalfHeight,
-				bPos.y + bFence.m_HalfDimensions.y
-			};
-			float yMins[2] {
-				aPos.y - aPole.m_HalfHeight,
-				bPos.y - bFence.m_HalfDimensions.y,
-			};
-			if (yMaxs[0] > yMins[1] && yMaxs[1] > yMins[0]) {
-				Vec2 aPos2D(aPos.x, aPos.z);
-				Vec2 bPos2D(bPos.x, bPos.z);
-				Vec2 aPosRel = aPos2D - bPos2D;
-				Rect<float> boundingRect = {
-					.m_Min {
-						-bFence.m_HalfDimensions.x,
-						-bFence.m_HalfDimensions.z
-					},
-					.m_Max {
-						bFence.m_HalfDimensions.x,
-						bFence.m_HalfDimensions.y,
-					},
-				};
-				float bYRotation = b.m_BodyYRotation + bFence.m_YRotation;
-				Vec2 aPosRelRotated = aPosRel.Rotated(bYRotation);
-				if (boundingRect.IsPointInside(aPosRelRotated)) {
-					/*
-					float val = aPosRelRotated.y - boundingRect.m_Min.y;
-					float min = val;
-					bool xClosest = false;
-					val = aPosRelRotated.y - boundingRect.m_Max.y;
-					if (abs(val) < abs(min)) {
-						min = val;
-					}
-					val = aPosRelRotated.x - boundingRect.m_Min.x;
-					if (abs(val) < abs(min)) {
-						min = val;
-						xClosest = true;
-					}
-					val = aPosRelRotated.x - boundingRect.m_Max.x;
-					if (abs(val) < abs(min)) {
-						min = val;
-						xClosest = true;
-					}
-					Mat3 invRot = Quaternion::AxisRotation(Vec3(0.0f, 0.0f, 1.0f), - (bFence.m_YRotation + b.m_BodyYRotation)).AsMat3();
-					if (xClosest) {
-						int sign = min < 0.0f ? -1 : 1;
-						Vec2 pushBack2D = Vec3(sign * (abs(min) + aPole.m_Radius), 0.0f, 0.0f) * invRot;
-						outAPushBack = Vec3(-pushBack2D.x, 0.0f, -pushBack2D.y);
-					}
-					else {
-						int sign = min < 0.0f ? -1 : 1;
-						Vec2 pushBack2D = Vec3(0.0f, sign * (abs(min) + aPole.m_Radius), 0.0f) * invRot;
-						outAPushBack = Vec3(-pushBack2D.x, 0.0f, -pushBack2D.y);
-					}
-					*/
-					float bTop = b.m_BodyPosition.y + b.m_LocalPosition.y + bFence.m_HalfDimensions.y;
-					float aBottom = a.m_BodyPosition.y + b.m_LocalPosition.y - aPole.m_HalfHeight;
-					outAPushBack = Vec3(0.0f, bTop - aBottom, 0.0f);
-					return true;
-				}
-				else {
-					Vec2 aClampedPos(
-						Clamp(aPosRelRotated.x, boundingRect.m_Min.x, boundingRect.m_Max.x), 
-						Clamp(aPosRelRotated.y, boundingRect.m_Min.y, boundingRect.m_Max.y));
-					Vec2 diff = aClampedPos - aPosRelRotated;
-					float diffSqrMag = diff.SqrMagnitude();
-					if (diffSqrMag < aPole.m_Radius * aPole.m_Radius) {
-						float diffMag = sqrt(diffSqrMag);
-						if (diffMag == 0) {
-							return false;
-						}
-						diff = diff.Rotated(-bYRotation);
-						outAPushBack = Vec3(diff.x / diffMag, 0.0f, diff.y / diffMag) * (diffMag - aPole.m_Radius);
-						return true;
-					}
-				}
-			}
-			return false;
-		}
-
-		static bool FenceToStaticFenceCollides(const Collider& a, const Collider& b, Vec3& outAPushBack) {
-
-			const Fence& aFence = a.u_Collider.m_Fence;
-			const Fence& bFence = b.u_Collider.m_Fence;
-			const Vec3 aPos = a.m_BodyPosition + a.m_LocalPosition;
-			const Vec3 bPos = b.m_BodyPosition + b.m_LocalPosition;
-
-			const float yMaxs[2] {
-				aPos.y + aFence.m_HalfDimensions.y,
-				bPos.y + bFence.m_HalfDimensions.y,
-			};
-
-			const float yMins[2] {
-				aPos.y - aFence.m_HalfDimensions.y,
-				bPos.y - bFence.m_HalfDimensions.y,
-			};
-
-			if (yMaxs[0] > yMins[1] && yMaxs[1] > yMins[0]) {
-
-				const Vec2 aPos2D(aPos.x, aPos.z);
-				const Vec2 bPos2D(bPos.x, bPos.z);
-
-				struct Line {
-					Vec2 m_Origin;
-					Vec2 m_Direction;
-				};
-
-				Mat3 rotationMatrix = Quaternion::AxisRotation(Vec3::Forward(), bFence.m_YRotation + b.m_BodyYRotation).AsMat3();
-
-				const Line aLines[2] { 
-					{ aPos2D , (Vec3::Right() * rotationMatrix).Normalized() }, 
-					{ aPos2D, (Vec3::Up() * rotationMatrix).Normalized() },
-				};
-
-				const Vec2 aSides[4] {
-					aLines[0].m_Direction * aFence.m_HalfDimensions.x, // RX
-					aLines[1].m_Direction * aFence.m_HalfDimensions.z, // RY
-					aSides[0] * -1, // RX * -1
-					aSides[1] * -1, // RY * - 1
-				};
-
-				const Vec2 aCorners[4] {
-					aPos2D + aSides[0] + aSides[1],
-					aPos2D + aSides[0] + aSides[3],
-					aPos2D + aSides[2] + aSides[3],
-					aPos2D + aSides[2] + aSides[1],
-				};
-
-				const Line bLines[2] { 
-					{ bPos2D, (Vec3::Right() * rotationMatrix).Normalized() },
-					{ bPos2D, (Vec3::Up() * rotationMatrix).Normalized() },
-				};
-
-				const Vec2 bSides[4] {
-					bLines[0].m_Direction * bFence.m_HalfDimensions.x, // RX
-					bLines[1].m_Direction * bFence.m_HalfDimensions.z, // RY
-					bSides[0] * -1, // RX * -1
-					bSides[1] * -1, // RY * - 1
-				};
-
-				const Vec2 bCorners[4] {
-					bPos2D + bSides[0] + bSides[1],
-					bPos2D + bSides[0] + bSides[3],
-					bPos2D + bSides[2] + bSides[3],
-					bPos2D + bSides[2] + bSides[1],
-				};
-
-				static constexpr auto project = [](Vec2 vec, const Line& line) -> Vec2 {
-					vec -= line.m_Origin;
-					float dot = Dot(line.m_Direction, vec);
-					return line.m_Origin + (line.m_Direction * dot);
-				};
-
-				static constexpr auto get_signed_distance = [](Vec2 rectCenter, const Line& line, Vec2 corner, Vec2& outRel) -> float {
-					const Vec2 projected = project(corner, line);
-					outRel = projected - rectCenter;
-					const int sign = (outRel.x * line.m_Direction.x) + (outRel.y * line.m_Direction.y) > 0;
-					return outRel.Magnitude() * (sign ? 1 : -1);
-				};
-
-				static constexpr auto are_projections_hit = [](const Vec3& rectHalfDimensions, Vec2 minSignedDistances, Vec2 maxSignedDistances) -> bool {
-					return (minSignedDistances.x < 0 && maxSignedDistances.x > 0 ||
-						abs(minSignedDistances.x) < rectHalfDimensions.x ||
-						abs(maxSignedDistances.x) < rectHalfDimensions.x) &&
-						(minSignedDistances.y < 0 && maxSignedDistances.y > 0 ||
-						abs(minSignedDistances.y) < rectHalfDimensions.z ||
-						abs(maxSignedDistances.y) < rectHalfDimensions.z);
-				};
-
-				static constexpr float float_max = std::numeric_limits<float>::max();
-				static constexpr float float_min = -float_max;
-
-				Vec2 minSignedDistances(float_max, float_max);
-				Vec2 maxSignedDistances(float_min, float_min);
-
-				Vec2 relMaxX, relMinX, relMaxY, relMinY;
-
-				for (size_t i = 0; i < 4; i++) {
-					Vec2 thisRelX, thisRelY;
-					const Vec2 signedDistances(get_signed_distance(aPos2D, aLines[0], bCorners[i], thisRelX), 
-						get_signed_distance(aPos2D, aLines[1], bCorners[i], thisRelY));
-					minSignedDistances.x = Min(signedDistances.x, minSignedDistances.x);
-					minSignedDistances.y = Min(signedDistances.y, minSignedDistances.y);
-					maxSignedDistances.x = Max(signedDistances.x, maxSignedDistances.x);
-					maxSignedDistances.y = Max(signedDistances.y, maxSignedDistances.y);
-					if (signedDistances.x == maxSignedDistances.x) {
-						relMaxX = thisRelX;
-					}
-					if (signedDistances.x == minSignedDistances.x) {
-						relMinX = thisRelX;
-					}
-					if (signedDistances.y == maxSignedDistances.y) {
-						relMaxY = thisRelY;
-					}
-					if (signedDistances.y == minSignedDistances.y) {
-						relMinY = thisRelY;
-					}
-				}
-
-				if (!are_projections_hit(aFence.m_HalfDimensions, minSignedDistances, maxSignedDistances)) {
-					return false;
-				}
-
-				minSignedDistances = { float_max, float_max };
-				maxSignedDistances = { float_min, float_min };
-
-				for (size_t i = 0; i < 4; i++) {
-					Vec2 thisRelX, thisRelY;
-					const Vec2 signedDistances(get_signed_distance(bPos2D, bLines[0], aCorners[i], thisRelX), 
-						get_signed_distance(bPos2D, bLines[1], aCorners[i], thisRelY));
-					minSignedDistances.x = Min(signedDistances.x, minSignedDistances.x);
-					minSignedDistances.y = Min(signedDistances.y, minSignedDistances.y);
-					maxSignedDistances.x = Max(signedDistances.x, maxSignedDistances.x);
-					maxSignedDistances.y = Max(signedDistances.y, maxSignedDistances.y);
-				}
-
-				if (!are_projections_hit(bFence.m_HalfDimensions, minSignedDistances, maxSignedDistances)) {
-					return false;
-				}
-
-				static constexpr auto vec_sign = [](Vec2 vec, const Line& line) -> int {
-					return (vec.x * line.m_Direction.x) + (vec.y * line.m_Direction.y) > 0 ? 1 : -1;
-				};
-
-				Vec2 min = { float_max, float_max };
-
-				Vec2 vec1 = relMaxX.SqrMagnitude() > relMinX.SqrMagnitude() ? relMinX : relMaxX;
-				int sign = vec_sign(vec1, aLines[0]);
-				Vec2 vec2 = aLines[0].m_Direction * aFence.m_HalfDimensions.x;
-				Vec2 vec3 = (vec2 - vec1 * sign) * sign;
-
-				if (vec1.SqrMagnitude() < vec2.SqrMagnitude()) {
-					min = vec3;
-				}
-
-				vec1 = relMaxY.SqrMagnitude() > relMinY.SqrMagnitude() ? relMinY : relMaxY;
-				sign = vec_sign(vec1, aLines[1]);
-				vec2 = aLines[1].m_Direction * aFence.m_HalfDimensions.z;
-				Vec2 vec4 = (vec2 - vec1 * sign) * sign;
-
-				float threshold = a.m_BodyVelocity.SqrMagnitude() / 2;
-
-				if (vec1.SqrMagnitude() < vec2.SqrMagnitude()) {
-					min = Min(min, vec4);
-					if (min.SqrMagnitude() < threshold) {
-						if (vec4.SqrMagnitude() < threshold) {
-							min = vec3;
-						}
-						else {
-							min = vec4;
-						}
-					}
-				}
-
-				outAPushBack = Vec3(min.x, 0.0f, min.y);
-
-				//fmt::print("colliding!");
-
-				return true;
-			}
-			return false;
-		}
-	};
-
 	struct Ray {
 		Vec3 m_Origin;
 		Vec3 m_Direction;
@@ -2902,7 +2427,7 @@ namespace engine {
 	class LogicMesh {
 	public:
 
-		typedef Array<Vec3, 3> Face;
+		using Face = Array<Vec3, 3>;
 
 	private:
 
@@ -2920,7 +2445,7 @@ namespace engine {
 			Load(vertices, indices);
 		}
 
-		template<uint32_t vertex_count_T, uint32_t index_count_T>
+		template<size_t vertex_count_T, size_t index_count_T>
 		LogicMesh(const Array<Vertex, vertex_count_T>& vertices, const Array<uint32_t, index_count_T>& indices) 
 			: m_Faces(), m_TransformedFaces(), m_Vertices() {
 			Load(vertices, indices);
@@ -2974,7 +2499,7 @@ namespace engine {
 			return true;
 		}
 
-		template<uint32_t vertex_count_T, uint32_t index_count_T>
+		template<size_t vertex_count_T, size_t index_count_T>
 		bool Load(const Array<Vertex, vertex_count_T>& vertices, const Array<uint32_t, index_count_T>& indices) {
 			static_assert(!(index_count_T % 3));
 			m_Faces.Clear();
@@ -4310,8 +3835,8 @@ void main() {
 				}
 			};
 
-			typedef Character* Iterator;
-			typedef const Character* ConstIterator;
+			using Iterator = Character*;
+			using ConstIterator = const Character*;
 
 			UI& m_UI;
 			FontAtlas& m_FontAtlas;
@@ -4466,7 +3991,7 @@ void main() {
 			}
 		};
 
-		typedef DynamicText::FragmentPushConstant TextFragmentPushConstant;
+		using TextFragmentPushConstant = DynamicText::FragmentPushConstant;
 
 		class StaticText {
 
@@ -4600,12 +4125,12 @@ void main() {
 		class Window {
 		public:
 
-			typedef bool (*Pipeline2DRenderCallback)(const Window& window, VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex);
+			using Pipeline2DRenderCallback = bool(*)(const Window& window, VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex);
 
 			class Button {
 			public:
 
-				typedef bool (*Pipeline2DRenderCallback)(const Button& button, VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex);
+				using Pipeline2DRenderCallback = bool(*)(const Button& button, VkDescriptorSet& outTextureDescriptor, uint32_t& outTextureIndex);
 		
 				const char* const m_StringID;
 				IntVec2 m_LocalPosition;
@@ -4745,7 +4270,7 @@ void main() {
 			}
 		};
 
-		typedef Window::Button Button;
+		using Button = Window::Button;
 
 		class Entity {
 
@@ -5357,10 +4882,276 @@ void main() {
 		}
 	};
 
+	class PhysicsManager {
+
+		friend class Engine;
+
+	public:
+
+		using ObjectLayer = JPH::ObjectLayer;
+		using BroadPhaseLayer = JPH::BroadPhaseLayer;
+		using uint = JPH::uint;
+		using Body = JPH::Body;
+
+		struct Layer {
+
+			static constexpr ObjectLayer NonMoving = 0;
+			static constexpr ObjectLayer Moving = 1;
+
+			static constexpr ObjectLayer Default = Moving;
+			static constexpr uint LayerCount = 2;
+
+			ObjectLayer m_Value;
+
+			constexpr Layer(ObjectLayer value = Layer::NonMoving) {
+				m_Value = value;
+			}
+
+			constexpr Layer& operator=(ObjectLayer value) {
+				m_Value = value;
+				return *this;
+			}
+
+			constexpr operator ObjectLayer() {
+				return m_Value;
+			}
+		};
+
+		struct BroadPhaseLayers {
+
+			static constexpr BroadPhaseLayer NonMoving { 0 };
+			static constexpr BroadPhaseLayer Moving { 1 };
+
+			static constexpr const BroadPhaseLayer& Default = Moving;
+			static constexpr uint LayerCount = 2;
+		};
+
+	private:
+
+		class Stack {
+		private:
+
+			const uint32_t c_Size;
+			uint32_t m_End;
+			uint8_t* m_Data;
+
+		public:
+
+			Stack(uint32_t size) : c_Size(size), m_End(0), m_Data(nullptr) {
+				assert(c_Size);
+				m_Data = (uint8_t*)malloc(c_Size);
+			}
+
+			~Stack() {
+				free(m_Data);
+				m_Data = nullptr;
+			}
+
+			template<typename T, typename... Args>
+			T* Allocate(Args&&... args) {
+				if (m_End + sizeof(T) > c_Size) {
+					PrintError(ErrorOrigin::OutOfMemory,
+						"stack was out of memory (in function PhysicsManager::Stack::Allocate)!");
+					return nullptr;
+				}
+				T* p = (T*)(m_Data + m_End);
+				new(p) T(std::forward<Args>(args)...);
+				m_End += sizeof(T);
+				return p;
+			}
+
+			void Clear() {
+				m_End = 0;
+			}
+		};
+
+		class JoltObjectLayerPairFilterImpl : public JPH::ObjectLayerPairFilter {
+		public:
+			virtual bool ShouldCollide(ObjectLayer a, ObjectLayer b) const override {
+				switch (a) {
+					case Layer::NonMoving:
+						return b == Layer::Moving;
+					case Layer::Moving:
+						return true;
+					default:
+						JPH_ASSERT(false);
+						return false;
+				}
+			}
+		};
+
+		class JoltBroadPhaseLayerInterfaceImpl : public JPH::BroadPhaseLayerInterface {
+		private:
+
+			BroadPhaseLayer m_ObjectToBroadPhase[Layer::LayerCount];
+
+		public:
+			
+			JoltBroadPhaseLayerInterfaceImpl() {
+				m_ObjectToBroadPhase[Layer::NonMoving] = BroadPhaseLayers::NonMoving;
+				m_ObjectToBroadPhase[Layer::Moving] = BroadPhaseLayers::Moving;
+			}
+
+			virtual uint GetNumBroadPhaseLayers() const override {
+				return BroadPhaseLayers::LayerCount;
+			}
+
+			virtual BroadPhaseLayer GetBroadPhaseLayer(ObjectLayer layer) const override {
+				JPH_ASSERT(layer < Layer::LayerCount);
+				return m_ObjectToBroadPhase[layer];
+			}
+
+#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
+			virtual const char* GetBroadPhaseLayerName(BroadPhaseLayer layer) const override {
+				switch ((BroadPhaseLayer::Type)layer) {
+					case (BroadPhaseLayer::Type)BroadPhaseLayers::NonMoving:
+						return "NonMoving";
+					case (BroadPhaseLayer::Type)BroadPhaseLayers::Moving:
+						return "Moving";
+					default:
+						JPH_ASSERT(false);
+						return "Invalid";
+				}
+			}
+#endif
+		};
+
+		class JoltObjectVsBroadPhaseFilterImpl : public JPH::ObjectVsBroadPhaseLayerFilter {
+			virtual bool ShouldCollide(ObjectLayer a, BroadPhaseLayer b) const override {
+				switch (a) {
+					case Layer::NonMoving:
+						return b == BroadPhaseLayers::Moving;
+					case Layer::Moving:
+						return true;
+					default:
+						JPH_ASSERT(false);
+						return false;
+				}
+			}
+		};
+
+		class GlobalJoltContactListener : public JPH::ContactListener {
+
+			using ContactManifold = JPH::ContactManifold;
+			using ContactSettings = JPH::ContactSettings;
+			using SubShapeIDPair = JPH::SubShapeIDPair;
+
+			virtual void OnContactAdded(const Body& a, const Body& b, const ContactManifold& manifold, ContactSettings& ioSettings) override {
+			}
+
+			virtual void OnContactPersisted(const Body& a, const Body& b, const ContactManifold& manifold, ContactSettings& ioSettings) override {
+			}
+
+			virtual void OnContactRemoved(const SubShapeIDPair& subShapeIDPair) override {
+			}
+		};
+
+		class GlobalJoltBodyActivationListener : public JPH::BodyActivationListener {
+		public:
+
+			using BodyID = JPH::BodyID;
+
+			virtual void OnBodyActivated(const BodyID& odyID, JPH::uint64 inBodyUserData) override {
+			}
+
+			virtual void OnBodyDeactivated(const BodyID& bodyID, JPH::uint64 inBodyUserData) override {
+			}
+		};
+
+		static void JoltTraceImpl(const char* fmt, ...) {
+			va_list list;
+			va_start(list, fmt);
+			char buf[1024];
+			vsnprintf(buf, sizeof(buf), fmt, list);
+			va_end(list);
+			fmt::print(fmt::emphasis::bold, "Jolt trace: {}\n", buf);
+		}
+
+		static bool JoltAssertFailedImpl(const char* expr, const char* msg, const char* file, JPH::uint line) {
+			fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
+				"{}:{}:\nAssertion failed ({})\n{}\n", file, line, expr, msg ? msg : "");
+			CriticalError(ErrorOrigin::Jolt, "Jolt assertion failed!");
+			return true;
+		}
+
+		JPH::JobSystemThreadPool* m_JobSystem;
+		JPH::PhysicsSystem* m_PhysicsSystem;
+		Stack m_Stack;
+		JPH::TempAllocatorImpl* m_TempAllocator;
+		JoltBroadPhaseLayerInterfaceImpl m_BroadPhaseLayerInterface{};
+		JoltObjectVsBroadPhaseFilterImpl m_ObjectVsBroadPhaseFilter{};
+		JoltObjectLayerPairFilterImpl m_ObjectLayerPairFilter{};
+		GlobalJoltContactListener m_GlobalContactListener{};
+		GlobalJoltBodyActivationListener m_GlobalBodyActivationListener{};
+		const uint c_MaxBodies;
+		const uint c_MaxBodyPairs;
+		const uint c_MaxContactConstraints;
+		float m_FrameTimer = 0.0f;
+		float m_FixedDeltaTime = 1.0f / 60.0f;
+		int m_CollisionSteps = 1;
+
+		PhysicsManager(uint maxBodies, uint maxBodyPairs, uint maxContactConstraints)
+			: m_Stack(65536), m_TempAllocator(nullptr), m_JobSystem(nullptr), m_PhysicsSystem(nullptr),
+				c_MaxBodies(maxBodies), c_MaxBodyPairs(maxBodyPairs), c_MaxContactConstraints(maxContactConstraints) {
+		}
+
+		void Initialize() {
+
+			using namespace JPH;
+
+			RegisterDefaultAllocator();
+
+			Trace = JoltTraceImpl;
+			JPH_IF_ENABLE_ASSERTS(AssertFailed = JoltAssertFailedImpl);
+
+			Factory::sInstance = m_Stack.Allocate<Factory>();
+
+			RegisterTypes();
+
+			m_TempAllocator = m_Stack.Allocate<TempAllocatorImpl>(10 * 1024 * 1024);
+
+			m_JobSystem = m_Stack.Allocate<JobSystemThreadPool>(cMaxPhysicsJobs, cMaxPhysicsBarriers, (int)std::thread::hardware_concurrency() - 1);
+
+			m_PhysicsSystem = m_Stack.Allocate<PhysicsSystem>();
+			m_PhysicsSystem->Init(c_MaxBodies, 0, c_MaxBodyPairs, c_MaxContactConstraints, m_BroadPhaseLayerInterface, m_ObjectVsBroadPhaseFilter, m_ObjectLayerPairFilter);
+
+			m_PhysicsSystem->SetContactListener(&m_GlobalContactListener);
+			m_PhysicsSystem->SetBodyActivationListener(&m_GlobalBodyActivationListener);
+		}
+
+		void Terminate() {
+			using namespace JPH;
+			UnregisterTypes();
+			Factory::sInstance->~Factory();
+			Factory::sInstance = nullptr;
+			m_Stack.Clear();
+			m_PhysicsSystem = nullptr;
+		}
+
+		bool PhysicsUpdate() {
+			using namespace JPH;
+			if (m_FrameTimer >= m_FixedDeltaTime) {
+				m_PhysicsSystem->Update(m_FixedDeltaTime, m_CollisionSteps, m_TempAllocator, m_JobSystem);
+				m_FrameTimer = 0.0f;
+				return true;
+			}
+			m_FrameTimer += Time::DeltaTime();
+			return false;
+		}
+
+	public:
+		
+		JPH::BodyInterface& GetBodyInterface() {
+			return m_PhysicsSystem->GetBodyInterface();
+		}
+	};
+
+	typedef PhysicsManager::Layer PhysicsLayer;
+
 	class World;
 
-	typedef uint64_t ObjectID;
-	typedef uint64_t RenderID;
+	using ObjectID = uint64_t;
+	using RenderID = uint64_t;
 
 	constexpr inline uint64_t Invalid_ID = UINT64_MAX;
 
@@ -5386,193 +5177,313 @@ void main() {
 		WorldRenderData(WorldRenderData&& other) noexcept = default;
 	};
 
-	class Obstacle {
+	class Body {
 
-		friend class World;
 		friend class Area;
-		friend class OrderedDictionary<ObjectID, Obstacle>;
+		friend class World;
+		friend class OrderedDictionary<ObjectID, Body>;
 
 	public:
 
-		struct CreateInfo {
-			Vec3 m_Position{};
-			float m_YRotation{};
-			Collider::CreateInfo m_ColliderInfo{};
+		enum class ColliderShape {
+			None = 0,
+			Sphere,
+			Box,
+			Capsule,
+			ConvexHull,
 		};
 
-		World& m_World;
+		struct SphereCreateInfo {
+			float m_Radius;
+		};
+
+		struct BoxCreateInfo {
+
+			Vec3 m_HalfExtent;
+			float m_ConvexRadius;
+		};
+
+		struct CapsuleCreateInfo {
+			float m_HalfHeight;
+			float m_Radius;
+		};
+
+		struct ConvexHullCreateInfo {
+			JPH::Vec3* m_Points;
+			uint32_t m_PointCount;
+			float m_MaxConvexRadius;
+		};
+
+		union ShapeCreateInfo_U {
+			SphereCreateInfo m_Sphere;
+			BoxCreateInfo m_Box;
+			CapsuleCreateInfo m_Capsule;
+			ConvexHullCreateInfo m_ConvexHull;
+		};
+
+		struct ColliderCreateInfo {
+			ColliderShape m_ColliderShape{};
+			ShapeCreateInfo_U u_ShapeCreateInfo{};
+		};
+
+	private:	
+	
+		union ShapeSettings_U {
+
+			int u_None{};
+			JPH::SphereShapeSettings m_Sphere;
+			JPH::BoxShapeSettings m_Box;
+			JPH::CapsuleShapeSettings m_Capsule;
+			JPH::ConvexHullShapeSettings m_ConvexHull;
+
+			ShapeSettings_U() : u_None(-1) {}
+
+			ShapeSettings_U(ShapeSettings_U&& other, ColliderShape shape) {
+				using namespace JPH;
+				switch (shape) {
+					using S = ColliderShape;
+					case S::None:
+						u_None = -1;
+						break;
+					case S::Sphere:
+						new(&m_Sphere) SphereShapeSettings(other.m_Sphere.mRadius, other.m_Sphere.mMaterial);
+						m_Sphere.SetDensity(other.m_Sphere.mDensity);
+						m_Sphere.mUserData = other.m_Sphere.mUserData;
+						m_Sphere.SetEmbedded();
+						break;
+					case S::Box:
+						new(&m_Box) BoxShapeSettings(other.m_Box.mHalfExtent, other.m_Box.mConvexRadius, other.m_Box.mMaterial);
+						m_Box.SetDensity(other.m_Box.mDensity);
+						m_Box.mUserData = other.m_Box.mUserData;
+						m_Box.SetEmbedded();
+						break;
+					case S::Capsule:
+						new(&m_Capsule) CapsuleShapeSettings(other.m_Capsule.mHalfHeightOfCylinder, other.m_Capsule.mRadius, other.m_Capsule.mMaterial);
+						m_Capsule.SetDensity(other.m_Capsule.mDensity);
+						m_Capsule.mUserData = other.m_Capsule.mUserData;
+						m_Capsule.SetEmbedded();
+						break;
+					case S::ConvexHull:
+						new(&m_ConvexHull) ConvexHullShapeSettings(other.m_ConvexHull.mPoints, other.m_ConvexHull.mMaxConvexRadius, other.m_ConvexHull.mMaterial);
+						m_ConvexHull.SetDensity(other.m_ConvexHull.mDensity);
+						m_ConvexHull.mUserData = other.m_ConvexHull.mUserData;
+						m_ConvexHull.SetEmbedded();
+						break;
+					default:
+						u_None = -1;
+						break;
+				}
+				other.Terminate(shape);
+			}
+
+			~ShapeSettings_U() {}
+
+			ColliderShape Init(const SphereCreateInfo& createInfo, const JPH::PhysicsMaterial* material) {
+				using namespace JPH;
+				new(&m_Sphere) SphereShapeSettings(createInfo.m_Radius, material);
+				m_Sphere.SetEmbedded();
+				return ColliderShape::Sphere;
+			}
+
+			ColliderShape Init(const BoxCreateInfo& createInfo, const JPH::PhysicsMaterial* material) {
+				using namespace JPH;
+				new(&m_Box) BoxShapeSettings(createInfo.m_HalfExtent, createInfo.m_ConvexRadius, material);
+				m_Box.SetEmbedded();
+				return ColliderShape::Box;
+			}
+
+			ColliderShape Init(const CapsuleCreateInfo& createInfo, const JPH::PhysicsMaterial* material) {
+				using namespace JPH;
+				new(&m_Capsule) CapsuleShapeSettings(createInfo.m_HalfHeight, createInfo.m_Radius, material);
+				m_Capsule.SetEmbedded();
+				return ColliderShape::Capsule;
+			}
+
+			ColliderShape Init(const ConvexHullCreateInfo& createInfo, const JPH::PhysicsMaterial* material) {
+				using namespace JPH;
+				assert(createInfo.m_Points);
+				new(&m_ConvexHull) ConvexHullShapeSettings(createInfo.m_Points, createInfo.m_PointCount, createInfo.m_MaxConvexRadius, material);
+				m_ConvexHull.SetEmbedded();
+				return ColliderShape::ConvexHull;
+			}
+
+			void Terminate(ColliderShape shape) {
+				switch (shape) {
+					using S = ColliderShape;
+					case S::None:
+						return;
+					case S::Sphere:
+						(&m_Sphere)->~SphereShapeSettings();
+						return;
+					case S::Box:
+						(&m_Box)->~BoxShapeSettings();
+						return;
+					case S::Capsule:
+						(&m_Capsule)->~CapsuleShapeSettings();
+						return;
+					case S::ConvexHull:
+						(&m_ConvexHull)->~ConvexHullShapeSettings();
+						return;
+				}
+			}
+		};
+
+		using CreationSettings = JPH::BodyCreationSettings;
+
 		Area& m_Area;
+		PhysicsManager& m_PhysicsManager;
 
 		String m_Name;
-
-	private:
-
-		Vec3 m_Position;
-		float m_YRotation;
-		Vec3 m_Velocity;
-		Collider m_Collider;
-
+	
+		Vec3 m_Position{};
+		Quaternion m_Rotation{};
 		Mat4 m_Transform;
 		OrderedDictionary<RenderID, Mat4> m_RenderDataTransforms{};
 
-		Obstacle(World& world, Area& area, const char* name, const CreateInfo& info) noexcept 
-			: m_World(world), m_Area(area), m_Name(name), m_Position(info.m_Position),
-				m_YRotation(info.m_YRotation), m_Collider(m_Position, m_YRotation, m_Velocity, info.m_ColliderInfo),
-				m_Transform(Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4()) {
-			m_Transform[3] = Vec4(m_Position, 1.0f);
-		}
+		JPH::BodyID m_BodyID{};
+		PhysicsLayer m_Layer = PhysicsLayer::Default;
+		ColliderShape m_ColliderShape;
+		ShapeSettings_U u_ShapeSettings;
 
-		Obstacle(const Obstacle&) = delete;
-
-		Obstacle(Obstacle&& other) noexcept 
-			: m_World(other.m_World), m_Area(other.m_Area), m_Name(std::move(other.m_Name)),
-				m_Position(other.m_Position), m_YRotation(other.m_YRotation), 
-				m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)),
-				m_Transform(other.m_Transform), m_RenderDataTransforms(std::move(other.m_RenderDataTransforms)) {}
-
-	public:
-
-		Box<float> GetBoundingBox() const {
-			return m_Collider.GetBoundingBox();
-		}
-
-		const Vec3& GetPosition() const {
-			return m_Position;
-		}
-
-		void SetPosition(const Vec3& position) {
-			m_Position = position;
+		Body(Area& area, PhysicsManager& physicsManager, const char* name, const Vec3& position, const Quaternion& rotation)
+			: m_Area(area), m_PhysicsManager(physicsManager),
+				m_Name(name), m_Position(position), m_Rotation(rotation),
+				m_ColliderShape(ColliderShape::None) {
 			UpdateTransforms();
 		}
 
-		float GetYRotation() const {
-			return m_YRotation;
-		}
+		Body(const Body&) = delete;
 
-		void SetRotation(float yRotation) {
-			m_YRotation = yRotation;
-			UpdateTransforms();
-		}
+		Body(Body&& other) noexcept
+			: m_Area(other.m_Area), m_PhysicsManager(other.m_PhysicsManager), 
+				m_Position(other.m_Position), m_Rotation(other.m_Rotation), m_Transform(other.m_Transform), 
+				m_RenderDataTransforms(std::move(other.m_RenderDataTransforms)),
+				m_BodyID(other.m_BodyID), m_ColliderShape(other.m_ColliderShape),
+				u_ShapeSettings(std::move(other.u_ShapeSettings), m_ColliderShape) {}
 
-		void Move(const Vec3& position) {
-			m_Position = position;
-			CheckCollisions();
-			UpdateTransforms();
-		}
-
-		void Rotate(float yRotation) {
-			m_YRotation = yRotation;
-			CheckCollisions();
-			UpdateTransforms();
-		}
-
-		void MoveAndRotate(const Vec3& position, float yRotation) {
-			m_Position = position;
-			m_YRotation = yRotation;
-			CheckCollisions();
-			UpdateTransforms();
-		}
-
-	private:
-
-		bool Collides(const Collider& collider, Vec3& outColliderPushBack) const {
-			return Collider::ColliderToStaticColliderCollides(collider, m_Collider, outColliderPushBack);
-		}
-
-		bool AddRenderDataTransform(RenderID ID, const Mat4& transform) {
-			bool res = m_RenderDataTransforms.Insert(ID, transform);
-			if (res) {
-				assert(UpdateRenderTransform(ID));
+		void Terminate() {
+			using namespace JPH;
+			u_ShapeSettings.Terminate(m_ColliderShape);
+			if (!m_BodyID.IsInvalid()) {
+				BodyInterface& interface = m_PhysicsManager.GetBodyInterface();
+				interface.RemoveBody(m_BodyID);
+				interface.DestroyBody(m_BodyID);
 			}
-			return res;
+			new(&m_BodyID) BodyID();
 		}
 
-		bool RemoveRenderDataTransform(RenderID ID) {
-			return m_RenderDataTransforms.Erase(ID);
+		bool PhysInitialize(PhysicsLayer layer, const ColliderCreateInfo& colliderInfo, const JPH::PhysicsMaterial* material) {
+			m_Layer = layer;
+			switch (colliderInfo.m_ColliderShape) {
+				using S = ColliderShape;
+				case S::None:
+					return false;
+				case S::Sphere:
+					return _PhysInitialize(colliderInfo.u_ShapeCreateInfo.m_Sphere, material);
+				case S::Box:
+					return _PhysInitialize(colliderInfo.u_ShapeCreateInfo.m_Box, material);
+				case S::Capsule:
+					return _PhysInitialize(colliderInfo.u_ShapeCreateInfo.m_Capsule, material);
+				case S::ConvexHull:
+					return _PhysInitialize(colliderInfo.u_ShapeCreateInfo.m_ConvexHull, material);
+			}
+			return false;
 		}
 
-		void CheckCollisions();
-		bool UpdateRenderTransform(RenderID ID);
-		void UpdateTransforms();
-	};
+		template<typename... Args>
+		bool _PhysInitialize(Args&&... shapeArgs) {
 
-	class RayTarget {
+			using namespace JPH;
 
-		friend class World;
-		friend class OrderedDictionary<ObjectID, RayTarget>;
+			EMotionType motionType = EMotionType::Static;
+			switch (m_Layer) {
+				case PhysicsLayer::NonMoving:
+					break;
+				case PhysicsLayer::Moving:
+					motionType = EMotionType::Dynamic;
+					break;
+				default:
+					assert(false);
+					return false;
+			}
+
+			m_ColliderShape = u_ShapeSettings.Init(std::forward<Args>(shapeArgs)...);
+			JPH::ShapeSettings::ShapeResult shapeRes{};
+			switch (m_ColliderShape) {
+				using S = ColliderShape;
+				case S::None:
+					assert(false);
+					return false;
+				case S::Sphere:
+					shapeRes = u_ShapeSettings.m_Sphere.Create();
+					break;
+				case S::Box:
+					shapeRes = u_ShapeSettings.m_Box.Create();
+					break;
+				case S::Capsule:
+					shapeRes = u_ShapeSettings.m_Capsule.Create();
+					break;
+				case S::ConvexHull:
+					shapeRes = u_ShapeSettings.m_ConvexHull.Create();
+					break;
+			}
+
+			if (shapeRes.HasError()) {
+				PrintError(ErrorOrigin::Jolt,
+					"failed to create shape (function JPH::ShapeSettings::Create in function Body::Initialize)!", VK_SUCCESS, shapeRes.GetError().c_str());
+				return false;
+			}
+			JPH::ShapeRefC shape = shapeRes.Get();
+			BodyCreationSettings settings(shape, m_Position, m_Rotation, motionType, m_Layer);
+			m_BodyID = m_PhysicsManager.GetBodyInterface().CreateAndAddBody(settings, EActivation::Activate);
+			return !m_BodyID.IsInvalid();
+		}
 
 	public:
-		
-		struct CreateInfo {
-			const LogicMesh& m_LogicMesh;
-			Mat4 m_Transform;
-		};
 
-		World& m_World;
-
-	private:
-
-		LogicMesh m_LogicMesh;
-		Vec3 m_Position;
-		Quaternion m_Rotation;
-		Vec3 m_Scale;
-		Mat4 m_Transform;
-		OrderedDictionary<RenderID, Mat4> m_RenderDataTransforms{};
-
-		RayTarget(World& world, const CreateInfo& createInfo) 
-			: m_World(world), m_LogicMesh(createInfo.m_LogicMesh), m_Transform(createInfo.m_Transform) {
-				m_LogicMesh.UpdateTransform(m_Transform);
+		const String& GetName() const {
+			return m_Name;
 		}
-		
-		RayTarget(const RayTarget &) = delete;
-		RayTarget(RayTarget&&) = default;
 
-	public:
+		bool IsActive() {
+			return m_PhysicsManager.GetBodyInterface().IsActive(m_BodyID);
+		}
 
-		const Vec3& GetPosition() const {
+		Vec3 GetPosition() const {
 			return m_Position;
 		}
 
 		void SetPosition(const Vec3& position) {
 			m_Position = position;
-			UpdateRenderTransforms();
-			m_LogicMesh.UpdateTransform(m_Transform);
+			if (!m_BodyID.IsInvalid()) {
+				m_PhysicsManager.GetBodyInterface().SetPosition(m_BodyID, m_Position, JPH::EActivation::Activate);
+			}
+			UpdateTransforms();
 		}
 
-		const Quaternion& GetRotation() const {
+		Quaternion GetRotation() const {
 			return m_Rotation;
 		}
 
 		void SetRotation(const Quaternion& rotation) {
 			m_Rotation = rotation;
-			UpdateRenderTransforms();
-			m_LogicMesh.UpdateTransform(m_Transform);
+			if (!m_BodyID.IsInvalid()) {
+				m_PhysicsManager.GetBodyInterface().SetRotation(m_BodyID, m_Rotation, JPH::EActivation::Activate);
+			}
+			UpdateTransforms();
 		}
 
-		const Vec3& GetScale() const {
-			return m_Scale;
-		}
-
-		void SetScale(const Vec3& scale) {
-			m_Scale = scale;
-			UpdateRenderTransforms();
-			m_LogicMesh.UpdateTransform(m_Transform);
-		}
-
-		bool AABBCheck(const Vec3& position) const {
-			return m_LogicMesh.AABBCheck(position);
-		}
-
-		bool AABBCheck(const Ray& ray) const {
-			return m_LogicMesh.AABBCheck(ray);
+		void SetPositionAndRotation(const Vec3& position, const Quaternion& rotation) {
+			m_Position = position;
+			m_Rotation = rotation;
+			if (!m_BodyID.IsInvalid()) {
+				m_PhysicsManager.GetBodyInterface().SetPositionAndRotation(m_BodyID, m_Position, m_Rotation, JPH::EActivation::Activate);
+			}
+			UpdateTransforms();
 		}
 
 		Box<float> GetBoundingBox() const {
-			return m_LogicMesh.GetBoundingBox();
-		}
-
-		bool RayCheck(const Ray& ray, RayHitInfo& outHitInfo) const {
-			return m_LogicMesh.IsRayHit(ray, outHitInfo);
+			return {};
 		}
 
 	private:
@@ -5580,17 +5491,27 @@ void main() {
 		bool AddRenderDataTransform(RenderID ID, const Mat4& transform) {
 			bool res = m_RenderDataTransforms.Insert(ID, transform);
 			if (res) {
-				assert(UpdateRenderTransform(ID));
+				bool a = UpdateRenderTransform(ID);
+				assert(a);
 			}
 			return res;
 		}
 
-		bool UpdateRenderTransform(RenderID ID);
-		void UpdateRenderTransforms();
-
 		bool RemoveRenderData(RenderID ID) {
 			return m_RenderDataTransforms.Erase(ID);
 		}
+
+		void FixedUpdate() {
+			using namespace JPH;
+			assert(!m_BodyID.IsInvalid());
+			BodyInterface& bodyInterface = m_PhysicsManager.GetBodyInterface();
+			m_Position = bodyInterface.GetPosition(m_BodyID);
+			m_Rotation = bodyInterface.GetRotation(m_BodyID);
+			UpdateTransforms();
+		}
+
+		bool UpdateRenderTransform(RenderID ID);
+		void UpdateTransforms();
 	};
 
 	enum AreaFlagBits {
@@ -5603,7 +5524,6 @@ void main() {
 
 		friend class World;
 		friend class Editor;
-		friend class Obstacle;
 
 		friend class OrderedDictionary<ObjectID, Area>;
 
@@ -5611,146 +5531,28 @@ void main() {
 
 		World& m_World;
 
+		ObjectID AddBody(const char* name, const Vec3& body, const Quaternion& rotation, PhysicsLayer physicsLayer,
+			const Body::ColliderCreateInfo& colliderInfo, const JPH::PhysicsMaterial* physicsMaterial);
+		bool RemoveBody(ObjectID ID);
+
+		Body* GetBody(ObjectID ID) {
+			return m_Bodies.Find(ID);
+		}
+
 	private:
 
-		Box<float> m_BoundingBox{};
-		OrderedDictionary<ObjectID, Obstacle> m_Obstacles{};
-		OrderedDictionary<ObjectID, RayTarget> m_RayTargets{};
-		OrderedArray<ObjectID> m_Bodies{};
+		OrderedDictionary<ObjectID, Body> m_Bodies{};
 		
 		Area(World& world, AreaFlags flags) noexcept
 			: m_World(world) {}
 
-		void UpdateBoundingBox(const Box<float>& subBoundingBox) {
-			for (uint32_t i = 0; i < 3; i++) {
-				m_BoundingBox.m_Min[i] = Min(subBoundingBox.m_Min[i], m_BoundingBox.m_Min[i]);
-				m_BoundingBox.m_Max[i] = Max(subBoundingBox.m_Max[i], m_BoundingBox.m_Max[i]);
+		void Terminate() {
+			for (Body& body : m_Bodies) {
+				body.Terminate();
 			}
+			m_Bodies.Clear();
 		}
-
-	public:
-
-		ObjectID AddObstacle(const char* name, const Obstacle::CreateInfo& info);
-		ObjectID AddRayTarget(const RayTarget::CreateInfo& info);
-
-		Obstacle* GetObstacle(ObjectID ID) {
-			return m_Obstacles.Find(ID);
-		}
-
-		RayTarget* GetRayTarget(ObjectID ID) {
-			return m_RayTargets.Find(ID);
-		}
-
-		bool IsPointInside(const Vec3& point) const {
-			return m_BoundingBox.IsPointInside(Vec2(point.x, point.z));
-		}
-
-		const bool CastRay(const Ray& ray, RayHitInfo& outInfo) const {
-			float min_distance = float_max;
-			for (const RayTarget& target : m_RayTargets) {
-				if (target.AABBCheck(ray)) {
-					RayHitInfo hitInfo;
-					if (target.RayCheck(ray, hitInfo) && min_distance > hitInfo.m_Distance) {
-						min_distance = hitInfo.m_Distance;
-						outInfo = hitInfo;
-					}
-				}
-			}
-			return min_distance <= outInfo.m_Distance;
-		}
-
-		const bool CollisionCheck(Collider& collider, Vec3& outPushBack) const {
-			for (const Obstacle& obstacle : m_Obstacles) {
-				if (Collider::ColliderToStaticColliderCollides(collider, obstacle.m_Collider, outPushBack)) {
-					return true;
-				}
-			}
-			return false;
-		}
-
-	private:
-		
-		void CheckCollisions(const Obstacle& obstacle) const;
-	};
-
-	class Body {
-
-		friend class World;
-		friend class OrderedDictionary<ObjectID, Body>;
-
-	public:	
-
-		World& m_World;
-
-	private:
-
-		ObjectID m_AreaID;
-		Vec3 m_Position;
-		Vec3 m_Velocity;
-		float m_YRotation;
-		float m_Height;
-		Collider m_Collider;
-
-		Mat4 m_Transform;
-		OrderedDictionary<RenderID, Mat4> m_RenderDataTransforms{};
-
-		Body(World& world, const Vec3& position, float height, ObjectID areaID, const Collider::CreateInfo& colliderInfo)
-			: m_World(world), m_AreaID(areaID), m_Position(position), m_Velocity(0),
-				m_YRotation(0), m_Height(height), m_Collider(m_Position, m_YRotation, m_Velocity, colliderInfo),
-				m_Transform(Quaternion::AxisRotation(Vec3::Up(), m_YRotation).AsMat4()) {}
-
-		Body(const Body&) = delete;
-
-		Body(Body&& other) noexcept 
-			: m_World(other.m_World), m_AreaID(other.m_AreaID), m_Position(other.m_Position), m_YRotation(other.m_YRotation),
-				m_Velocity(other.m_Velocity), m_Collider(m_Position, m_YRotation, m_Velocity, std::move(other.m_Collider)),
-				m_Transform(other.m_Transform), m_RenderDataTransforms(std::move(other.m_RenderDataTransforms)) {}
-
-	public:	
-
-		const Vec3& GetPosition() const {
-			return m_Position;
-		}
-
-		void SetPosition(const Vec3& position) {
-			m_Position = position;
-			UpdateTransforms();
-		}
-
-		float GetYRotation() const {
-			return m_YRotation;
-		}
-
-		void SetRotation(float yRotation) {
-			m_YRotation = yRotation;
-			UpdateTransforms();
-		}
-
-		void Move(const Vec3& position);
-		void Rotate(float yRotation);
-		void MoveAndRotate(const Vec3& position, float yRotation);
-
-		const Collider& GetCollider()  const {
-			return m_Collider;
-		}
-
-	private:
-
-		bool AddRenderDataTransform(RenderID ID, const Mat4& transform) {
-			bool res = m_RenderDataTransforms.Insert(ID, transform);
-			if (res) {
-				assert(UpdateRenderTransform(ID));
-			}
-			return res;
-		}
-
-		bool RemoveRenderData(RenderID ID) {
-			return m_RenderDataTransforms.Erase(ID);
-		}
-
-		bool UpdateRenderTransform(RenderID ID);
-		void UpdateTransforms();
-	};
+	};	
 
 	class UnidirectionalLight {
 
@@ -6207,6 +6009,7 @@ void main() {
 	public:
 
 		AssetManager& m_AssetManager;
+		PhysicsManager& m_PhysicsManager;
 		Renderer& m_Renderer;
 
 	private:
@@ -6218,7 +6021,6 @@ void main() {
 		VkDescriptorSet m_NullTextureDescriptorSet = VK_NULL_HANDLE;
 		DynamicArray<Entity*> m_Entities{};
 		OrderedDictionary<ObjectID, Area> m_Areas{};
-		OrderedDictionary<ObjectID, Body> m_Bodies{};
 		float m_EditorCameraSensitivity = pi / 2;
 		float m_EditorCameraSpeed = 5.0f;
 		static constexpr float editor_min_camera_speed = 1.0f;
@@ -6259,8 +6061,9 @@ void main() {
 		StaticTexture m_DefaultAlbedoTexture;
 		VkImageView m_DefaultAlbedoImageView = VK_NULL_HANDLE;
 
-		World(AssetManager& assetManager, Renderer& renderer) 
-			: m_AssetManager(assetManager), m_Renderer(renderer), m_DirectionalLight(*this, m_NextObjectID++, UnidirectionalLight::Type::Directional, { 1024, 1024 }), 
+		World(AssetManager& assetManager, PhysicsManager& physicsManager, Renderer& renderer) 
+			: m_AssetManager(assetManager), m_Renderer(renderer), m_PhysicsManager(physicsManager),
+				m_DirectionalLight(*this, m_NextObjectID++, UnidirectionalLight::Type::Directional, { 1024, 1024 }),
 				m_CameraMatricesBuffer(m_Renderer), m_DefaultAlbedoTexture(m_Renderer) {}
 
 		World(const World&) = delete;
@@ -6269,6 +6072,9 @@ void main() {
 		void Initialize(const StaticMesh& quadMesh2D);
 
 		void Terminate() {
+			for (Area& area : m_Areas) {
+				area.Terminate();
+			}
 			m_CameraMatricesBuffer.Terminate();
 			m_Renderer.DestroyDescriptorPool(m_CameraMatricesDescriptorPool);
 			m_Renderer.DestroyDescriptorPool(m_RenderPBRImagesDescriptorPool);
@@ -6314,10 +6120,6 @@ void main() {
 			return m_Areas.Find(ID);
 		}
 
-		Body* GetBody(ObjectID ID) {
-			return m_Bodies.Find(ID);
-		}
-
 		Entity* AddEntity(Entity* entity) {
 			assert(entity);
 			m_Entities.PushBack(entity);
@@ -6339,27 +6141,6 @@ void main() {
 				return true;
 			}
 			return false;
-		}
-
-		uint64_t AddBody(const Vec3& position, float height, const Collider::CreateInfo& colliderInfo) {
-			const ObjectID* areaIDs = m_Areas.GetKeys();
-			Area* areas = m_Areas.GetValues();
-			uint32_t areaCount = m_Areas.Size();
-			for (uint32_t i = 0; i < areaCount; i++) {
-				Area& area = areas[i];
-				if (area.IsPointInside(position)) {
-					Body* body = m_Bodies.Emplace(m_NextObjectID, *this, position, height, areaIDs[i], colliderInfo);
-					assert(body);
-					return m_NextObjectID++;
-				}
-			}
-			Body* body = m_Bodies.Emplace(m_NextObjectID, *this, position, height, Invalid_ID, colliderInfo);
-			assert(body);
-			return m_NextObjectID++;
-		}
-
-		bool RemoveBody(uint64_t ID) {
-			return m_Bodies.Erase(ID);
 		}
 
 		bool CreateTextureMap(const StaticTexture& texture, TextureMap& out) const {
@@ -6401,24 +6182,10 @@ void main() {
 			m_Renderer.DestroyImageView(map.m_ImageView);
 		}
 
-		RenderID AddRenderData(WorldRenderDataFlags flags, Body& body,
-				const Mat4& transform, const MeshData& meshData) {
+		RenderID AddRenderData(WorldRenderDataFlags flags, Body& body, const Mat4& transform, const MeshData& meshData) {
 			m_RenderDatas.Emplace(m_NextRenderID, flags, transform, meshData);
-			assert(body.AddRenderDataTransform(m_NextRenderID, transform));
-			return m_NextRenderID++;
-		}
-
-		RenderID AddRenderData(WorldRenderDataFlags flags, RayTarget& rayTarget,
-				const Mat4& transform, const MeshData& meshData) {
-			m_RenderDatas.Emplace(m_NextRenderID, flags, transform, meshData);
-			assert(rayTarget.AddRenderDataTransform(m_NextRenderID, transform));
-			return m_NextRenderID++;
-		}
-		
-		RenderID AddRenderData(WorldRenderDataFlags flags, Obstacle& obstacle,
-				const Mat4& transform, const MeshData& meshData) {
-			m_RenderDatas.Emplace(m_NextRenderID, flags, transform, meshData);
-			assert(obstacle.AddRenderDataTransform(m_NextRenderID, transform));
+			bool a = body.AddRenderDataTransform(m_NextRenderID, transform);
+			assert(a);
 			return m_NextRenderID++;
 		}
 
@@ -6435,6 +6202,16 @@ void main() {
 		void LogicUpdate() {
 			for (Entity* entity : m_Entities) {
 				entity->Update(*this);
+			}
+		}
+
+		void FixedUpdate() {
+			for (Area& area : m_Areas) {
+				for (Body& body : area.m_Bodies) {
+					if (body.IsActive()) {
+						body.FixedUpdate();
+					}
+				}
 			}
 		}
 
@@ -6784,84 +6561,6 @@ void main() {
 			}
 		}
 
-		bool LoadObstacle(Area& area, FILE* fileStream) {
-			String name(fileStream);
-			float transform[7];
-			int res = fread(transform, sizeof(float), 7, fileStream);
-			Obstacle::CreateInfo createInfo{};
-			if (res != 7) {
-				PrintError(ErrorOrigin::FileParsing, 
-					"failed to parse obstacle (function fread in function World::LoadObstacle)!");
-				return false;
-			}
-			if (!Collider::CreateInfo::FromFile(fileStream, createInfo.m_ColliderInfo)) {
-				PrintError(ErrorOrigin::FileParsing, 
-					"failed to parse collider for obstacle (in function Collider::CreateInfo::FromFile in function World::LoadObstacle)!");
-				return false;
-			}
-			uint64_t ID = area.AddObstacle(name.CString(), createInfo);
-			Obstacle* obstacle = area.m_Obstacles.Find(ID);
-			assert(obstacle);
-			while (true) {
-				char c = FileHandler::Skip(fileStream, Array<char, 2> { '}', '{' });
-				if (c == EOF) {
-					PrintError(ErrorOrigin::FileParsing, 
-						"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
-					return false;
-
-				}
-				if (c == '{') {
-					while (true) {
-						if (c == EOF) {
-							PrintError(ErrorOrigin::FileParsing, 
-								"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
-							return false;
-						}
-						if (FileHandler::Skip(fileStream, Array<char, 2> { '\n', ' ' }) == EOF) {
-							PrintError(ErrorOrigin::FileParsing, 
-								"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
-							return false;
-						}
-						char buf[3];
-						buf[0] = fgetc(fileStream);
-						buf[1] = fgetc(fileStream);
-						buf[2] = '\0';
-						if (!strcmp(buf, "SM")) {
-							MeshData meshData;
-							Mat4 transform;
-							if (FileHandler::SkipLine(fileStream) == EOF) {
-								PrintError(ErrorOrigin::FileParsing, 
-									"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
-								return false;
-							}
-							String line{};
-							if (FileHandler::GetLine(fileStream, line) == EOF) {
-								PrintError(ErrorOrigin::FileParsing,
-									"missing '}' when parsing obstacle (in function World::LoadObstacle)!");
-								return false;
-							}
-							if (!m_AssetManager.LoadAsset(line, meshData)) {
-								PrintError(ErrorOrigin::FileParsing,
-									"failed to load mesh for obstacle (function AssetManager::LoadAsset in function World::LoadObstacle)!");
-								return false;
-							}
-							if (fscanf(fileStream, "%f%f%f%f %f%f%f%f %f%f%f%f %f%f%f%f",
-									&transform[0][0], &transform[0][1], &transform[0][2], &transform[0][3],
-									&transform[1][0], &transform[1][1], &transform[1][2], &transform[1][3],
-									&transform[2][0], &transform[2][1], &transform[2][2], &transform[2][3],
-									&transform[3][0], &transform[3][1], &transform[3][2], &transform[3][3])
-									!= 16) {
-								PrintError(ErrorOrigin::FileParsing, 
-									"failed to parse transform (function fscanf in function World::LoadObstacle)!");
-							}
-							AddRenderData(0, *obstacle, transform, meshData);
-						}
-					}	
-				}
-			}
-			return true;
-		}
-
 		ObjectID LoadArea(FILE* fileStream) {
 			if (!fileStream) {
 				PrintError(ErrorOrigin::FileParsing, 
@@ -6880,15 +6579,6 @@ void main() {
 				char c;
 				if (fread(&c, sizeof(char), 1, fileStream) != 1) {
 					break;
-				}
-				switch (c) {
-					case 'O':
-						LoadObstacle(*area, fileStream);
-						break;
-					case 'R':
-						break;
-					default:
-						continue;
 				}
 			}
 			return m_NextObjectID - 1;
@@ -6940,80 +6630,22 @@ void main() {
 
 		struct SerializedObject {
 
-			enum class Type {
-				None = 0,
-				Body = 1,
-				Obstacle = 2,
-				RayTarget = 3,
-			};
-
 			ObjectID m_ObjectID;
 			ObjectID m_AreaID;
-			Type m_Type;
 
 			bool Rotate(World& world, uint32_t axis, float amount) const {
-				switch (m_Type) {
-					case Type::None:
-						return false;
-					case Type::Body:
-						return RotateBody(world, axis, amount);
-					case Type::Obstacle:
-						return RotateObstacle(world, axis, amount);
-					case Type::RayTarget:
-						return true;
-				}
+				return RotateBody(world, axis, amount);
 			}
 
 			bool RotateBody(World& world, uint32_t axis, float amount) const {
-				if (axis != 1) {
-					return false;
-				}
-				Body* body = world.GetBody(m_ObjectID);
+				Area* area = world.GetArea(m_AreaID);
+				Body* body = area->GetBody(m_ObjectID);
 				if (!body) {
 					PrintError(ErrorOrigin::Editor,
 						"couldn't find body (function World::GetBody in function Editor::SerializedObject::RotateBody)!");
 					return false;
 				}
-				float rot = body->GetYRotation();
-				body->SetRotation(rot + amount);
-				return true;
-			}
-
-			bool RotateObstacle(World& world, uint32_t axis, float amount) const {
-				if (axis != 1) {
-					return false;
-				}
-				Area* area = world.GetArea(m_AreaID);
-				if (!area) {
-					PrintError(ErrorOrigin::Editor,
-						"couldn't find area (function World::GetArea in function Editor::SerializedObject::RotateObstacle)!");
-					return false;
-				}
-				Obstacle* obstacle = area->GetObstacle(m_ObjectID);
-				if (!obstacle) {
-					PrintError(ErrorOrigin::Editor,
-						"couldn't find obstacle (function Area::GetObstacle in function Editor::SerializedObject::RotateObstacle)!");
-					return false;
-				}
-				float rot = obstacle->GetYRotation();
-				obstacle->SetRotation(rot + amount);
-				return true;
-			}
-
-			bool RotateRayTarget(World& world, uint32_t axis, float amount) const {
-				Area* area = world.GetArea(m_AreaID);
-				if (!area) {
-					PrintError(ErrorOrigin::Editor,
-						"couldn't find area (function World::GetArea in function Editor::SerializedObject::RotateObstacle)!");
-					return false;
-				}
-				RayTarget* rayTarget = area->GetRayTarget(m_ObjectID);
-				if (!rayTarget) {
-					PrintError(ErrorOrigin::Editor,
-						"couldn't find ray target (function Area::GetRayTarget in function Editor::SerializedObject::RotateRayTarget)!");
-					return false;
-				}
-				Quaternion rot = rayTarget->GetRotation();
+				Quaternion rot = body->GetRotation();
 				switch (axis) {
 					case 1:
 						rot = rot * Quaternion::AxisRotation(Vec3::Right(), amount);
@@ -7027,7 +6659,7 @@ void main() {
 					default:
 						return false;
 				}
-				rayTarget->SetRotation(rot);
+				body->SetRotation(rot);
 				return true;
 			}
 		};
@@ -7292,19 +6924,20 @@ void main() {
 						Area& area = *pArea;
 						ImGuiStyle& style = ImGui::GetStyle();
 						bool buttonActive = false;
-						if (ImGui::CollapsingHeader("Obstacles", ImGuiTreeNodeFlags_DefaultOpen)) {
+						if (ImGui::CollapsingHeader("Bodies", ImGuiTreeNodeFlags_DefaultOpen)) {
 
 							uint32_t index = 0;
 
-							const ObjectID* IDs = area.m_Obstacles.GetKeys();
-							Obstacle* obstacles = area.m_Obstacles.GetValues();
-							uint32_t obstacleCount = area.m_Obstacles.Size();
+							const ObjectID* IDs = area.m_Bodies.GetKeys();
+							Body* bodies = area.m_Bodies.GetValues();
+							uint32_t bodyCount = area.m_Bodies.Size();
 
-							for (uint32_t i = 0; i < obstacleCount; i++) {
-								Obstacle& obstacle = obstacles[i];
+							for (uint32_t i = 0; i < bodyCount; i++) {
+								Body& body = bodies[i];
 								ObjectID ID = IDs[i];
 								ImGui::SetCursorPosX(style.ItemSpacing.x);
 								if (m_SelectedObjectIndex == index) {
+									/*
 									Box<float> boundingBox = obstacle.GetBoundingBox();
 									Vec3 dimensions = boundingBox.Dimensions();
 									Vec3 obstaclePos = obstacle.GetPosition();
@@ -7315,20 +6948,23 @@ void main() {
 									transform[3] = Vec4(obstaclePos, 1.0f);
 									m_World.RenderWireMesh(m_CubeMeshData, transform, m_WireColor);
 									ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonHovered]);
-									if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(ID)).CString())) {
-										Vec3 offset = Vec3(0.0f, boundingBox.m_Max.y + dimensions.y, boundingBox.m_Min.z - dimensions.z);
-										m_World.m_EditorCameraPosition = obstaclePos + offset;
+									*/
+									if (ImGui::Button((body.GetName() + ", ID : " + IntToString(ID)).CString())) {
+										//Vec3 offset = Vec3(0.0f, boundingBox.m_Max.y + dimensions.y, boundingBox.m_Min.z - dimensions.z);
+										Vec3 pos = body.GetPosition();
+										Vec3 offset = Vec3(0.0f, 5.0f, -5.0f);
+										m_World.m_EditorCameraPosition = pos + offset;
 										m_World.m_EditorCameraPosition.y *= -1;
-										Vec3 forward = obstaclePos - m_World.m_EditorCameraPosition;
+										Vec3 forward = pos - m_World.m_EditorCameraPosition;
 										m_World.m_EditorCameraRotations = Vec2(-AngleBetween(Vec3::Forward(), forward), 0.0f);
 										m_World.UpdateEditorCamera();
 									}
 									else if (ImGui::IsItemActive()) {
 										buttonActive = true;
 									}
-									ImGui::PopStyleColor();
+									//ImGui::PopStyleColor();
 								}
-								else if (ImGui::Button((obstacle.m_Name + ", ID : " + IntToString(ID)).CString())) {
+								else if (ImGui::Button((body.GetName() + ", ID : " + IntToString(ID)).CString())) {
 									m_SelectedObjectIndex = index;
 								}
 								else if (ImGui::IsItemActive()) {
@@ -7489,48 +7125,7 @@ void main() {
 				vkCmdEndRendering(drawData.m_CommandBuffer);
 			}
 		}
-	};
-
-	class PhysicsEngine {
-	public:
-
-		class PhysXErrorCallback : public physx::PxErrorCallback {
-			void reportError(physx::PxErrorCode::Enum code, const char* message, const char* file, int line) {
-				PrintError(ErrorOrigin::PhysX, message, VK_SUCCESS, code);
-			}
-		};
-
-		physx::PxDefaultAllocator m_AllocatorCallbackPx{};
-		PhysXErrorCallback m_ErrorCallbackPx{};
-		physx::PxFoundation* m_FoundationPx = nullptr;
-		physx::PxPhysics* m_PhysicsPx = nullptr;
-
-		void Initialize() {
-
-			m_FoundationPx = PxCreateFoundation(PX_PHYSICS_VERSION, m_AllocatorCallbackPx, m_ErrorCallbackPx);
-			if (!m_FoundationPx) {
-				CriticalError(ErrorOrigin::PhysX,
-					"failed to create PhysX foundation (function PxCreateFoundation in function PhysicsEngine::Initialize)!");
-			}
-
-			m_PhysicsPx = PxCreatePhysics(PX_PHYSICS_VERSION, *m_FoundationPx, physx::PxTolerancesScale(), true);
-			if (!m_PhysicsPx) {
-				CriticalError(ErrorOrigin::PhysX,
-					"failed to create PhysX physics object (function PxCreatePhysics in function PhysicsEngine::Initialize)!");
-			}
-
-			if (!PxInitExtensions(*m_PhysicsPx, nullptr)) {
-				CriticalError(ErrorOrigin::PhysX,
-					"failed to init PhysX extensions (function PxInitExtensions in function PhysicsEngine::Initialize)!");
-			}
-		}
-
-		void Terminate() {
-			PxCloseExtensions();
-			m_PhysicsPx->release();
-			m_FoundationPx->release();
-		}
-	};
+	};	
 
 	enum EngineModeBits {
 		EngineMode_Initialized = 1,
@@ -7543,7 +7138,7 @@ void main() {
 
 	class Engine {
 
-		friend void CriticalError(ErrorOrigin origin, const char* err, VkResult vkErr, physx::PxErrorCode::Enum physxErr);
+		friend void CriticalError(ErrorOrigin origin, const char* err, VkResult vkErr, const char* libErr);
 
 	private:
 	
@@ -7554,7 +7149,7 @@ void main() {
 
 		UI m_UI;
 		World m_World;
-		PhysicsEngine m_PhysicsEngine;
+		PhysicsManager m_PhysicsManager;
 		Editor m_Editor;
 		Renderer m_Renderer;
 		TextRenderer m_TextRenderer;
@@ -7753,8 +7348,8 @@ void main() {
 		Engine(EngineMode mode, const String& projectName, GLFWwindow* glfwWindow, size_t maxUIWindows) :
 				m_Mode(UpdateEngineInstance(this, mode)),
 				m_UI(m_Renderer, m_TextRenderer, maxUIWindows),
-				m_World(m_AssetManager, m_Renderer),
-				m_PhysicsEngine(),
+				m_World(m_AssetManager, m_PhysicsManager, m_Renderer),
+				m_PhysicsManager(65536, 65536, 10240),
 				m_Renderer(projectName.CString(), VK_MAKE_API_VERSION(0, 1, 0, 0), glfwWindow, RendererCriticalErrorCallback, SwapchainCreateCallback),
 				m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
 				m_AssetManager(projectName, m_Renderer),
@@ -7800,7 +7395,7 @@ void main() {
 			}
 
 			m_World.Initialize(m_StaticQuadMesh2D);
-			m_PhysicsEngine.Initialize();
+			m_PhysicsManager.Initialize();
 			m_UI.Initialize(m_StaticQuadMesh2D);
 			m_Editor.Initialize(glfwWindow, m_StaticBoxMesh.GetMeshData(), m_StaticQuadMesh2D.GetMeshData());
 		}
@@ -7815,7 +7410,7 @@ void main() {
 			m_StaticBoxMesh.Terminate();
 			m_UI.Terminate();
 			m_Editor.Terminate();
-			m_PhysicsEngine.Terminate();
+			m_PhysicsManager.Terminate();
 			m_Renderer.DestroySampler(FontAtlas::s_Sampler);
 			m_Renderer.Terminate();
 			s_engine_instance = nullptr;
@@ -7884,6 +7479,10 @@ void main() {
 			glfwPollEvents();
 
 			bool editorMode = m_Mode & EngineMode_Editor;
+
+			if (m_PhysicsManager.PhysicsUpdate()) {
+				m_World.FixedUpdate();
+			}
 
 			if (m_Mode & EngineMode_Play) {
 				m_World.LogicUpdate();
