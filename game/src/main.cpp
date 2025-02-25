@@ -159,8 +159,22 @@ int main() {
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
+	Obj torus{};
+	FILE* torusFs = fopen("resources\\meshes\\torus.obj", "r");
+	if (!torusFs) {
+		CriticalError(ErrorOrigin::Engine,
+			"failed to open torus obj file!");
+	}
+	bool torusLoaded = torus.Load(torusFs);
+	fclose(torusFs);
+	if (!torusLoaded) {
+		CriticalError(ErrorOrigin::Engine,
+			"failed to load torus obj file!");
+	}
+	Engine::SetTorusObj(torus);
+
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
-	Engine engine(engine::EngineMode_Editor, "Test", pWindow, 1000);
+	Engine engine(EngineState_Editor | EngineState_EditorView, "Test", pWindow, 1000);
 
 	Renderer& renderer = engine.GetRenderer();
 	TextRenderer textRenderer = engine.GetTextRenderer();
@@ -205,47 +219,48 @@ int main() {
 	Area* pArea = world.GetArea(areaID);
 	Area& area = *pArea;
 
-	StaticMesh cubeMesh(renderer);
-	Array<Vertex, Engine::GetBoxVertexCount()> cubeVertices;
-	Array<uint32_t, Engine::GetBoxIndexCount()> cubeIndices;
-	Engine::GetBoxMesh(cubeVertices, cubeIndices);
-	cubeMesh.CreateBuffers(cubeVertices.Size(), cubeVertices.Data(), cubeIndices.Size(), cubeIndices.Data());
+	Obj sphere{};
+	FILE* fs = fopen("resources\\meshes\\sphere.obj", "r");
+	sphere.Load(fs);
+	fclose(fs);
+	DynamicArray<Vertex> vertices{};
+	DynamicArray<uint32_t> indices{};
+	sphere.GetMesh(Vertex::SetPosition, Vertex::SetUV, Vertex::SetNormal, vertices, indices);
+	StaticMesh sphereMesh(renderer);
+	sphereMesh.CreateBuffers(vertices.Size(), vertices.Data(), indices.Size(), indices.Data());
 
 	Array<Vertex, 4> quadVertices;
 	Array<uint32_t, 6> quadIndices;
 
-	Engine::GetQuadMesh(quadVertices, quadIndices);
-
 	LogicMesh logicQuadMesh(quadVertices, quadIndices);
 
-	ObjectID obstcaleID = area.AddBody(
-		"Body",
-		Vec3(0.0f, 0.0f, 0.0f),
+	ObjectID obstacleID = area.AddBody(
+		"Obstacle",
+		Vec3(3.0f, 0.0f, 0.0f),
 		Quaternion::Identity(),
-		PhysicsLayer::Kinematic,
+		PhysicsLayer::Moving,
 		{
-			.m_ColliderShape = Body::ColliderShape::Capsule,
+			.m_ColliderShape = Body::ColliderShape::Sphere,
 			.u_ShapeCreateInfo {
-				.m_Capsule { 
-					.m_HalfHeight = 1.0f,
-					.m_Radius = 0.5f,
+				.m_Sphere { 
+					.m_Radius = 1.0f,
 				},
 			},
 		},
 		nullptr
 	);
 
-	Body* obstacle = area.GetBody(obstcaleID);
+	Body* obstacle = area.GetBody(obstacleID);
 
 	//obstacle->AddForce(Vec3(10000.0f, 0.0f, 0.0f));
-	obstacle->Move(Vec3(3.0f, 0.0f, 0.0f), Quaternion::Identity(), 5.0f);
+	obstacle->Move(Vec3(0.0f, 0.0f, 3.0f), Quaternion::Identity(), 5.0f);
 
-	RenderID obstacleRenderID = world.AddRenderData(WorldRenderDataFlag_NoSave, *obstacle, Mat4(1), cubeMesh.GetMeshData());
+	RenderID obstacleRenderID = world.AddRenderData(WorldRenderDataFlag_NoSave, *obstacle, Mat4(1), sphereMesh.GetMeshData());
 	world.GetRenderData(obstacleRenderID)->m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 
 	ObjectID groundID = area.AddBody(
 		"Ground",
-		Vec3(0.0f, -1.0f, 0.0f),
+		Vec3(0.0f, -5.0f, 0.0f),
 		Quaternion::Identity(),
 		PhysicsLayer::NonMoving,
 		{
@@ -262,16 +277,14 @@ int main() {
 
 	Body* ground = area.GetBody(groundID);
 
-	MeshData groundMesh = engine.GetQuadMesh().GetMeshData();
-
 	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), -pi / 2).AsMat4();
 
-	groundTransform[0] *= 10;
-	groundTransform[1] *= 10;
-	groundTransform[2] *= 10;
+	groundTransform[0] *= 50;
+	groundTransform[1] *= 50;
+	groundTransform[2] *= 1;
 	groundTransform[3].y = 0.0f;
 
-	RenderID groundRenderID = world.AddRenderData(WorldRenderDataFlag_NoSave, *ground, groundTransform, engine.GetQuadMesh().GetMeshData());
+	RenderID groundRenderID = world.AddRenderData(WorldRenderDataFlag_NoSave, *ground, groundTransform, engine.GetBoxMesh().GetMeshData());
 	world.GetRenderData(groundRenderID)->m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
 
 	Obj cubeObj{};
@@ -290,10 +303,10 @@ int main() {
 
 	editor.SetInspectedArea(areaID);
 
-	while (engine.Loop()) {
-		//uiWindow->SetPosition(UI.GetCursorPosition());
-	}
+	while (engine.Loop()) {}
+
 	vkDeviceWaitIdle(renderer.m_VulkanDevice);	
+	sphereMesh.Terminate();
 	element.Terminate();
 	inputText.Terminate();
 	world.DestroyTextureMap(textureMap);
