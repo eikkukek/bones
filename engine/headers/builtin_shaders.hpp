@@ -35,7 +35,7 @@ void main() {
 
 	outUV = inUV;
 
-	outNormal = normalize(vec3(pc.c_NormalMatrix * vec4(inNormal, 0.0f)));
+	outNormal = normalize(vec3(vec4(inNormal, 0.0f) * pc.c_NormalMatrix));
 
 	outPosition = vec3(pc.c_Transform * vec4(modelPos, 1.0f));
 
@@ -58,7 +58,6 @@ layout(location = 2) out vec4 outNormalAndRougness;
 layout(set = 1, binding = 0) uniform sampler2D diffuse_map;
 
 void main() {
-
 	outDiffuseColor = texture(diffuse_map, inUV);
 	outPositionAndMetallic = vec4(inPosition, 1.0f);
 	outNormalAndRougness = vec4(inNormal, 1.0f);
@@ -118,17 +117,20 @@ layout(set = 1, binding = 1) uniform DirectionalLight {
 	vec3 c_Color;
 } directional_light;
 
-bool IsInShadowDirLight(vec4 lightViewPos) {
+bool IsInShadowDirLight(vec4 lightViewPos, float bias) {
 
 	const vec4 shadowMapCoords = lightViewPos / lightViewPos.w;
 
 	if (shadowMapCoords.z > -1.0f && shadowMapCoords.z < 1.0f) {
 		float dist = texture(directional_light_shadow_map, shadowMapCoords.st * 0.5f + 0.5f).r;
-		float bias = 0.003f;
 		return shadowMapCoords.w > 0.0f && dist < shadowMapCoords.z - bias;
 	}
 
 	return false;
+}
+
+float GetBias(float lnDot) {
+	return 0.005f - 0.0015f * lnDot;
 }
 
 void main() {
@@ -143,9 +145,11 @@ void main() {
 
 	vec3 lightDir = directional_light.c_Direction;
 
-	const float diff = IsInShadowDirLight(lightViewPos) ? 0.0f : max(dot(normal, lightDir), 0.0f);
+	float dnDot = max(dot(normal, lightDir), 0.0f);
 
-	const vec3 diffuse = diff * directional_light.c_Color;
+	const float diffMul = IsInShadowDirLight(lightViewPos, GetBias(dnDot)) ? 0.0f : dnDot;
+
+	const vec3 diffuse = diffMul * directional_light.c_Color;
 
 	vec3 color = (vec3(0.2f, 0.2f, 0.2f) + diffuse) * vec3(texture(diffuse_colors, inUV));
 	float gamma = 2.2f;
@@ -237,6 +241,10 @@ void main() {
 		static constexpr const char* sdf_pipeline_fragment_shader = R"(
 #version 450
 
+#define PI 3.14159265359
+
+#define STATE_ROTATORS 1U
+
 layout(location = 0) in vec2 inUV;
 layout(location = 1) in vec3 inRayOrigin;
 layout(location = 2) in vec3 inRayDirection;
@@ -251,7 +259,7 @@ layout(set = 1, binding = 0) uniform RotatorInfo {
 	vec4 c_ColorY;
 	vec4 c_ColorZ;
 	float c_Radius;
-	float c_Thickness;
+	float c_Thickness;	
 } rotator_info;
 
 layout(std140, set = 2, binding = 0) buffer MouseHitBuffer {
@@ -262,6 +270,7 @@ layout(push_constant) uniform PushConstant {
 	layout(offset = 80)
 	uvec2 c_Resolution;
 	uvec2 c_MousePosition;
+	uint c_State;
 } pc;
 
 float SdTorus(vec3 pos, float r, float t) {
@@ -269,37 +278,50 @@ float SdTorus(vec3 pos, float r, float t) {
 	return length(q) - t;
 }
 
+const float tmax = 100.0f;
 vec4 color;
 uint hit = 0;
 
 float Map(vec3 pos) {
 
-	float x = SdTorus((rotator_info.c_InverseTransformX * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
-	float y = SdTorus((rotator_info.c_InverseTransformY * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
-	float z = SdTorus((rotator_info.c_InverseTransformZ * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
+	float min = 1000.0f;
+	
+	if ((pc.c_State & STATE_ROTATORS) > 0) {
 
-	float min = x;
-	color = rotator_info.c_ColorX;
-	hit = 1;
-	if (y < min) {
-		min = y;
-		color = rotator_info.c_ColorY;
-		hit = 2;
-	}
-	if (z < min) {
-		min = z;
-		color = rotator_info.c_ColorZ;
-		hit = 3;
+		float x = SdTorus((rotator_info.c_InverseTransformX * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
+		float y = SdTorus((rotator_info.c_InverseTransformY * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
+		float z = SdTorus((rotator_info.c_InverseTransformZ * vec4(pos, 1.0f)).xyz, rotator_info.c_Radius, rotator_info.c_Thickness);
+
+		color = rotator_info.c_ColorX;
+		hit = 1;
+		min = x;
+
+		if (y < min) {
+			min = y;
+			color = rotator_info.c_ColorY;
+			hit = 2;
+		}
+		if (z < min) {
+			min = z;
+			color = rotator_info.c_ColorZ;
+			hit = 3;
+		}
 	}
 	return min;
+}
+
+float PhaseSchlick(vec3 w, vec3 wp, float g) {
+	float k = 1.55f * g - 0.55f * g * g * g;
+	float kCosTheta = k * dot(w, wp);
+	return 1.0f / (4.0f * PI) *
+		(1.0f - k * k) / ((1.0f - kCosTheta) * 1.0f - kCosTheta);
 }
 
 void main() {
 
 	const vec3 ro = inRayOrigin;
-	const vec3 rd = normalize(inRayDirection);
+	const vec3 rd = normalize(inRayDirection);	
 
-	const float tmax = 100.0f;
 	float t = 0.0f;
 	for (int i = 0; i < 256; i++) {
 		vec3 pos = ro + rd * t;
