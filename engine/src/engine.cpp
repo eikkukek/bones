@@ -53,6 +53,8 @@ namespace engine {
 	void Body::UpdateTransforms() {
 		m_Transform = m_Rotation.AsMat4();
 		m_Transform[3] = Vec4(m_Position, 1.0f);
+		m_Transform[3].x *= -1;
+		m_Transform[3].z *= -1;
 		uint32_t transformCount = m_RenderDataTransforms.Size();
 		uint64_t* keyIter = m_RenderDataTransforms.KeysBegin();
 		Mat4* valueIter = m_RenderDataTransforms.ValuesBegin();
@@ -60,6 +62,21 @@ namespace engine {
 			WorldRenderData* data = m_Area.m_World.GetRenderData(keyIter[i]);
 			assert(data);
 			data->m_Transform = m_Transform * valueIter[i];
+		}
+	}
+
+	void PhysicsManager::JoltDebugRendererImpl::DrawGeometry(JPH::RMat44Arg modelMat, const JPH::AABox& worldSpaceBounds, float LODScale,
+		JPH::ColorArg modelColor, const GeometryRef& geometry, ECullMode cullMode, ECastShadow castShadow, EDrawMode drawMode) {
+		const BatchImpl* batch = static_cast<const BatchImpl*>(geometry->GetLOD(m_World.GetCameraPosition(), worldSpaceBounds, LODScale).mTriangleBatch.GetPtr());
+		StaticMesh* mesh = m_Meshes.Find(batch->m_ObjectID);
+		if (!mesh) {
+			PrintError(ErrorOrigin::Jolt,
+				"couldn't find mesh to render (in function PhysicsManager::JoltDebugRenderer::DrawGeometry)!");
+			assert(false);
+			return;
+		}
+		if (drawMode == EDrawMode::Wireframe) {
+			m_World.RenderWireMesh(mesh->GetMeshData(), modelMat, Vec4(modelColor.r, modelColor.g, modelColor.b, modelColor.a) / 255.0f);
 		}
 	}
 
