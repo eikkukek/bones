@@ -327,7 +327,7 @@ namespace pipelines {
 			{
 				.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
 				.offset = 80,
-				.size = 16,
+				.size = 20,
 			},
 		};
 
