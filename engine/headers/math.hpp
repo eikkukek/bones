@@ -286,6 +286,7 @@ namespace engine {
 
 		constexpr inline Vec4_T operator*(T scalar) const noexcept { return Vec4_T(x * scalar, y * scalar, z * scalar, w * scalar); }
 		constexpr inline Vec4_T& operator*=(T scalar) noexcept { x *= scalar; y *= scalar; z *= scalar; w *= scalar; return *this; }
+		constexpr inline Vec4_T operator/(T scalar) const noexcept { return Vec4_T(x / scalar, y / scalar, z / scalar, w / scalar); }
 		constexpr inline Vec4_T& operator+=(const Vec4_T& other) noexcept { x += other.x; y += other.y; z += other.z; w += other.w; return *this; }
 
 		constexpr inline bool operator==(const Vec4_T& other) const noexcept = default;
@@ -392,13 +393,21 @@ namespace engine {
 		constexpr inline Mat4_T() noexcept : columns() {}
 
 		constexpr inline Mat4_T(T num) noexcept
-			: columns{ { num, Cast(0), Cast(0), Cast(0) }, { Cast(0), num, Cast(0), Cast(0) }, 
+			: columns { { num, Cast(0), Cast(0), Cast(0) }, { Cast(0), num, Cast(0), Cast(0) }, 
 				{ Cast(0), Cast(0), num, Cast(0) }, { Cast(0), Cast(0), Cast(0), num } } {}
 
 		constexpr inline Mat4_T(T n0, T n1, T n2, T n3, T n4, T n5, T n6, T n7, T n8, T n9, T n10, T n11, T n12, T n13, T n14, T n15) noexcept
-			: columns{ { n0, n1, n2, n3 }, { n4, n5, n6, n7 }, { n8, n9, n10, n11 }, { n12, n13, n14, n15 } } {}
+			: columns { { n0, n1, n2, n3 }, { n4, n5, n6, n7 }, { n8, n9, n10, n11 }, { n12, n13, n14, n15 } } {}
 
-		static constexpr inline Mat4_T Multiply(const Mat4_T a, const Mat4_T b) {
+		constexpr inline Mat4_T(const JPH::Mat44& other) noexcept {
+			static_assert(sizeof(Mat4_T) == sizeof(JPH::Mat44));
+			memcpy(&columns, &other, sizeof(Mat4_T));
+			columns[3].x *= -1;
+			columns[3].y *= -1;
+			columns[3].z *= -1;
+		}
+
+		static constexpr inline Mat4_T Multiply(const Mat4_T a, const Mat4_T b) noexcept {
 
 			const Vec4_T<T>& aCol0 = a[0];
 			const Vec4_T<T>& aCol1 = a[1];
@@ -539,6 +548,17 @@ namespace engine {
 
 		static constexpr inline Mat4_T AxisRotation(const Vec3_T<T>& axis, float radians) {
 			return Quaternion_T<T>::AxisRotation(axis, radians).AsMat4();
+		}
+
+		static constexpr inline Mat4_T Transform(const Vec3_T<T>& position, const Quaternion_T<T>& rotation) {
+			Mat4_T result = rotation.AsMat4();
+			result[3] = Vec4_T<T>(position, 1.0f);
+			return result;
+		}
+
+		Mat4_T& Translate(const Vec4_T<T>& t) {
+			columns[3] = t;
+			return *this;
 		}
 
 		static constexpr inline Mat4_T Projection(T radFovY, T aspectRatio, T zNear, T zFar) noexcept {
