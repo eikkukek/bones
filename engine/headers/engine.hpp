@@ -9,6 +9,7 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_impl_glfw.h"
+#define JPH_DEBUG_RENDERER
 #include "Jolt/Jolt.h"
 #include "Jolt/RegisterTypes.h"
 #include "Jolt/Core/TempAllocator.h"
@@ -41,6 +42,18 @@ namespace engine {
 	using UID = uint64_t;
 	using LockGuard = std::lock_guard<std::mutex>;
 	using MeshData = Renderer::MeshData;
+
+	enum EngineStateBits {
+		EngineState_Initialized = 1,
+		EngineState_Play = 2,
+		EngineState_Editor = 4,
+		EngineState_EditorView = 8,
+		EngineState_Release = 16,
+		EngineState_LogicAwake = 32,
+		EngineState_QueueLogicShutdown = 64,
+	};
+
+	typedef uint32_t EngineState;
 
 	template<typename T, typename U>
 	struct IsSame {
@@ -218,12 +231,13 @@ namespace engine {
 			}
 		}
 
-		DynamicArray operator=(const DynamicArray& other) noexcept {
+		DynamicArray& operator=(const DynamicArray& other) noexcept {
 			Clear();
 			Reserve(other.m_Capacity);
 			for (const T& val : other) {
 				PushBack(val);
 			}
+			return *this;
 		}
 
 		DynamicArray(DynamicArray&& other) noexcept 
@@ -241,6 +255,7 @@ namespace engine {
 			other.m_Data = 0;
 			other.m_Size = 0;
 			other.m_Capacity = 0;
+			return *this;
 		}
 
 		~DynamicArray() {
@@ -885,11 +900,11 @@ namespace engine {
 			Clear();
 		}
 
-		uint32_t Size() {
+		uint32_t Size() const {
 			return m_Size;
 		}
 
-		uint32_t Capacity() {
+		uint32_t Capacity() const {
 			return m_Capacity;
 		}
 
@@ -1188,6 +1203,10 @@ namespace engine {
 			Clear();
 		}
 
+		uint32_t Size() const {
+			return m_Size;
+		}
+
 		OrderedArray& Reserve(uint32_t capacity) {
 			if (m_Capacity >= capacity) {
 				return *this;
@@ -1221,6 +1240,11 @@ namespace engine {
 				++m_Size;
 				return m_Data;
 			}
+			if (!m_Size) {
+				*m_Data = value;
+				++m_Size;
+				return m_Data;
+			}
 			if (m_Capacity == m_Size) {
 				Reserve(m_Capacity * 2);
 			}
@@ -1239,6 +1263,11 @@ namespace engine {
 				++m_Size;
 				return m_Data;
 			}
+			if (!m_Size) {
+				new(m_Data) T(std::forward<Args>(args)...);
+				++m_Size;
+				return m_Data;
+			}
 			if (m_Capacity == m_Size) {
 				Reserve(m_Capacity * 2);
 			}
@@ -1251,7 +1280,7 @@ namespace engine {
 		}
 
 		bool Erase(const T& value) {
-			if (!m_Data) {
+			if (!m_Data || !m_Size) {
 				return false;
 			}
 			int64_t index = _FindIndex(value);
@@ -1266,12 +1295,19 @@ namespace engine {
 			return true;
 		}
 
-		bool Contains(const T& value) {
-			return _FindIndex(value) != -1;
+		void EraseAll() {
+			for (uint32_t i = 0; i < m_Size; i++) {
+				(m_Data + i)->~T();
+			}
+			m_Size = 0;
+		}
+
+		bool Contains(const T& value) const {
+			return m_Data && m_Size ? _FindIndex(value) != -1 : false;
 		}
 
 		T* Find(const T& value) {
-			if (!m_Data) {
+			if (!m_Data || !m_Size) {
 				return nullptr;
 			}
 			uint32_t index = _FindIndex(value);
@@ -1295,18 +1331,23 @@ namespace engine {
 
 	private:
 
-		int64_t _FindIndex(const T& value) {
-			assert(m_Data);
+		int64_t _FindIndex(const T& value) const {
+			assert(m_Data && m_Size);
+			if (m_Size == 1) {
+				const T& comp = m_Data[0];
+				return !(comp < value) && !(value < comp) ? 0 : -1;
+			}
 			uint32_t left = 0;
 			uint32_t right = m_Size - 1;
 			uint32_t index = 0;
 			while (left <= right) {
 				index = (left + right) / 2;
-				if (m_Data[index] < value) {
+				const T& comp = m_Data[index];
+				if (comp < value) {
 					left = index + 1;
 					continue;
 				}
-				if (value < m_Data[index]) {
+				if (value < comp) {
 					right = index - 1;
 					continue;
 				}
@@ -1317,17 +1358,18 @@ namespace engine {
 
 
 		int64_t _FindNewIndex(const T& value) {
-			assert(m_Data);
+			assert(m_Data && m_Size);
 			int64_t left = 0;
 			int64_t right = (int64_t)m_Size - 1;
 			uint32_t index = 0;
 			while (left <= right) {
 				index = (left + right) / 2;
-				if (m_Data[index] < value) {
+				const T& comp = m_Data[index];
+				if (comp < value) {
 					left = index + 1;
 					continue;
 				}
-				if (value < m_Data[index]) {
+				if (value < comp) {
 					right = (int64_t)index - 1;
 					continue;
 				}
@@ -2160,13 +2202,16 @@ namespace engine {
 		DynamicArray<uint32_t> m_VtIndices{};
 		DynamicArray<uint32_t> m_VnIndices{};
 
+		uint32_t m_MaxVIndex;
+		uint32_t m_MaxVtIndex;
+		uint32_t m_MaxVnIndex;
+
 		bool Load(FILE* fileStream) {
 			if (!fileStream) {
 				return false;
 			}
 			char buf[3];
 			buf[2] = '\0';
-			uint32_t maxVIndex{}, maxVtIndex{}, maxVnIndex {};
 			while (true) {
 				buf[0] = fgetc(fileStream);
 				if (buf[0] == EOF) {
@@ -2225,12 +2270,12 @@ namespace engine {
 							return false;
 						}
 						--vI;
-						maxVIndex = Max(vI, maxVIndex);
+						m_MaxVIndex = Max(vI, m_MaxVIndex);
 						if (fgetc(fileStream) == '/') {
 							uint32_t vtI;
 							if (fscanf(fileStream, "%i", &vtI) == 1) {
 								m_VtIndices.PushBack(--vtI);
-								maxVtIndex = Max(vtI, maxVtIndex);
+								m_MaxVtIndex = Max(vtI, m_MaxVtIndex);
 							}
 						}
 						if (fgetc(fileStream) == '/') {
@@ -2240,7 +2285,7 @@ namespace engine {
 								return false;
 							}
 							--vnI;
-							maxVnIndex = Max(vnI, maxVnIndex);
+							m_MaxVnIndex = Max(vnI, m_MaxVnIndex);
 						}
 					}
 					for (char c = fgetc(fileStream); c != '\n' && c != EOF; c = fgetc(fileStream)) {}
@@ -2248,13 +2293,17 @@ namespace engine {
 				}
 				for (char c = fgetc(fileStream); c != '\n' && c != EOF; c = fgetc(fileStream)) {}
 			}
-			if (!((!m_VtIndices.Size() || m_VIndices.Size() == m_VtIndices.Size()) &&
-				(!m_VnIndices.Size() || m_VIndices.Size() == m_VnIndices.Size()) && !(m_VtIndices.Size() % 3) &&
-				maxVIndex < m_Vs.Size()&& (!m_VtIndices.Size()|| maxVtIndex < m_Vts.Size()) && (!m_VnIndices.Size()|| maxVnIndex < m_Vns.Size()))) {
+			if (!IsValid()) {
 				m_LinesParsed = 0;
 				return false;
 			}
 			return true;
+		}
+
+		bool IsValid() const {
+			return (!m_VtIndices.Size() || m_VIndices.Size() == m_VtIndices.Size()) &&
+				(!m_VnIndices.Size() || m_VIndices.Size() == m_VnIndices.Size()) && !(m_VtIndices.Size() % 3) &&
+				m_MaxVIndex < m_Vs.Size() && (!m_VtIndices.Size() || m_MaxVtIndex < m_Vts.Size()) && (!m_VnIndices.Size()|| m_MaxVnIndex < m_Vns.Size());
 		}
 
 		template<typename VertexType>
@@ -2609,7 +2658,6 @@ namespace engine {
 	};
 
 	class StaticMesh {
-
 	private:
 
 		uint32_t m_IndexCount;
@@ -2625,6 +2673,10 @@ namespace engine {
 			m_IndexBuffer(std::move(other.m_IndexBuffer)), m_IndexCount(other.m_IndexCount) {}
 
 		StaticMesh(const StaticMesh&) = delete;
+
+		~StaticMesh() {
+			Terminate();
+		}
 
 		bool IsNull() const {
 			return !m_VertexBuffer.m_BufferSize || !m_IndexBuffer.m_BufferSize;
@@ -4883,6 +4935,9 @@ void main() {
 		}
 	};
 
+	using ObjectID = uint64_t;
+	using RenderID = uint64_t;
+
 	class PhysicsManager {
 
 		friend class Engine;
@@ -4995,6 +5050,7 @@ void main() {
 			JoltBroadPhaseLayerInterfaceImpl() {
 				m_ObjectToBroadPhase[Layer::NonMoving] = BroadPhaseLayers::NonMoving;
 				m_ObjectToBroadPhase[Layer::Moving] = BroadPhaseLayers::Moving;
+				m_ObjectToBroadPhase[Layer::Kinematic] = BroadPhaseLayers::Kinematic;
 			}
 
 			virtual uint GetNumBroadPhaseLayers() const override {
@@ -5067,21 +5123,147 @@ void main() {
 			}
 		};
 
-		class JoltDebugRenderer : public JPH::DebugRenderer {
+		class JoltDebugRendererImpl : public JPH::DebugRenderer {
+		private:
+
+			class BatchImpl : public JPH::RefTargetVirtual {
+			private:
+	
+				JPH::atomic<uint32_t> m_RefCount = 0;
+
+			public:
+
+				JoltDebugRendererImpl& m_DebugRenderer;
+				ObjectID m_ObjectID;
+
+				BatchImpl(JoltDebugRendererImpl& renderer, ObjectID objectID) 
+					: m_DebugRenderer(renderer), m_ObjectID(objectID) {}
+
+				JPH_OVERRIDE_NEW_DELETE
+
+				virtual void AddRef() override { 
+					++m_RefCount; 
+				}
+
+				virtual void Release() override { 
+					if (--m_RefCount == 0) {
+						m_DebugRenderer.TerminateMesh(m_ObjectID);
+						delete(this);
+					}
+				}
+			};
+
+			ObjectID m_NextObjectID = 0;
+			OrderedDictionary<ObjectID, StaticMesh> m_Meshes{};
+
 		public:
 
-			using Base = JPH::DebugRenderer;
+			World& m_World;
+			Renderer& m_Renderer;
 
-			JoltDebugRenderer() {
+			JoltDebugRendererImpl(World& world, Renderer& renderer) : m_World(world), m_Renderer(renderer) {}
+			
+			void BaseInitialize() {
 				Initialize();
 			}
 
-			virtual Base::Batch CreateTriangleBatch(const Base::Vertex* vertices, int vertexCount, const uint32_t* indices, int indexCount) override {
+			void Terminate() {
+				for (StaticMesh& mesh : m_Meshes) {
+					mesh.Terminate();
+				}
+			}
+
+			JPH_OVERRIDE_NEW_DELETE
+
+			void TerminateMesh(ObjectID m_ObjectID) {
+				m_Meshes.Erase(m_ObjectID);
+			}
+
+			virtual Batch CreateTriangleBatch(const Triangle* triangles, int triangleCount) override {
+				assert(triangleCount % 3 == 0);
+				DynamicArray<engine::Vertex> vertices(triangleCount * 3);
+				DynamicArray<uint32_t> indices(triangleCount * 3);
+				for (uint32_t i = 0; i < triangleCount; i++) {
+					const Triangle& triangle = triangles[i];
+					for (uint32_t j = 0; j < 3; j++) {
+						const Vertex& inVertex = triangle.mV[j];
+						engine::Vertex& convVertex = vertices[i * 3 + j];
+						convVertex.m_Position = { inVertex.mPosition.x, inVertex.mPosition.y, inVertex.mPosition.z };
+						convVertex.m_Normal = { inVertex.mNormal.x, inVertex.mNormal.y, inVertex.mNormal.z };
+						convVertex.m_UV = { inVertex.mUV.x, inVertex.mUV.y };
+						indices[i * 3 + j] = i * 3 + (2 - j);
+					}
+				}
+				StaticMesh* mesh = m_Meshes.Emplace(m_NextObjectID, m_Renderer);
+				assert(mesh);
+				if (!mesh->CreateBuffers(vertices.Size(), vertices.Data(), indices.Size(), indices.Data())) {
+					PrintError(ErrorOrigin::Engine,
+						"failed to create buffers for mesh (function StaticMesh::CreateBuffers in function PhysicsManager::JoltDebugRenderer::CreateTriangleBatch)!");
+					m_Meshes.Erase(m_NextObjectID);
+					return nullptr;
+				}
+				return new BatchImpl(*this, m_NextObjectID++);
+			}
+
+			virtual Batch CreateTriangleBatch(const Vertex* vertices, int vertexCount, const uint32_t* indices, int indexCount) override {
+				DynamicArray<engine::Vertex> convVertices(vertexCount);
+				for (uint32_t i = 0; i < vertexCount; i++) {
+					const Vertex& inVert = vertices[i];
+					engine::Vertex& convVert = convVertices[i];
+					convVert.m_Position = { inVert.mPosition.x, inVert.mPosition.y, inVert.mPosition.z };
+					convVert.m_Normal = { inVert.mNormal.x, inVert.mNormal.y, inVert.mNormal.z };
+					convVert.m_UV = { inVert.mUV.x, inVert.mUV.y };
+				}
+				StaticMesh* mesh = m_Meshes.Emplace(m_NextObjectID, m_Renderer);
+				assert(mesh);
+				if (!mesh->CreateBuffers(vertexCount, convVertices.Data(), indexCount, indices)) {
+					PrintError(ErrorOrigin::Engine,
+						"failed to create buffers for mesh (function StaticMesh::CreateBuffers in function PhysicsManager::JoltDebugRenderer::CreateTriangleBatch)!");
+					m_Meshes.Erase(m_NextObjectID);
+					return nullptr;
+				}
+				return new BatchImpl(*this, m_NextObjectID++);
 			}
 
 			virtual void DrawGeometry(JPH::RMat44Arg modelMat, const JPH::AABox& worldSpaceBounds, float LODScale,
-				JPH::ColorArg modelColor, const GeometryRef& geometry, ECullMode cullMode, ECastShadow castShadow, EDrawMode drawMode) override {
-				(*geometry).GetLOD({}, worldSpaceBounds, LODScale).mTriangleBatch.GetPtr();
+				JPH::ColorArg modelColor, const GeometryRef& geometry, ECullMode cullMode, ECastShadow castShadow, EDrawMode drawMode) override;
+
+			virtual void DrawLine(JPH::RVec3Arg from, JPH::RVec3Arg to, JPH::ColorArg color) override {}
+
+			virtual void DrawTriangle(JPH::RVec3Arg v1, JPH::RVec3Arg v2, JPH::RVec3Arg v3, JPH::ColorArg color, ECastShadow castShadow) override {}
+
+			virtual void DrawText3D(JPH::RVec3Arg position, const JPH::string_view &string, JPH::ColorArg inColor = JPH::Color::sWhite, float inHeight = 0.5f) override {}
+		};
+
+		class JoltBodyDrawFilterImpl : public JPH::BodyDrawFilter {
+		private:
+
+			OrderedArray<JPH::BodyID> m_ShouldRender{};
+
+		public:
+
+			uint32_t BodyIDCount() const {
+				return m_ShouldRender.Size();
+			}
+
+			bool ContainsBodyID(JPH::BodyID ID) const {
+				return m_ShouldRender.Contains(ID);
+			}
+	
+			bool AddBodyID(JPH::BodyID ID) {
+				return m_ShouldRender.Insert(ID);
+			}
+
+			bool RemoveBodyID(JPH::BodyID ID) {
+				return m_ShouldRender.Erase(ID);
+			}
+
+			void RemoveAllBodyIDs() {
+				m_ShouldRender.EraseAll();
+			}
+
+			virtual bool ShouldDraw(const JPH::Body& body) const override {
+				return m_ShouldRender.Contains(body.GetID());
 			}
 		};
 
@@ -5103,13 +5285,15 @@ void main() {
 
 		JPH::JobSystemThreadPool* m_JobSystem;
 		JPH::PhysicsSystem* m_PhysicsSystem;
-		Stack m_Stack;
 		JPH::TempAllocatorImpl* m_TempAllocator;
+		Stack m_Stack;
 		JoltBroadPhaseLayerInterfaceImpl m_BroadPhaseLayerInterface{};
 		JoltObjectVsBroadPhaseFilterImpl m_ObjectVsBroadPhaseFilter{};
 		JoltObjectLayerPairFilterImpl m_ObjectLayerPairFilter{};
 		GlobalJoltContactListener m_GlobalContactListener{};
 		GlobalJoltBodyActivationListener m_GlobalBodyActivationListener{};
+		JoltDebugRendererImpl m_DebugRenderer;
+		JoltBodyDrawFilterImpl m_BodyDrawFilter{};
 		const uint c_MaxBodies;
 		const uint c_MaxBodyPairs;
 		const uint c_MaxContactConstraints;
@@ -5117,8 +5301,8 @@ void main() {
 		float m_FixedDeltaTime = 1.0f / 60.0f;
 		int m_CollisionSteps = 1;
 
-		PhysicsManager(uint maxBodies, uint maxBodyPairs, uint maxContactConstraints)
-			: m_Stack(65536), m_TempAllocator(nullptr), m_JobSystem(nullptr), m_PhysicsSystem(nullptr),
+		PhysicsManager(World& world, Renderer& renderer, uint maxBodies, uint maxBodyPairs, uint maxContactConstraints)
+			: m_JobSystem(nullptr), m_TempAllocator(nullptr), m_PhysicsSystem(nullptr), m_Stack(65536), m_DebugRenderer(world, renderer),
 				c_MaxBodies(maxBodies), c_MaxBodyPairs(maxBodyPairs), c_MaxContactConstraints(maxContactConstraints) {
 		}
 
@@ -5144,10 +5328,13 @@ void main() {
 
 			m_PhysicsSystem->SetContactListener(&m_GlobalContactListener);
 			m_PhysicsSystem->SetBodyActivationListener(&m_GlobalBodyActivationListener);
+			
+			m_DebugRenderer.BaseInitialize();
 		}
 
 		void Terminate() {
 			using namespace JPH;
+			m_DebugRenderer.Terminate();
 			UnregisterTypes();
 			Factory::sInstance->~Factory();
 			Factory::sInstance = nullptr;
@@ -5166,19 +5353,29 @@ void main() {
 			return false;
 		}
 
+		void DebugUpdate() {
+			using namespace JPH;
+			if (m_BodyDrawFilter.BodyIDCount()) {
+				BodyManager::DrawSettings drawSettings{};
+				drawSettings.mDrawShapeWireframe = true;
+				m_PhysicsSystem->DrawBodies(drawSettings, &m_DebugRenderer, &m_BodyDrawFilter);
+			}
+		}
+
 	public:
 		
 		JPH::BodyInterface& GetBodyInterface() {
 			return m_PhysicsSystem->GetBodyInterface();
+		}
+
+		JoltBodyDrawFilterImpl& GetBodyDrawFilter() {
+			return m_BodyDrawFilter;
 		}
 	};
 
 	typedef PhysicsManager::Layer PhysicsLayer;
 
 	class World;
-
-	using ObjectID = uint64_t;
-	using RenderID = uint64_t;
 
 	constexpr inline uint64_t Invalid_ID = UINT64_MAX;
 
@@ -5355,6 +5552,15 @@ void main() {
 			}
 		};
 
+	public:
+
+		struct SaveState {
+			Vec3 m_Position;
+			Quaternion m_Rotation;
+		};
+
+	private:
+
 		using CreationSettings = JPH::BodyCreationSettings;
 
 		Area& m_Area;
@@ -5374,7 +5580,7 @@ void main() {
 
 		Body(Area& area, PhysicsManager& physicsManager, const char* name, const Vec3& position, const Quaternion& rotation)
 			: m_Area(area), m_PhysicsManager(physicsManager),
-				m_Name(name), m_Position(position), m_Rotation(rotation),
+				m_Name(name), m_Position(-position.x, position.y, -position.z), m_Rotation(rotation),
 				m_ColliderShape(ColliderShape::None) {
 			UpdateTransforms();
 		}
@@ -5475,16 +5681,20 @@ void main() {
 			return m_Name;
 		}
 
+		JPH::BodyID GetPhysicsID() const {
+			return m_BodyID;
+		}
+
 		bool IsActive() {
 			return m_PhysicsManager.GetBodyInterface().IsActive(m_BodyID);
 		}
 
 		Vec3 GetPosition() const {
-			return m_Position;
+			return { -m_Position.x, m_Position.y, -m_Position.z };
 		}
 
 		void SetPosition(const Vec3& position) {
-			m_Position = position;
+			m_Position = { -position.x, position.y, -position.z };
 			if (!m_BodyID.IsInvalid()) {
 				m_PhysicsManager.GetBodyInterface().SetPosition(m_BodyID, m_Position, JPH::EActivation::Activate);
 			}
@@ -5504,7 +5714,7 @@ void main() {
 		}
 
 		void SetPositionAndRotation(const Vec3& position, const Quaternion& rotation) {
-			m_Position = position;
+			m_Position = { -position.x, position.y, -position.z };
 			m_Rotation = rotation;
 			if (!m_BodyID.IsInvalid()) {
 				m_PhysicsManager.GetBodyInterface().SetPositionAndRotation(m_BodyID, m_Position, m_Rotation, JPH::EActivation::Activate);
@@ -5528,6 +5738,20 @@ void main() {
 		//! @param seconds: Delta time in seconds
 		void Move(const Vec3& position, const Quaternion& rotation, float deltaTime) {
 			m_PhysicsManager.GetBodyInterface().MoveKinematic(m_BodyID, position, rotation, deltaTime);
+		}
+
+		SaveState GetSaveState() const {
+			return {
+				.m_Position = m_Position,
+				.m_Rotation = m_Rotation,
+			};
+		}
+
+		void LoadSaveState(const SaveState& state) {
+			m_Position = state.m_Position;
+			m_Rotation = state.m_Rotation;
+			m_PhysicsManager.GetBodyInterface().SetPositionAndRotation(m_BodyID, m_Position, m_Rotation, JPH::EActivation::DontActivate);
+			UpdateTransforms();
 		}
 
 	private:
@@ -5573,6 +5797,39 @@ void main() {
 
 	public:
 
+		class SaveState {
+
+			friend class Area;
+			friend class World;
+
+		private:
+
+			static constexpr uint32_t body_alloc_size = sizeof(ObjectID) + sizeof(Body::SaveState);
+			
+			uint32_t m_BodyCount = 0;
+			ObjectID* m_BodyIDs = nullptr;
+			Body::SaveState* m_BodySaveStates = nullptr;
+
+			SaveState() {}
+
+			~SaveState() {
+				m_BodyCount = 0;
+				m_BodyIDs = nullptr;
+				m_BodySaveStates = nullptr;
+			}
+
+			void Initialize(const Area& area, ObjectID* bodyIDsPtr, Body::SaveState* bodySaveStatesPtr) {
+				assert(bodyIDsPtr && bodySaveStatesPtr);
+				m_BodyCount = area.m_Bodies.Size();
+				m_BodyIDs = bodyIDsPtr; m_BodySaveStates = bodySaveStatesPtr;
+				memcpy(m_BodyIDs, area.m_Bodies.GetKeys(), m_BodyCount * sizeof(ObjectID));
+				const Body* bodies = area.m_Bodies.GetValues();
+				for (uint32_t i = 0; i < m_BodyCount; i++) {
+					m_BodySaveStates[i] = bodies[i].GetSaveState();
+				}
+			}
+		};
+
 		World& m_World;
 
 		ObjectID AddBody(const char* name, const Vec3& body, const Quaternion& rotation, PhysicsLayer physicsLayer,
@@ -5589,6 +5846,18 @@ void main() {
 		
 		Area(World& world, AreaFlags flags) noexcept
 			: m_World(world) {}
+
+		void LoadSaveState(const SaveState& saveState) {
+			for (uint32_t i = 0; i < saveState.m_BodyCount; i++) {
+				Body* body = m_Bodies.Find(saveState.m_BodyIDs[i]);
+				if (!body) {
+					PrintError(ErrorOrigin::Engine,
+						"couldn't find body from area (in function Area::LoadSaveState)!");
+					continue;
+				}
+				body->LoadSaveState(saveState.m_BodySaveStates[i]);
+			}
+		}
 
 		void Terminate() {
 			for (Body& body : m_Bodies) {
@@ -6046,11 +6315,78 @@ void main() {
 			Mat4 m_View;
 		};
 
+		class SaveState {
+
+			friend class World;
+
+		private:
+
+			static constexpr uint32_t area_alloc_size = sizeof(ObjectID) + sizeof(Area::SaveState);
+
+			uint8_t* m_Data = nullptr;
+
+			uint32_t m_AreaCount = 0;
+			ObjectID* m_AreaIDs = nullptr;
+			Area::SaveState* m_AreaSaveStates = nullptr;
+
+		public:
+
+			SaveState() {}
+
+			SaveState(const SaveState&) = delete;
+
+			SaveState(SaveState&& other)
+				: m_Data(other.m_Data), m_AreaCount(other.m_AreaCount),
+					m_AreaIDs(other.m_AreaIDs), m_AreaSaveStates(other.m_AreaSaveStates) {
+				other.m_Data = nullptr;
+				other.m_AreaCount = 0;
+				other.m_AreaIDs = nullptr;
+				other.m_AreaSaveStates = nullptr;
+			}
+
+			~SaveState() {
+				Clear();
+			}
+
+			void Clear() {
+				free(m_Data);
+				m_Data = nullptr;
+				m_AreaCount = 0;
+				m_AreaIDs = nullptr;
+				m_AreaSaveStates = nullptr;
+			}
+
+			void Initialize(const World& world) {
+				if (m_Data) {
+					Clear();
+				}
+				m_AreaCount = world.m_Areas.Size();
+				uint32_t bodyRegionStart = area_alloc_size * m_AreaCount;
+				const Area* areas = world.m_Areas.GetValues();
+				uint32_t allocSize = 0;
+				for (uint32_t i = 0; i < m_AreaCount; i++) {
+					allocSize += area_alloc_size + Area::SaveState::body_alloc_size * areas[i].m_Bodies.Size();
+				}
+				m_Data = (uint8_t*)malloc(allocSize);
+				assert(m_Data);
+				m_AreaIDs = (ObjectID*)m_Data;
+				uint32_t areaIDRegSize = sizeof(ObjectID) * m_AreaCount;
+				m_AreaSaveStates = (Area::SaveState*)(m_Data + areaIDRegSize);
+				memcpy(m_AreaIDs, world.m_Areas.GetKeys(), areaIDRegSize);
+				for (uint32_t i = 0; i < m_AreaCount; i++) {
+					const Area& area = areas[i];
+					Area::SaveState& saveState = m_AreaSaveStates[i];
+					uint32_t bodyCount = area.m_Bodies.Size();
+					uint8_t* p = m_Data + bodyRegionStart;
+					saveState.Initialize(area, (ObjectID*)p, (Body::SaveState*)(p + (sizeof(ObjectID) * bodyCount)));
+					bodyRegionStart += Area::SaveState::body_alloc_size * bodyCount;
+				}
+			}
+		};
+
 		static constexpr float default_camera_fov = pi / 4.0f;
 		static constexpr float default_camera_near = 0.1f;
 		static constexpr float default_camera_far = 100.0f;
-
-	public:
 
 		AssetManager& m_AssetManager;
 		PhysicsManager& m_PhysicsManager;
@@ -6065,6 +6401,8 @@ void main() {
 		VkDescriptorSet m_NullTextureDescriptorSet = VK_NULL_HANDLE;
 		DynamicArray<Entity*> m_Entities{};
 		OrderedDictionary<ObjectID, Area> m_Areas{};
+		Vec3 m_GameCameraPosition{};
+		Quaternion m_GameCameraRotation{};
 		float m_EditorCameraSensitivity = pi / 2;
 		float m_EditorCameraSpeed = 5.0f;
 		static constexpr float editor_min_camera_speed = 1.0f;
@@ -6072,6 +6410,7 @@ void main() {
 		Vec3 m_EditorCameraPosition{};
 		Vec2 m_EditorCameraRotations{};
 
+		bool m_WasInEditorView{};
 		CameraMatricesBuffer* m_CameraMatricesMap = nullptr;
 		DynamicArray<VkImageView> m_DiffuseImageViews{};
 		DynamicArray<VkImageView> m_PositionAndMetallicImageViews{};
@@ -6150,8 +6489,17 @@ void main() {
 
 	public:
 
-		void SetGameCameraView(const Mat4& matrix) {
-			m_GameCamera.m_View = matrix;
+		void SetGameCameraView(const Vec3& position, const Quaternion& rotation) {
+			m_GameCameraPosition = position;
+			m_GameCameraRotation = rotation;
+			m_GameCamera.m_View = rotation.AsMat4();
+		}
+
+		const Vec3& GetCameraPosition() {
+			if (m_WasInEditorView) {
+				return m_EditorCameraPosition;
+			}
+			return m_GameCameraPosition;
 		}
 
 		uint64_t AddArea(AreaFlags flags) {
@@ -6241,6 +6589,18 @@ void main() {
 			m_WireRenderDatas.EmplaceBack(mesh, transform, wireColor);
 		}
 
+		void LoadSaveState(const SaveState& saveState) {
+			for (uint32_t i = 0; i < saveState.m_AreaCount; i++) {
+				Area* area = m_Areas.Find(saveState.m_AreaIDs[i]);
+				if (!area) {
+					PrintError(ErrorOrigin::Engine,
+						"couldn't find area from world (in function World::LoadSaveState)!");
+					continue;
+				}
+				area->LoadSaveState(saveState.m_AreaSaveStates[i]);
+			}
+		}
+
 	private:
 
 		void LogicUpdate() {
@@ -6257,6 +6617,29 @@ void main() {
 					}
 				}
 			}
+		}
+
+		void UpdateGameCamera() {
+			Mat4 rotMat = m_GameCameraRotation.AsMat4();
+			Vec3 front = rotMat * Vec3::Forward();
+			Vec3 up = rotMat * Vec3::Up();
+			Vec3 right = Cross(up, front).Normalized();
+			m_EditorCamera.m_View[0].x = right.x;
+			m_EditorCamera.m_View[1].x = right.y;
+			m_EditorCamera.m_View[2].x = right.z;
+			m_EditorCamera.m_View[0].y = up.x;
+			m_EditorCamera.m_View[1].y = up.y;
+			m_EditorCamera.m_View[2].y = up.z;
+			m_EditorCamera.m_View[0].z = front.x;
+			m_EditorCamera.m_View[1].z = front.y;
+			m_EditorCamera.m_View[2].z = front.z;
+			Vec3 negPos = -m_GameCameraPosition;
+			m_EditorCamera.m_View[3] = {
+				Dot(right, negPos),
+				Dot(up, negPos),
+				Dot(front, negPos),
+				1.0f,
+			};
 		}
 
 		void UpdateEditorCamera() {
@@ -6277,6 +6660,7 @@ void main() {
 			m_EditorCamera.m_View[1].z = front.y;
 			m_EditorCamera.m_View[2].z = front.z;
 			Vec3 negPos = -m_EditorCameraPosition;
+			negPos.y *= -1;
 			m_EditorCamera.m_View[3] = {
 				Dot(right, negPos),
 				Dot(up, negPos),
@@ -6315,7 +6699,7 @@ void main() {
 				Quaternion upRot = Quaternion::AxisRotation(Vec3::Up(), m_EditorCameraRotations.y);
 				if (moved) {
 					float frameSpeed = m_EditorCameraSpeed * Time::DeltaTime();
-					float y = -movementVector.y * frameSpeed / 2;
+					float y = movementVector.y * frameSpeed / 2;
 					movementVector.y = 0.0f;
 					movementVector = movementVector.Normalized() * frameSpeed;
 					movementVector = upRot.AsMat4() * movementVector;
@@ -6335,6 +6719,7 @@ void main() {
 				m_EditorCamera.m_View[1].z = front.y;
 				m_EditorCamera.m_View[2].z = front.z;
 				Vec3 negPos = -m_EditorCameraPosition;
+				negPos.y *= -1;
 				m_EditorCamera.m_View[3] = {
 					Dot(right, negPos),
 					Dot(up, negPos),
@@ -6344,9 +6729,11 @@ void main() {
 			}
 		}
 
-		void RenderWorld(const Renderer::DrawData& drawData, bool inEditorMode) {
+		void RenderWorld(const Renderer::DrawData& drawData, bool inEditorView) {
 
-			*m_CameraMatricesMap = inEditorMode ? m_EditorCamera : m_GameCamera;
+			*m_CameraMatricesMap = inEditorView ? m_EditorCamera : m_GameCamera;
+			
+			m_WasInEditorView = inEditorView;
 
 			{
 
@@ -6672,6 +7059,12 @@ void main() {
 			RotatorZ = 3,
 		};
 
+		enum SDFStateBits {
+			SDFState_Rotators = 1,
+		};
+
+		typedef uint32_t SDFState;
+
 		struct SerializedObject {
 
 			ObjectID m_ObjectID;
@@ -6709,6 +7102,7 @@ void main() {
 		};
 
 		World& m_World;
+		PhysicsManager& m_PhysicsManager;
 		Renderer& m_Renderer;
 
 		Vec4 m_WireColor = { 45.0f / 255, 173.0f / 255, 137.0f / 255, 1.0f };
@@ -6719,6 +7113,7 @@ void main() {
 		ObjectID m_InspectedArea{};
 		uint32_t m_SelectedObjectIndex = UINT64_MAX;
 		HoveredSDF m_HoveredSDF = HoveredSDF::None;
+		SDFState m_SDFState = 0;
 		MeshData m_CubeMeshData{};
 
 		pipelines::Editor m_Pipelines{};
@@ -6732,6 +7127,8 @@ void main() {
 		RotatorInfoBufferSDF* m_RotatorInfoBufferMapSDF = nullptr;
 		uint32_t* m_MouseHitBufferMapsSDF[5]{};
 
+		Mat4 m_RotatorTransformsSDF[3]{};
+
 		ImGuiContext* m_ImGuiContext = nullptr;
 		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
 		VkFormat m_ImGuiColorAttachmentFormat = VK_FORMAT_UNDEFINED;
@@ -6743,8 +7140,8 @@ void main() {
 		VkDescriptorPool m_MouseHitBufferDescriptorPoolSDF = VK_NULL_HANDLE; 
 		uint32_t m_LastImageCount = 0;
 
-		Editor(World& world, Renderer& renderer, GLFWwindow* glfwWindow) 
-			: m_World(world), m_Renderer(renderer), m_GLFWwindow(glfwWindow),
+		Editor(World& world, PhysicsManager& physicsManager, Renderer& renderer, GLFWwindow* glfwWindow) 
+			: m_World(world), m_PhysicsManager(physicsManager), m_Renderer(renderer), m_GLFWwindow(glfwWindow),
 				m_QuadTransformBufferSDF(m_Renderer),
 				m_RotatorInfoBufferSDF(m_Renderer),
 				m_MouseHitBuffersSDF { m_Renderer, m_Renderer, m_Renderer, m_Renderer, m_Renderer } {}
@@ -6884,9 +7281,6 @@ void main() {
 			VkWriteDescriptorSet rotatorInfoWrite = Renderer::GetDescriptorWrite(nullptr, 0, m_RotatorInfoDescriptorSetSDF, 
 				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &rotatorInfoBufferInfo);
 			m_Renderer.UpdateDescriptorSets(1, &rotatorInfoWrite);
-			m_RotatorInfoBufferMapSDF->c_InverseTransformX = Inverse(Mat4::AxisRotation(Vec3::Forward(), pi / 2));
-			m_RotatorInfoBufferMapSDF->c_InverseTransformY = Mat4(1);
-			m_RotatorInfoBufferMapSDF->c_InverseTransformZ = Inverse(Mat4::AxisRotation(Vec3::Right(), pi/2));
 		}
 
 		void Terminate() {
@@ -6925,13 +7319,28 @@ void main() {
 
 	private:
 
+		void ActivateRotatorsSDF(const Vec3& position) {
+			Vec3 pos = Vec3(position.x, -position.y, position.z) / (pi * 2);
+			m_RotatorTransformsSDF[0] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Forward(), pi / 2));
+			m_RotatorTransformsSDF[1] = Mat4(1).Translate(Vec4(pos, 1.0f));
+			m_RotatorTransformsSDF[2] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Right(), pi / 2));
+			m_RotatorInfoBufferMapSDF->c_InverseTransformX = Inverse(m_RotatorTransformsSDF[0]);
+			m_RotatorInfoBufferMapSDF->c_InverseTransformY = Inverse(m_RotatorTransformsSDF[1]);
+			m_RotatorInfoBufferMapSDF->c_InverseTransformZ = Inverse(m_RotatorTransformsSDF[2]);
+			m_SDFState |= SDFState_Rotators;
+		}
+
+		void DeactiveateRotatorsSDF() {
+			m_SDFState &= ~SDFState_Rotators;
+		}
+
 		void NewFrame() {
 			ImGui_ImplVulkan_NewFrame();
 			ImGui_ImplGlfw_NewFrame();
 			ImGui::NewFrame();
 		}
 
-		void Update() {
+		void Update(EngineState& ioEngineState) {
 
 			using MouseButton = Input::MouseButton;
 
@@ -6952,6 +7361,26 @@ void main() {
 			if (ImGui::Begin("Docking Space", nullptr, dockingSpaceWindowFlags)) {
 				ImGui::PopStyleVar(3);
 				ImGui::DockSpace(ImGui::GetID("MainDockingSpace"), ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+				ImGui::End();
+			}
+
+			if (ImGui::Begin("Engine Controller")) {
+				if (!(ioEngineState & EngineState_Play)) {
+					if (ImGui::Button("Play")) {
+						ioEngineState |= EngineState_Play;
+					}
+				}
+				else if (ImGui::Button("Reset")) {
+					ioEngineState &= ~EngineState_Play;
+				}
+				if (!(ioEngineState & EngineState_EditorView)) {
+					if (ImGui::Button("Editor view")) {
+						ioEngineState |= EngineState_EditorView;
+					}
+				}
+				else if (ImGui::Button("Game view")) {
+					ioEngineState &= ~EngineState_EditorView;
+				}
 				ImGui::End();
 			}
 
@@ -6981,6 +7410,8 @@ void main() {
 								ObjectID ID = IDs[i];
 								ImGui::SetCursorPosX(style.ItemSpacing.x);
 								if (m_SelectedObjectIndex == index) {
+									m_PhysicsManager.GetBodyDrawFilter().AddBodyID(body.GetPhysicsID());
+									ActivateRotatorsSDF(body.GetPosition());
 									/*
 									Box<float> boundingBox = obstacle.GetBoundingBox();
 									Vec3 dimensions = boundingBox.Dimensions();
@@ -6998,7 +7429,6 @@ void main() {
 										Vec3 pos = body.GetPosition();
 										Vec3 offset = Vec3(0.0f, 5.0f, -5.0f);
 										m_World.m_EditorCameraPosition = pos + offset;
-										m_World.m_EditorCameraPosition.y *= -1;
 										Vec3 forward = pos - m_World.m_EditorCameraPosition;
 										m_World.m_EditorCameraRotations = Vec2(-AngleBetween(Vec3::Forward(), forward), 0.0f);
 										m_World.UpdateEditorCamera();
@@ -7010,6 +7440,8 @@ void main() {
 								}
 								else if (ImGui::Button((body.GetName() + ", ID : " + IntToString(ID)).CString())) {
 									m_SelectedObjectIndex = index;
+									ActivateRotatorsSDF(body.GetPosition());
+									m_PhysicsManager.GetBodyDrawFilter().RemoveAllBodyIDs();
 								}
 								else if (ImGui::IsItemActive()) {
 									buttonActive = true;
@@ -7017,8 +7449,10 @@ void main() {
 								++index;
 							}
 						}
-						if (!buttonActive && Input::WasMouseButtonPressed(MouseButton::Left)) {
+						if (!buttonActive && ImGui::IsWindowHovered() && Input::WasMouseButtonPressed(MouseButton::Left)) {
 							m_SelectedObjectIndex = UINT32_MAX;
+							m_PhysicsManager.GetBodyDrawFilter().RemoveAllBodyIDs();
+							DeactiveateRotatorsSDF();
 						}
 					}	
 				}
@@ -7027,40 +7461,6 @@ void main() {
 		}
 
 		void Render(const Renderer::DrawData& drawData) {
-			{
-
-				VkRenderingAttachmentInfo colorAttachmentInfo {
-					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
-					.pNext = nullptr,
-					.imageView = drawData.m_SwapchainImageView,
-					.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-					.resolveMode = VK_RESOLVE_MODE_NONE,
-					.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-					.clearValue { .color { .uint32 { 0, 0, 0, 0 } } },
-				};
-
-				VkRenderingInfo renderingInfo {
-					.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
-					.layerCount = 1,
-					.viewMask = 0,
-					.colorAttachmentCount = 1,
-					.pColorAttachments = &colorAttachmentInfo,
-					.pDepthAttachment = nullptr,
-					.pStencilAttachment = nullptr,
-				};
-
-				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
-
-				ImGui::Render();
-				ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), drawData.m_CommandBuffer);
-
-				vkCmdEndRendering(drawData.m_CommandBuffer);
-			}
-
 			{
 
 				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_PipelineSDF);
@@ -7073,24 +7473,25 @@ void main() {
 					const float c_CameraFar;
 				};
 
+				struct PushConstantFragmentSDF {
+					const Vec2_T<uint32_t> c_Resolution;
+					const Vec2_T<uint32_t> c_MousePosition;
+					const SDFState c_State;
+				};
+
+				IntVec2 contentArea;
+				glfwGetWindowSize(m_GLFWwindow, &contentArea.x, &contentArea.y);
+
 				PushConstantVertexSDF pcv {
 					.c_InverseCameraMatrix = inverseCameraMat,
 					.c_CameraNear = World::default_camera_near,
 					.c_CameraFar = World::default_camera_far,
 				};
 
-				struct PushConstantFragmentSDF {
-					const Vec2_T<uint32_t> c_Resolution;
-					const Vec2_T<uint32_t> c_MousePosition;
-				};
-
-				IntVec2 contentArea;
-
-				glfwGetWindowSize(m_GLFWwindow, &contentArea.x, &contentArea.y);
-
 				PushConstantFragmentSDF pcf {
 					.c_Resolution = contentArea,
 					.c_MousePosition = Input::GetMousePosition(),
+					.c_State = m_SDFState,
 				};
 
 				float alpha = 0.5f;
@@ -7168,25 +7569,48 @@ void main() {
 
 				vkCmdEndRendering(drawData.m_CommandBuffer);
 			}
+			{
+				VkRenderingAttachmentInfo colorAttachmentInfo {
+					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
+					.pNext = nullptr,
+					.imageView = drawData.m_SwapchainImageView,
+					.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+					.resolveMode = VK_RESOLVE_MODE_NONE,
+					.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+					.clearValue { .color { .uint32 { 0, 0, 0, 0 } } },
+				};
+
+				VkRenderingInfo renderingInfo {
+					.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+					.pNext = nullptr,
+					.flags = 0,
+					.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
+					.layerCount = 1,
+					.viewMask = 0,
+					.colorAttachmentCount = 1,
+					.pColorAttachments = &colorAttachmentInfo,
+					.pDepthAttachment = nullptr,
+					.pStencilAttachment = nullptr,
+				};
+
+				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
+
+				ImGui::Render();
+				ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), drawData.m_CommandBuffer);
+
+				vkCmdEndRendering(drawData.m_CommandBuffer);
+			}
 		}
-	};	
-
-	enum EngineModeBits {
-		EngineMode_Initialized = 1,
-		EngineMode_Play = 2,
-		EngineMode_Editor = 4,
-		EngineMode_Release = 8,
 	};
-
-	typedef uint32_t EngineMode;
 
 	class Engine {
 
 		friend void CriticalError(ErrorOrigin origin, const char* err, VkResult vkErr, const char* libErr);
 
 	private:
-	
-		EngineMode m_Mode;
+
+		EngineState m_State;
 
 		static constexpr uint32_t sc_RenderResolutionHeight1080p = 400;
 		Vec2_T<uint32_t> m_RenderResolution;
@@ -7199,6 +7623,8 @@ void main() {
 		TextRenderer m_TextRenderer;
 		AssetManager m_AssetManager;
 
+		World::SaveState m_WorldSaveState{};
+
 		StaticMesh m_StaticQuadMesh;
 		StaticMesh m_StaticQuadMesh2D;
 
@@ -7209,22 +7635,22 @@ void main() {
 		static constexpr Vertex quad_vertices[quad_vertex_count] {
 			{
 				.m_Position { -1.0f, 1.0f, 0.0f },
-				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_Normal { 0.0f, 0.0f, -1.0f },
 				.m_UV { 0.0f, 0.0f },
 			},
 			{
 				.m_Position { 1.0f, 1.0f, 0.0f },
-				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_Normal { 0.0f, 0.0f, -1.0f },
 				.m_UV { 1.0f, 0.0f },
 			},
 			{
 				.m_Position { -1.0f, -1.0f, 0.0f },
-				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_Normal { 0.0f, 0.0f, -1.0f },
 				.m_UV { 0.0f, 1.0f },
 			},
 			{
 				.m_Position { 1.0f, -1.0f, 0.0f },
-				.m_Normal { 0.0f, 0.0f, 1.0f },
+				.m_Normal { 0.0f, 0.0f, -1.0f },
 				.m_UV { 1.0f, 1.0f },
 			},	
 		};
@@ -7387,21 +7813,35 @@ void main() {
 			0, 2, 19, 3, 5, 20, 6, 8, 21, 9, 11, 22, 12, 14, 23, 15, 17,
 		};
 
+		static inline Obj torus_obj{};
+
 	public:
 
-		Engine(EngineMode mode, const String& projectName, GLFWwindow* glfwWindow, size_t maxUIWindows) :
-				m_Mode(UpdateEngineInstance(this, mode)),
+		static void SetTorusObj(const Obj& obj) {
+			if (!obj.IsValid()) {
+				CriticalError(ErrorOrigin::Engine, "invalid torus obj set (function Engine::SetTorusObj)!");
+			}
+			torus_obj = obj;
+		}
+
+		Engine(EngineState state, const String& projectName, GLFWwindow* glfwWindow, size_t maxUIWindows) :
+				m_State(UpdateEngineInstance(this, state)),
 				m_UI(m_Renderer, m_TextRenderer, maxUIWindows),
 				m_World(m_AssetManager, m_PhysicsManager, m_Renderer),
-				m_PhysicsManager(65536, 65536, 10240),
+				m_PhysicsManager(m_World, m_Renderer, 65536, 65536, 10240),
 				m_Renderer(projectName.CString(), VK_MAKE_API_VERSION(0, 1, 0, 0), glfwWindow, RendererCriticalErrorCallback, SwapchainCreateCallback),
 				m_TextRenderer(m_Renderer, TextRendererCriticalErrorCallback),
 				m_AssetManager(projectName, m_Renderer),
-				m_Editor(m_World, m_Renderer, glfwWindow),
+				m_Editor(m_World, m_PhysicsManager, m_Renderer, glfwWindow),
 				m_StaticQuadMesh(m_Renderer),
 				m_StaticQuadMesh2D(m_Renderer),
 				m_StaticBoxMesh(m_Renderer)
 		{
+
+			if (!torus_obj.IsValid()) {
+				CriticalError(ErrorOrigin::Engine,
+					"attempting to construct engine when torus obj is not set (in Engine constructor)!");
+			}
 
 			Input input(glfwWindow);
 
@@ -7507,6 +7947,10 @@ void main() {
 			return box_index_count;
 		}
 
+		const StaticMesh& GetBoxMesh() const {
+			return m_StaticBoxMesh;
+		}
+
 		static constexpr void GetBoxMesh(Array<Vertex, box_vertex_count>& outVertices, Array<uint32_t, box_index_count>& outIndices) {
 			for (uint32_t i = 0; i < box_vertex_count; i++) {
 				outVertices[i] = box_vertices[i];
@@ -7522,30 +7966,40 @@ void main() {
 
 			glfwPollEvents();
 
-			bool editorMode = m_Mode & EngineMode_Editor;
-
-			if (m_PhysicsManager.PhysicsUpdate()) {
-				m_World.FixedUpdate();
-			}
-
-			if (m_Mode & EngineMode_Play) {
+			if (m_State & EngineState_Play) {
+				if (m_State & EngineState_LogicAwake) {
+					m_WorldSaveState.Clear();
+					m_WorldSaveState.Initialize(m_World);
+				}
 				m_World.LogicUpdate();
+				if (m_PhysicsManager.PhysicsUpdate()) {
+					m_World.FixedUpdate();
+				}
 				m_UI.UILoop();
+				m_State |= EngineState_QueueLogicShutdown;
+				m_State &= ~EngineState_LogicAwake;
+			}
+			else {
+				m_State |= EngineState_LogicAwake;
+				if (m_State & EngineState_QueueLogicShutdown) {
+					m_World.LoadSaveState(m_WorldSaveState);
+					m_State &= ~EngineState_QueueLogicShutdown;
+				}
 			}
 
-			if (editorMode) {
+			if (m_State & EngineState_Editor) {
 				m_Editor.NewFrame();
-				m_Editor.Update();
+				m_Editor.Update(m_State);
 				m_World.EditorUpdate(m_Renderer.m_Window);
-				editorMode = true;
+				m_PhysicsManager.DebugUpdate();
 			}
 
 			Renderer::DrawData drawData;
 
 			if (m_Renderer.BeginFrame(drawData)) {
-				m_World.RenderWorld(drawData, !(m_Mode & EngineMode_Play) && editorMode);
+				m_World.RenderWorld(drawData, m_State & EngineState_EditorView);
 				m_UI.RenderUI(drawData);
-				if (editorMode) {
+				if (m_State & EngineState_Editor) {
 					m_Editor.Render(drawData);
 				}
 				m_Renderer.EndFrame(0, nullptr);
@@ -7614,14 +8068,14 @@ void main() {
 			s_engine_instance->m_Editor.SwapchainCreateCallback(swapchainExtent, imageCount);
 		}
 
-		static inline EngineMode UpdateEngineInstance(Engine* engine, EngineMode mode) {
+		static inline EngineState UpdateEngineInstance(Engine* engine, EngineState state) {
 			if (s_engine_instance) {
 				fmt::print(fmt::fg(fmt::color::crimson) | fmt::emphasis::bold,
 					"attempting to initialize engine twice (only one engine allowed)!");
 				exit(EXIT_FAILURE);
 			}
 			s_engine_instance = engine;
-			return mode;
+			return state;
 		}
 	};
 }
