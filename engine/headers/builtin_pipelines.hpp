@@ -20,7 +20,8 @@ namespace pipelines {
 		VkPipeline m_RenderPipelinePBR = VK_NULL_HANDLE;
 		VkPipelineLayout m_RenderPipelineLayoutPBR = VK_NULL_HANDLE;
 
-		VkPipeline m_WirePipeline = VK_NULL_HANDLE;
+		VkPipeline m_DebugWirePipeline = VK_NULL_HANDLE;
+		VkPipeline m_DebugSolidPipeline = VK_NULL_HANDLE;
 		VkPipelineLayout m_DebugPipelineLayout = VK_NULL_HANDLE;
 
 		VkDescriptorSetLayout m_DirectionalLightShadowMapDescriptorSetLayout = VK_NULL_HANDLE;
@@ -43,8 +44,10 @@ namespace pipelines {
 			m_RenderPipelinePBR = VK_NULL_HANDLE;
 			renderer.DestroyPipelineLayout(m_RenderPipelineLayoutPBR);
 			m_RenderPipelineLayoutPBR = VK_NULL_HANDLE;
-			renderer.DestroyPipeline(m_WirePipeline);
-			m_WirePipeline = VK_NULL_HANDLE;
+			renderer.DestroyPipeline(m_DebugWirePipeline);
+			m_DebugWirePipeline = VK_NULL_HANDLE;
+			renderer.DestroyPipeline(m_DebugSolidPipeline);
+			m_DebugSolidPipeline = VK_NULL_HANDLE;
 			renderer.DestroyPipelineLayout(m_DebugPipelineLayout);
 			m_DebugPipelineLayout = VK_NULL_HANDLE;
 			renderer.DestroyDescriptorSetLayout(m_CameraDescriptorSetLayout);
@@ -55,32 +58,6 @@ namespace pipelines {
 			m_DirectionalLightShadowMapDescriptorSetLayout = VK_NULL_HANDLE;
 			renderer.DestroyDescriptorSetLayout(m_TextureDescriptorSetLayoutPBR);
 			m_TextureDescriptorSetLayoutPBR = VK_NULL_HANDLE;
-		}
-	};
-
-	class Editor {
-	public:
-	
-		VkPipeline m_PipelineSDF = VK_NULL_HANDLE;
-		VkPipelineLayout m_PipelineLayoutSDF = VK_NULL_HANDLE;
-
-		VkDescriptorSetLayout m_QuadTransformDescriptorSetLayoutSDF = VK_NULL_HANDLE;
-		VkDescriptorSetLayout m_RotatorInfoDescriptorSetLayoutSDF = VK_NULL_HANDLE;
-		VkDescriptorSetLayout m_MouseHitDescriptorSetLayoutSDF = VK_NULL_HANDLE;
-
-		void Initialize(engine::Renderer& renderer);
-
-		void Terminate(engine::Renderer& renderer) {
-			renderer.DestroyPipeline(m_PipelineSDF);
-			m_PipelineSDF = VK_NULL_HANDLE;
-			renderer.DestroyPipelineLayout(m_PipelineLayoutSDF);
-			m_PipelineLayoutSDF = VK_NULL_HANDLE;
-			renderer.DestroyDescriptorSetLayout(m_QuadTransformDescriptorSetLayoutSDF);
-			m_QuadTransformDescriptorSetLayoutSDF = VK_NULL_HANDLE;
-			renderer.DestroyDescriptorSetLayout(m_RotatorInfoDescriptorSetLayoutSDF);
-			m_RotatorInfoDescriptorSetLayoutSDF = VK_NULL_HANDLE;
-			renderer.DestroyDescriptorSetLayout(m_MouseHitDescriptorSetLayoutSDF);
-			m_MouseHitDescriptorSetLayoutSDF = VK_NULL_HANDLE;
 		}
 	};
 }
