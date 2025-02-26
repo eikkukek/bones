@@ -76,7 +76,7 @@ namespace engine {
 			return;
 		}
 		if (drawMode == EDrawMode::Wireframe) {
-			m_World.RenderWireMesh(mesh->GetMeshData(), modelMat, Vec4(modelColor.r, modelColor.g, modelColor.b, modelColor.a) / 255.0f);
+			m_World.RenderDebugWireMesh(mesh->GetMeshData(), modelMat, Vec4(modelColor.r, modelColor.g, modelColor.b, modelColor.a) / 255.0f);
 		}
 	}
 
@@ -841,118 +841,7 @@ namespace engine {
 	}
 
 	void Editor::SwapchainCreateCallback(VkExtent2D extent, uint32_t imageCount) {
-
 		assert(imageCount < 5);
-
-		if (m_Pipelines.m_QuadTransformDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
-
-			VkDescriptorSetLayoutBinding binding { 
-				m_Renderer.GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT),
-			};
-
-			m_Pipelines.m_QuadTransformDescriptorSetLayoutSDF = m_Renderer.CreateDescriptorSetLayout(nullptr, 1, &binding);
-
-			if (m_Pipelines.m_QuadTransformDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to create SDF transform descriptor set layout (function Renderer::CreateDescriptorSetLayout in function Editor::SwapchainCreateCallback)!");
-			}
-
-			if (!m_QuadTransformBufferSDF.Create(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
-					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to create debug render transform buffer (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
-			}
-			if (!m_QuadTransformBufferSDF.MapMemory(0, 64, (void**)&m_QuadTransformBufferMapSDF)) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to map debug render transform buffer (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)");
-			}
-			VkDescriptorPoolSize poolSize {
-				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-				.descriptorCount = 1,
-			};
-			m_QuadTransformBufferDescriptorPoolSDF = m_Renderer.CreateDescriptorPool(0, 1, 1, &poolSize);
-			if (m_QuadTransformBufferDescriptorPoolSDF  == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to create debug render transform descriptor pool (function Renderer::CreateDescriptorPool in function Editor::SwapchainCreateCallback)!");
-			}
-			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_QuadTransformBufferDescriptorPoolSDF, 1, 
-					&m_Pipelines.m_QuadTransformDescriptorSetLayoutSDF, &m_QuadTransformDescriptorSetSDF)) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to allocate debug render transform descriptor set (function Renderer::AllocateDescriptorSets in function Editor::SwapchainCreateCallback)!");
-			}
-			VkDescriptorBufferInfo bufferInfo {
-				.buffer = m_QuadTransformBufferSDF.m_Buffer,
-				.offset = 0,
-				.range = 64,
-			};
-			VkWriteDescriptorSet write = Renderer::GetDescriptorWrite(nullptr, 0, m_QuadTransformDescriptorSetSDF,
-				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &bufferInfo);
-			m_Renderer.UpdateDescriptorSets(1, &write);
-		}
-
-		*m_QuadTransformBufferMapSDF = Mat4(1.0f);
-
-		if (m_Pipelines.m_MouseHitDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
-			VkDescriptorSetLayoutBinding bindings[1] {
-				m_Renderer.GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT),
-			};
-
-			m_Pipelines.m_MouseHitDescriptorSetLayoutSDF = m_Renderer.CreateDescriptorSetLayout(nullptr, 1, bindings);
-
-			if (m_Pipelines.m_MouseHitDescriptorSetLayoutSDF == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to create SDF mouse hit image descriptor set layout (funtion Renderer::CreateDescriptorSetLayout in function Editor::SwapchainCreateCallback)");
-			}
-		}
-
-
-		if (m_LastImageCount != imageCount) {
-			for (uint32_t i = 0; i < 5; i++) {
-				m_MouseHitBuffersSDF[i].Terminate();
-			}
-			m_Renderer.DestroyDescriptorPool(m_MouseHitBufferDescriptorPoolSDF);
-			m_MouseHitBufferDescriptorPoolSDF = VK_NULL_HANDLE;
-			VkDescriptorPoolSize poolSizes[5];
-			VkDescriptorBufferInfo bufferInfos[5];
-			VkDescriptorSetLayout setLayouts[5];
-			for (uint32_t i = 0; i < imageCount; i++) {
-				if (!m_MouseHitBuffersSDF[i].Create(4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to create editor rotator storage buffers (function Renderer::Buffer::Create in function Editor::SwapchainCreateCallback)!");
-				}
-				if (!m_MouseHitBuffersSDF[i].MapMemory(0, 4, (void**)&m_MouseHitBufferMapsSDF[i])) {
-					CriticalError(ErrorOrigin::Renderer,
-						"failed to map editor rotator storage buffers (function Renderer::Buffer::MapMemory in function Editor::SwapchainCreateCallback)!");
-				}
-				poolSizes[i] = {
-					.type =VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-					.descriptorCount = 1,
-				};
-				bufferInfos[i] = {
-					.buffer = m_MouseHitBuffersSDF[i].m_Buffer,
-					.offset = 0,
-					.range = 4,
-				};
-				setLayouts[i] = m_Pipelines.m_MouseHitDescriptorSetLayoutSDF;
-			}
-			m_MouseHitBufferDescriptorPoolSDF = m_Renderer.CreateDescriptorPool(0, imageCount, imageCount, poolSizes);
-			if (m_MouseHitBufferDescriptorPoolSDF  == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to create rotator storage buffer descriptor pool (function Renderer::CreateDescriptorPool in function Editor:.SwapchainCreateCallback)!");
-			}
-			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_MouseHitBufferDescriptorPoolSDF, imageCount, setLayouts,
-					m_MouseHitDescriptorSetsSDF)) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to allocate rotator storage buffer descriptor sets (function Renderer::AllocateDescriptorSets in function Editor:.SwapchainCreateCallback)!");
-			}
-			VkWriteDescriptorSet writes[5]{};
-			for (uint32_t i = 0; i < imageCount; i++) {
-				writes[i] = Renderer::GetDescriptorWrite(nullptr, 0, m_MouseHitDescriptorSetsSDF[i],
-					VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &bufferInfos[i]);
-			}
-			m_Renderer.UpdateDescriptorSets(imageCount, writes);
-		}
 		m_LastImageCount = imageCount;
 	}
 }
