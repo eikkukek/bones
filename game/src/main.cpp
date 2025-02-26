@@ -171,7 +171,7 @@ int main() {
 		CriticalError(ErrorOrigin::Engine,
 			"failed to load torus obj file!");
 	}
-	Engine::SetTorusObj(torus);
+	Engine::SetRotatorTorusObj(torus);
 
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
 	Engine engine(EngineState_Editor | EngineState_EditorView, "Test", pWindow, 1000);
