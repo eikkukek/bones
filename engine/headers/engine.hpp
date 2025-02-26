@@ -2190,7 +2190,8 @@ namespace engine {
 		Vec2 m_UV{};
 	};
 
-	struct Obj {
+	class Obj {
+	private:
 
 		uint32_t m_LinesParsed = 0;
 
@@ -2205,6 +2206,8 @@ namespace engine {
 		uint32_t m_MaxVIndex;
 		uint32_t m_MaxVtIndex;
 		uint32_t m_MaxVnIndex;
+
+	public:
 
 		bool Load(FILE* fileStream) {
 			if (!fileStream) {
@@ -6422,7 +6425,8 @@ void main() {
 		OrderedDictionary<RenderID, WorldRenderData> m_RenderDatas{};
 		VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
 		DynamicArray<VkDescriptorSet> m_RenderPBRImagesDescriptorSets{};
-		DynamicArray<DebugRenderData> m_WireRenderDatas{};
+		DynamicArray<DebugRenderData> m_DebugWireRenderDatas{};
+		DynamicArray<DebugRenderData> m_DebugSolidRenderDatas{};
 		UnidirectionalLight m_DirectionalLight;
 		MeshData m_StaticQuadMeshDataPBR{};
 
@@ -6585,8 +6589,12 @@ void main() {
 			return m_RenderDatas.Find(ID);
 		}
 
-		void RenderWireMesh(const MeshData& mesh, const Mat4& transform, const Vec4& wireColor) {
-			m_WireRenderDatas.EmplaceBack(mesh, transform, wireColor);
+		void RenderDebugWireMesh(const MeshData& mesh, const Mat4& transform, const Vec4& color) {
+			m_DebugWireRenderDatas.EmplaceBack(mesh, transform, color);
+		}
+
+		void RenderDebugSolidMesh(const MeshData& mesh, const Mat4& transform, const Vec4& color) {
+			m_DebugSolidRenderDatas.EmplaceBack(mesh, transform, color);
 		}
 
 		void LoadSaveState(const SaveState& saveState) {
@@ -6961,7 +6969,18 @@ void main() {
 					.resolveMode = VK_RESOLVE_MODE_NONE,
 					.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
 					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-					.clearValue = { .color { .uint32 { 0, 0, 0, 0 } } },
+					.clearValue = { .color { .uint32 { 0, 0, 0, 0, }, }, },
+				};
+
+				VkRenderingAttachmentInfo depthAttachment {
+					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+					.pNext = nullptr,
+					.imageView = VK_NULL_HANDLE,
+					.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+					.resolveMode = VK_RESOLVE_MODE_NONE,
+					.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+					.clearValue = { .color {.uint32 { 0, 0, 0, 0, }, }, },
 				};
 
 				VkRenderingInfo renderingInfo {
@@ -6977,10 +6996,18 @@ void main() {
 				};
 
 				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
-				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_WirePipeline);
 				vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugPipelineLayout, 0, 
 					1, &m_CameraMatricesDescriptorSet, 0, nullptr);
-				for (const DebugRenderData& renderData : m_WireRenderDatas) {
+				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugWirePipeline);
+				for (const DebugRenderData& renderData : m_DebugWireRenderDatas) {
+					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
+						VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &renderData.m_Transform);
+					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
+						VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16, &renderData.m_Color);
+					Renderer::DrawIndexed(drawData.m_CommandBuffer, renderData.m_MeshData);
+				}
+				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugSolidPipeline);
+				for (const DebugRenderData& renderData : m_DebugSolidRenderDatas) {
 					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
 						VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &renderData.m_Transform);
 					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
@@ -6988,7 +7015,8 @@ void main() {
 					Renderer::DrawIndexed(drawData.m_CommandBuffer, renderData.m_MeshData);
 				}
 				vkCmdEndRendering(drawData.m_CommandBuffer);
-				m_WireRenderDatas.Resize(0);
+				m_DebugWireRenderDatas.Resize(0);
+				m_DebugSolidRenderDatas.Resize(0);
 			}
 		}
 
@@ -7041,29 +7069,18 @@ void main() {
 
 	public:
 
-		struct RotatorInfoBufferSDF {
-			Mat4 c_InverseTransformX;
-			Mat4 c_InverseTransformY;
-			Mat4 c_InverseTransformZ;
-			Vec4 c_ColorX;
-			Vec4 c_ColorY;
-			Vec4 c_ColorZ;
-			float c_Radius;
-			float c_Thickness;
-		};
-
-		enum class HoveredSDF {
+		enum class HoveredGizmo {
 			None = 0,
 			RotatorX = 1,
 			RotatorY = 2,
 			RotatorZ = 3,
 		};
 
-		enum SDFStateBits {
-			SDFState_Rotators = 1,
+		enum GizmoRenderStateBits {
+			GizmoRenderState_Rotators = 1,
 		};
 
-		typedef uint32_t SDFState;
+		typedef uint32_t GizmoRenderState;
 
 		struct SerializedObject {
 
@@ -7084,17 +7101,17 @@ void main() {
 				}
 				Quaternion rot = body->GetRotation();
 				switch (axis) {
-					case 1:
-						rot = rot * Quaternion::AxisRotation(Vec3::Right(), amount);
-						break;
-					case 2:
-						rot = rot * Quaternion::AxisRotation(Vec3::Up(), amount);
-						break;
-					case 3:
-						rot = rot * Quaternion::AxisRotation(Vec3::Forward(), amount);
-						break;
-					default:
-						return false;
+				case 1:
+					rot = rot * Quaternion::AxisRotation(Vec3::Right(), amount);
+					break;
+				case 2:
+					rot = rot * Quaternion::AxisRotation(Vec3::Up(), amount);
+					break;
+				case 3:
+					rot = rot * Quaternion::AxisRotation(Vec3::Forward(), amount);
+					break;
+				default:
+					return false;
 				}
 				body->SetRotation(rot);
 				return true;
@@ -7112,39 +7129,23 @@ void main() {
 		GLFWwindow* const m_GLFWwindow;
 		ObjectID m_InspectedArea{};
 		uint32_t m_SelectedObjectIndex = UINT64_MAX;
-		HoveredSDF m_HoveredSDF = HoveredSDF::None;
-		SDFState m_SDFState = 0;
+
+		HoveredGizmo m_HoveredGizmo = HoveredGizmo::None;
+		GizmoRenderState m_GizmoRenderState = 0;
+
 		MeshData m_CubeMeshData{};
+		MeshData m_QuadMeshData{};
+		MeshData m_TorusMeshData{};
 
-		pipelines::Editor m_Pipelines{};
-		VkDescriptorSet m_QuadTransformDescriptorSetSDF = VK_NULL_HANDLE;
-		VkDescriptorSet m_RotatorInfoDescriptorSetSDF{};
-		VkDescriptorSet m_MouseHitDescriptorSetsSDF[5]{};
-
-		MeshData m_QuadMesh2DData{};
-
-		Mat4* m_QuadTransformBufferMapSDF = nullptr;
-		RotatorInfoBufferSDF* m_RotatorInfoBufferMapSDF = nullptr;
-		uint32_t* m_MouseHitBufferMapsSDF[5]{};
-
-		Mat4 m_RotatorTransformsSDF[3]{};
+		Mat4 m_RotatorTransforms[3]{};
 
 		ImGuiContext* m_ImGuiContext = nullptr;
 		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
 		VkFormat m_ImGuiColorAttachmentFormat = VK_FORMAT_UNDEFINED;
-		Renderer::Buffer m_QuadTransformBufferSDF;
-		Renderer::Buffer m_RotatorInfoBufferSDF;
-		Renderer::Buffer m_MouseHitBuffersSDF[5];
-		VkDescriptorPool m_QuadTransformBufferDescriptorPoolSDF = VK_NULL_HANDLE;
-		VkDescriptorPool m_RotatorInfoBufferDescriptorPoolSDF = VK_NULL_HANDLE;
-		VkDescriptorPool m_MouseHitBufferDescriptorPoolSDF = VK_NULL_HANDLE; 
 		uint32_t m_LastImageCount = 0;
 
 		Editor(World& world, PhysicsManager& physicsManager, Renderer& renderer, GLFWwindow* glfwWindow) 
-			: m_World(world), m_PhysicsManager(physicsManager), m_Renderer(renderer), m_GLFWwindow(glfwWindow),
-				m_QuadTransformBufferSDF(m_Renderer),
-				m_RotatorInfoBufferSDF(m_Renderer),
-				m_MouseHitBuffersSDF { m_Renderer, m_Renderer, m_Renderer, m_Renderer, m_Renderer } {}
+			: m_World(world), m_PhysicsManager(physicsManager), m_Renderer(renderer), m_GLFWwindow(glfwWindow) {}
 
 		Editor(const Editor&) = delete;
 
@@ -7176,15 +7177,49 @@ void main() {
 				}
 			}
 			ImGui::Text("%s", text);
-			ImGui::SetCursorPos(currentCursorPos);
+			if (x_alignment.HasValue()) {
+				ImGui::SetCursorPosX(currentCursorPos.x);
+			}
+			if (y_alignment.HasValue()) {
+				ImGui::SetCursorPosY(currentCursorPos.x);
+			}
+		}
+
+		static bool AlignedButton(const char* label, Optional<float> x_alignment, Optional<float> y_alignment) {
+			ImVec2 avail = ImGui::GetContentRegionAvail();
+			ImVec2 textSize = ImGui::CalcTextSize(label);
+			ImVec2 framePadding = ImGui::GetStyle().FramePadding;
+			ImVec2 buttonSize = ImVec2(textSize.x + framePadding.x * 2, textSize.y + framePadding.y * 2);
+			ImVec2 currentCursorPos = ImGui::GetCursorPos();
+			if (x_alignment.HasValue()) {
+				float off = (avail.x - buttonSize.x) * x_alignment.GetValue();
+				if (off > 0.0f) {
+					ImGui::SetCursorPosX(currentCursorPos.x + off);
+				}
+			}
+			if (y_alignment.HasValue()) {
+				float off = (avail.y - buttonSize.y) * y_alignment.GetValue();
+				if (off > 0.0f) {
+					ImGui::SetCursorPosY(currentCursorPos.y + off);
+				}
+			}
+			bool res = ImGui::Button(label);
+			if (x_alignment.HasValue()) {
+				ImGui::SetCursorPosX(currentCursorPos.x);
+			}
+			if (y_alignment.HasValue()) {
+				ImGui::SetCursorPosY(currentCursorPos.x);
+			}
+			return res;
 		}
 
 	private:
 
-		void Initialize(GLFWwindow* glfwWindow, const MeshData& cubeMeshData, const MeshData& quadMesh2D) {
+		void Initialize(GLFWwindow* glfwWindow, const MeshData& cubeMeshData, const MeshData& quadMeshData, const MeshData& torusMeshData) {
 
 			m_CubeMeshData = cubeMeshData;
-			m_QuadMesh2DData = quadMesh2D;
+			m_QuadMeshData = quadMeshData;
+			m_TorusMeshData = torusMeshData;
 
 			IMGUI_CHECKVERSION();
 
@@ -7247,40 +7282,6 @@ void main() {
 				CriticalError(ErrorOrigin::Editor,
 					"failed to initialize ImGui (function ImGui_ImplVulkan_CreateFontsTexture in function Editor::Initialize)!");
 			}
-
-			m_Pipelines.Initialize(m_Renderer);
-
-			if (!m_RotatorInfoBufferSDF.Create(sizeof(RotatorInfoBufferSDF), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to create editor SDF rotator info buffers (function Renderer::Buffer::Create in function Editor::Initialize)!");
-			}
-			if (!m_RotatorInfoBufferSDF.MapMemory(0, sizeof(RotatorInfoBufferSDF), (void**)&m_RotatorInfoBufferMapSDF)) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to map editor SDF rotator info buffers (function Renderer::Buffer::MapMemory in function Editor::Initialize)!");
-			}
-			VkDescriptorPoolSize rotatorInfoPoolSize {
-				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-				.descriptorCount = 1,
-			};
-			m_RotatorInfoBufferDescriptorPoolSDF = m_Renderer.CreateDescriptorPool(0, 1, 1, &rotatorInfoPoolSize);
-			if (m_RotatorInfoBufferDescriptorPoolSDF == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to create SDF rotator info buffer descriptor pool (function Renderer::CreateDescriptorPool in function Editor::Initialize)!");
-			}
-			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_RotatorInfoBufferDescriptorPoolSDF, 1, 
-					&m_Pipelines.m_RotatorInfoDescriptorSetLayoutSDF, &m_RotatorInfoDescriptorSetSDF)) {
-				CriticalError(ErrorOrigin::Renderer,
-					"failed to allocate SDF rotator info buffer descriptor sets (function Renderer::AllocateDescriptorSets in function Editor::Initialize)!");
-			}
-			VkDescriptorBufferInfo rotatorInfoBufferInfo {
-				.buffer = m_RotatorInfoBufferSDF.m_Buffer,
-				.offset = 0,
-				.range = sizeof(RotatorInfoBufferSDF),
-			};
-			VkWriteDescriptorSet rotatorInfoWrite = Renderer::GetDescriptorWrite(nullptr, 0, m_RotatorInfoDescriptorSetSDF, 
-				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &rotatorInfoBufferInfo);
-			m_Renderer.UpdateDescriptorSets(1, &rotatorInfoWrite);
 		}
 
 		void Terminate() {
@@ -7290,23 +7291,6 @@ void main() {
 			m_ImGuiContext = nullptr;
 			m_Renderer.DestroyDescriptorPool(m_ImGuiDescriptorPool);
 			m_ImGuiDescriptorPool = VK_NULL_HANDLE;
-			m_Renderer.DestroyDescriptorPool(m_QuadTransformBufferDescriptorPoolSDF);
-			m_QuadTransformBufferDescriptorPoolSDF = VK_NULL_HANDLE;
-			m_QuadTransformBufferSDF.Terminate();
-			m_Renderer.DestroyDescriptorPool(m_RotatorInfoBufferDescriptorPoolSDF);
-			m_RotatorInfoBufferDescriptorPoolSDF = VK_NULL_HANDLE;
-			m_Renderer.DestroyDescriptorPool(m_MouseHitBufferDescriptorPoolSDF);
-			m_MouseHitBufferDescriptorPoolSDF = VK_NULL_HANDLE;
-			m_QuadTransformBufferSDF.Terminate();
-			m_QuadTransformBufferMapSDF = nullptr;
-			m_RotatorInfoBufferSDF.Terminate();
-			m_RotatorInfoBufferMapSDF = nullptr;
-			for (uint32_t i = 0; i < m_LastImageCount; i++) {
-				m_MouseHitBuffersSDF[i].Terminate();
-				m_MouseHitBufferMapsSDF[i] = nullptr;
-				m_MouseHitDescriptorSetsSDF[i] = VK_NULL_HANDLE;
-			}
-			m_Pipelines.Terminate(m_Renderer);
 		}
 
 		void SwapchainCreateCallback(VkExtent2D extent, uint32_t imageCount);
@@ -7319,19 +7303,16 @@ void main() {
 
 	private:
 
-		void ActivateRotatorsSDF(const Vec3& position) {
-			Vec3 pos = Vec3(position.x, -position.y, position.z) / (pi * 2);
-			m_RotatorTransformsSDF[0] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Forward(), pi / 2));
-			m_RotatorTransformsSDF[1] = Mat4(1).Translate(Vec4(pos, 1.0f));
-			m_RotatorTransformsSDF[2] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Right(), pi / 2));
-			m_RotatorInfoBufferMapSDF->c_InverseTransformX = Inverse(m_RotatorTransformsSDF[0]);
-			m_RotatorInfoBufferMapSDF->c_InverseTransformY = Inverse(m_RotatorTransformsSDF[1]);
-			m_RotatorInfoBufferMapSDF->c_InverseTransformZ = Inverse(m_RotatorTransformsSDF[2]);
-			m_SDFState |= SDFState_Rotators;
+		void ActivateRotators(const Vec3& position) {
+			Vec3 pos = Vec3(position.x, -position.y, position.z);
+			m_RotatorTransforms[0] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Forward(), pi / 2));
+			m_RotatorTransforms[1] = Mat4(1).Translate(Vec4(pos, 1.0f));
+			m_RotatorTransforms[2] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Right(), pi / 2));
+			m_GizmoRenderState |= GizmoRenderState_Rotators;
 		}
 
-		void DeactiveateRotatorsSDF() {
-			m_SDFState &= ~SDFState_Rotators;
+		void DeactivateRotators() {
+			m_GizmoRenderState &= ~GizmoRenderState_Rotators;
 		}
 
 		void NewFrame() {
@@ -7361,28 +7342,30 @@ void main() {
 			if (ImGui::Begin("Docking Space", nullptr, dockingSpaceWindowFlags)) {
 				ImGui::PopStyleVar(3);
 				ImGui::DockSpace(ImGui::GetID("MainDockingSpace"), ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
-				ImGui::End();
 			}
+			ImGui::End();
 
-			if (ImGui::Begin("Engine Controller")) {
+			ImGui::SetNextWindowSize({ 200.0f, 100.0f });
+
+			if (ImGui::Begin("Engine Controller", nullptr, ImGuiWindowFlags_NoResize)) {
 				if (!(ioEngineState & EngineState_Play)) {
-					if (ImGui::Button("Play")) {
+					if (AlignedButton("Play", 0.5f, {})) {
 						ioEngineState |= EngineState_Play;
 					}
 				}
-				else if (ImGui::Button("Reset")) {
+				else if (AlignedButton("Reset", 0.5f, {})) {
 					ioEngineState &= ~EngineState_Play;
 				}
 				if (!(ioEngineState & EngineState_EditorView)) {
-					if (ImGui::Button("Editor view")) {
+					if (AlignedButton("Editor view", 0.5f, {})) {
 						ioEngineState |= EngineState_EditorView;
 					}
 				}
-				else if (ImGui::Button("Game view")) {
+				else if (AlignedButton("Game view", 0.5f, {})) {
 					ioEngineState &= ~EngineState_EditorView;
 				}
-				ImGui::End();
 			}
+			ImGui::End();
 
 			if (ImGui::Begin("Area")) {
 				if (m_InspectedArea == Invalid_ID) {
@@ -7411,7 +7394,7 @@ void main() {
 								ImGui::SetCursorPosX(style.ItemSpacing.x);
 								if (m_SelectedObjectIndex == index) {
 									m_PhysicsManager.GetBodyDrawFilter().AddBodyID(body.GetPhysicsID());
-									ActivateRotatorsSDF(body.GetPosition());
+									ActivateRotators(body.GetPosition());
 									/*
 									Box<float> boundingBox = obstacle.GetBoundingBox();
 									Vec3 dimensions = boundingBox.Dimensions();
@@ -7440,7 +7423,7 @@ void main() {
 								}
 								else if (ImGui::Button((body.GetName() + ", ID : " + IntToString(ID)).CString())) {
 									m_SelectedObjectIndex = index;
-									ActivateRotatorsSDF(body.GetPosition());
+									ActivateRotators(body.GetPosition());
 									m_PhysicsManager.GetBodyDrawFilter().RemoveAllBodyIDs();
 								}
 								else if (ImGui::IsItemActive()) {
@@ -7452,123 +7435,21 @@ void main() {
 						if (!buttonActive && ImGui::IsWindowHovered() && Input::WasMouseButtonPressed(MouseButton::Left)) {
 							m_SelectedObjectIndex = UINT32_MAX;
 							m_PhysicsManager.GetBodyDrawFilter().RemoveAllBodyIDs();
-							DeactiveateRotatorsSDF();
+							DeactivateRotators();
 						}
 					}	
 				}
-				ImGui::End();
+			}
+			ImGui::End();
+
+			if (m_GizmoRenderState & GizmoRenderState_Rotators) {
+				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[0], Vec4(1.0f, 0.0f, 0.0f, 0.7f));
+				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[1], Vec4(0.0f, 1.0f, 0.0f, 0.7f));
+				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[2], Vec4(0.0f, 0.0f, 1.0f, 0.7f));
 			}
 		}
 
-		void Render(const Renderer::DrawData& drawData) {
-			{
-
-				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_PipelineSDF);
-
-				Mat4 inverseCameraMat = Inverse(m_World.m_CameraMatricesMap->m_Projection * m_World.m_CameraMatricesMap->m_View);
-
-				struct PushConstantVertexSDF {
-					const Mat4 c_InverseCameraMatrix;
-					const float c_CameraNear;
-					const float c_CameraFar;
-				};
-
-				struct PushConstantFragmentSDF {
-					const Vec2_T<uint32_t> c_Resolution;
-					const Vec2_T<uint32_t> c_MousePosition;
-					const SDFState c_State;
-				};
-
-				IntVec2 contentArea;
-				glfwGetWindowSize(m_GLFWwindow, &contentArea.x, &contentArea.y);
-
-				PushConstantVertexSDF pcv {
-					.c_InverseCameraMatrix = inverseCameraMat,
-					.c_CameraNear = World::default_camera_near,
-					.c_CameraFar = World::default_camera_far,
-				};
-
-				PushConstantFragmentSDF pcf {
-					.c_Resolution = contentArea,
-					.c_MousePosition = Input::GetMousePosition(),
-					.c_State = m_SDFState,
-				};
-
-				float alpha = 0.5f;
-
-				m_RotatorInfoBufferMapSDF->c_ColorX = { 1.0f, 0.0f, 0.0f, alpha };
-				m_RotatorInfoBufferMapSDF->c_ColorY = { 0.0f, 1.0f, 0.0f, alpha };
-				m_RotatorInfoBufferMapSDF->c_ColorZ = { 0.0f, 0.0f, 1.0f, alpha };
-				m_RotatorInfoBufferMapSDF->c_Radius = 0.4f;
-				m_RotatorInfoBufferMapSDF->c_Thickness = 0.005f;
-
-				VkRenderingAttachmentInfo colorAttachmentInfos[1]
-				{
-					{
-						.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
-						.pNext = nullptr,
-						.imageView = drawData.m_SwapchainImageView,
-						.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-						.resolveMode = VK_RESOLVE_MODE_NONE,
-						.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-						.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-						.clearValue { .color { .uint32 { 0, 0, 0, 0 } } },
-					},
-				};
-
-				VkRenderingInfo renderingInfo {
-					.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-					.pNext = nullptr,
-					.flags = 0,
-					.renderArea { { 0, 0 }, drawData.m_SwapchainExtent },
-					.layerCount = 1,
-					.viewMask = 0,
-					.colorAttachmentCount = 1,
-					.pColorAttachments = colorAttachmentInfos,
-					.pDepthAttachment = nullptr,
-					.pStencilAttachment = nullptr,
-				};
-
-				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
-
-				uint32_t mouseHitBufferIndex = drawData.m_CurrentFrame;
-
-				VkDescriptorSet sets[3] {
-					m_QuadTransformDescriptorSetSDF,
-					m_RotatorInfoDescriptorSetSDF,
-					m_MouseHitDescriptorSetsSDF[mouseHitBufferIndex],
-				};
-
-				vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_PipelineLayoutSDF,
-					0, 3, sets, 0, nullptr);
-
-				if (*m_MouseHitBufferMapsSDF[mouseHitBufferIndex]) {
-					uint32_t& map = *m_MouseHitBufferMapsSDF[mouseHitBufferIndex];
-					switch (map) {
-						case 1:
-							m_RotatorInfoBufferMapSDF->c_ColorX.w = 1.0f;
-							break;
-						case 2:
-							m_RotatorInfoBufferMapSDF->c_ColorY.w = 1.0f;
-							break;
-						case 3:
-							m_RotatorInfoBufferMapSDF->c_ColorZ.w = 1.0f;
-							break;
-						default:
-							break;
-					}
-					map = 0;
-				}
-
-				vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_PipelineLayoutSDF, VK_SHADER_STAGE_VERTEX_BIT,
-					0, sizeof(PushConstantVertexSDF), &pcv);
-				vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_PipelineLayoutSDF, VK_SHADER_STAGE_FRAGMENT_BIT,
-					80, sizeof(PushConstantFragmentSDF), &pcf);
-
-				Renderer::DrawIndexed(drawData.m_CommandBuffer, m_QuadMesh2DData);
-
-				vkCmdEndRendering(drawData.m_CommandBuffer);
-			}
+		void Render(const Renderer::DrawData& drawData) const {
 			{
 				VkRenderingAttachmentInfo colorAttachmentInfo {
 					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, 
@@ -7629,6 +7510,8 @@ void main() {
 		StaticMesh m_StaticQuadMesh2D;
 
 		StaticMesh m_StaticBoxMesh;
+
+		StaticMesh m_StaticRotatorTorusMesh;
 
 		static constexpr uint32_t quad_vertex_count = 4;
 
@@ -7813,15 +7696,15 @@ void main() {
 			0, 2, 19, 3, 5, 20, 6, 8, 21, 9, 11, 22, 12, 14, 23, 15, 17,
 		};
 
-		static inline Obj torus_obj{};
+		static inline Obj s_rotator_torus_obj{};
 
 	public:
 
-		static void SetTorusObj(const Obj& obj) {
+		static void SetRotatorTorusObj(const Obj& obj) {
 			if (!obj.IsValid()) {
 				CriticalError(ErrorOrigin::Engine, "invalid torus obj set (function Engine::SetTorusObj)!");
 			}
-			torus_obj = obj;
+			s_rotator_torus_obj = obj;
 		}
 
 		Engine(EngineState state, const String& projectName, GLFWwindow* glfwWindow, size_t maxUIWindows) :
@@ -7835,12 +7718,13 @@ void main() {
 				m_Editor(m_World, m_PhysicsManager, m_Renderer, glfwWindow),
 				m_StaticQuadMesh(m_Renderer),
 				m_StaticQuadMesh2D(m_Renderer),
-				m_StaticBoxMesh(m_Renderer)
+				m_StaticBoxMesh(m_Renderer),
+				m_StaticRotatorTorusMesh(m_Renderer)
 		{
 
-			if (!torus_obj.IsValid()) {
+			if (!s_rotator_torus_obj.IsValid()) {
 				CriticalError(ErrorOrigin::Engine,
-					"attempting to construct engine when torus obj is not set (in Engine constructor)!");
+					"attempting to construct engine when rotator torus obj is not set (in Engine constructor)!");
 			}
 
 			Input input(glfwWindow);
@@ -7856,6 +7740,19 @@ void main() {
 			if (!m_StaticBoxMesh.CreateBuffers(box_vertex_count, box_vertices, box_index_count, box_indices)) {
 				CriticalError(ErrorOrigin::Engine, 
 					"failed to create static box mesh (function StaticMesh::CreateBuffers in Engine constructor)!");
+			}
+
+			DynamicArray<Vertex> torusVertices{};
+			DynamicArray<uint32_t> torusIndices{};
+
+			if (!s_rotator_torus_obj.GetMesh(Vertex::SetPosition, Vertex::SetUV, Vertex::SetNormal, torusVertices, torusIndices)) {
+				CriticalError(ErrorOrigin::Engine,
+					"failed to get rotator torus mesh from obj (function Obj::GetMesh in Engine constructor)!");
+			}
+
+			if (!m_StaticRotatorTorusMesh.CreateBuffers(torusVertices.Size(), torusVertices.Data(), torusIndices.Size(), torusIndices.Data())) {
+				CriticalError(ErrorOrigin::Engine,
+					"failed to create rotator torus mesh (function StaticMesh::CreateBuffers in Engine constructor)!");
 			}
 
 			const VkFormat fontAtlasFormatCandidates[1] { VK_FORMAT_R8_SRGB, };
@@ -7881,7 +7778,7 @@ void main() {
 			m_World.Initialize(m_StaticQuadMesh2D);
 			m_PhysicsManager.Initialize();
 			m_UI.Initialize(m_StaticQuadMesh2D);
-			m_Editor.Initialize(glfwWindow, m_StaticBoxMesh.GetMeshData(), m_StaticQuadMesh2D.GetMeshData());
+			m_Editor.Initialize(glfwWindow, m_StaticBoxMesh.GetMeshData(), m_StaticQuadMesh2D.GetMeshData(), m_StaticRotatorTorusMesh.GetMeshData());
 		}
 
 		Engine(const Engine&) = delete;
@@ -7892,6 +7789,7 @@ void main() {
 			m_StaticQuadMesh.Terminate();
 			m_StaticQuadMesh2D.Terminate();
 			m_StaticBoxMesh.Terminate();
+			m_StaticRotatorTorusMesh.Terminate();
 			m_UI.Terminate();
 			m_Editor.Terminate();
 			m_PhysicsManager.Terminate();
