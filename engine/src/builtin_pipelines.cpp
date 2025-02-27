@@ -47,26 +47,26 @@ namespace pipelines {
 				"failed to create pbr draw pipeline layout for world (function Renderer::CreatePipelineLayout in function pipelines::World::Initialize)!");
 		}
 
-		const VkPushConstantRange udDrawPipelinePushConstantRange{
+		const VkPushConstantRange udDrawPushConstantRange{
 			.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
 			.offset = 0,
 			.size = 128,
 		};
 
-		m_DrawPipelineLayoutUD = renderer.CreatePipelineLayout(0, nullptr, 1, &udDrawPipelinePushConstantRange);
+		m_DrawPipelineLayoutUD = renderer.CreatePipelineLayout(0, nullptr, 1, &udDrawPushConstantRange);
 
 		if (m_DrawPipelineLayoutUD == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
 				"failed to create unidirectional light pipeline layout (function Renderer::CreateDescriptorSetLayout in function pipelines::World::Initialize)!");
 		}
 
-		const VkDescriptorSetLayout pbrRenderPipelineDescriptorSetLayouts[2]{
+		const VkDescriptorSetLayout pbrRenderDescriptorSetLayouts[2]{
 			m_RenderPBRImagesDescriptorSetLayout,
 			m_DirectionalLightShadowMapDescriptorSetLayout,
 		};
 
 		m_RenderPipelineLayoutPBR
-			= renderer.CreatePipelineLayout(2, pbrRenderPipelineDescriptorSetLayouts, 0, nullptr);
+			= renderer.CreatePipelineLayout(2, pbrRenderDescriptorSetLayouts, 0, nullptr);
 
 		if (m_RenderPipelineLayoutPBR == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
@@ -100,7 +100,7 @@ namespace pipelines {
 				"failed to compile pbr draw fragment shader code (function Renderer::Shader::Compile in function pipelines::World::Initialize)!");
 		}
 
-		const VkPipelineShaderStageCreateInfo pbrDrawPipelineShaderStageInfos[2]{
+		const VkPipelineShaderStageCreateInfo pbrDrawShaderStageInfos[2]{
 			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaders[0]),
 			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrDrawShaders[1]),
 		};
@@ -112,7 +112,7 @@ namespace pipelines {
 				"failed to compile unidirectional light draw vertex shader (function Renderer::CreateDescriptorSetLayout in function pipelines::World::Initialize)!");
 		}
 
-		const VkPipelineShaderStageCreateInfo udDrawPipelineShaderStageInfo
+		const VkPipelineShaderStageCreateInfo udDrawShaderStageInfo
 			= Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(udDrawVertexShader);
 
 		Renderer::Shader pbrRenderShaders[2]{
@@ -130,7 +130,7 @@ namespace pipelines {
 				"failed to compile pbr render fragment shader code (function Renderer::Shader::Compile in function pipelines::World:.Initialize)");
 		}
 
-		const VkPipelineShaderStageCreateInfo pbrRenderPipelineShaderStageInfos[2]{
+		const VkPipelineShaderStageCreateInfo pbrRenderShaderStageInfos[2]{
 			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaders[0]),
 			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(pbrRenderShaders[1]),
 		};
@@ -150,7 +150,7 @@ namespace pipelines {
 				"failed to compile fragment shader code (function Renderer::Shader::Compile in function pipelines::World::Initialize)!");
 		}
 
-		const VkPipelineShaderStageCreateInfo debugPipelineShaderStageInfos[2]{
+		const VkPipelineShaderStageCreateInfo debugShaderStageInfos[2]{
 			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugShaders[0]),
 			Renderer::GraphicsPipelineDefaults::GetShaderStageInfo(debugShaders[1]),
 		};
@@ -163,35 +163,37 @@ namespace pipelines {
 			colorImageResourceFormat,
 		};
 
-		const VkPipelineRenderingCreateInfo pbrDrawPipelineRenderingInfo
+		static constexpr uint32_t debug_pipelines_color_formats = 2;
+
+		const VkPipelineRenderingCreateInfo pbrDrawRenderingInfo
 			= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(pbr_draw_color_attachment_count, pbrDrawRenderingColorFormats, renderer.m_DepthOnlyFormat);
 
-		const VkPipelineRenderingCreateInfo udPipelineRenderingCreateInfo
+		const VkPipelineRenderingCreateInfo udRenderingCreateInfo
 			= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(0, nullptr, renderer.m_DepthOnlyFormat);
 
-		const VkPipelineRenderingCreateInfo pbrRenderPipelineRenderingInfo
+		const VkPipelineRenderingCreateInfo pbrRenderRenderingInfo
 			= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &renderer.m_SwapchainSurfaceFormat.format, VK_FORMAT_UNDEFINED);
 
-		const VkPipelineRenderingCreateInfo debugPipelineRenderingInfo
+		const VkPipelineRenderingCreateInfo debugRenderingInfo
 			= Renderer::GraphicsPipelineDefaults::GetRenderingCreateInfo(1, &renderer.m_SwapchainSurfaceFormat.format,
 				renderer.m_DepthOnlyFormat);
 
-		VkPipelineColorBlendStateCreateInfo pbrDrawPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
-		pbrDrawPipelineColorBlendState.attachmentCount = pbr_draw_color_attachment_count;
-		VkPipelineColorBlendAttachmentState pbrDrawPipelineColorAttachmentStates[pbr_draw_color_attachment_count]{
+		VkPipelineColorBlendStateCreateInfo pbrDrawColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
+		pbrDrawColorBlendState.attachmentCount = pbr_draw_color_attachment_count;
+		VkPipelineColorBlendAttachmentState pbrDrawColorAttachmentStates[pbr_draw_color_attachment_count]{
 			Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
 			Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
 			Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend,
 		};
-		pbrDrawPipelineColorBlendState.pAttachments = pbrDrawPipelineColorAttachmentStates;
+		pbrDrawColorBlendState.pAttachments = pbrDrawColorAttachmentStates;
 
-		VkPipelineColorBlendStateCreateInfo pbrRenderPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
-		pbrRenderPipelineColorBlendState.attachmentCount = 1;
-		pbrRenderPipelineColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend;
+		VkPipelineColorBlendStateCreateInfo pbrRenderColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
+		pbrRenderColorBlendState.attachmentCount = 1;
+		pbrRenderColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state_no_blend;
 
-		VkPipelineColorBlendStateCreateInfo debugPipelineColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
-		debugPipelineColorBlendState.attachmentCount = 1;
-		debugPipelineColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
+		VkPipelineColorBlendStateCreateInfo debugColorBlendState = Renderer::GraphicsPipelineDefaults::color_blend_state;
+		debugColorBlendState.attachmentCount = 1;
+		debugColorBlendState.pAttachments = &Renderer::GraphicsPipelineDefaults::color_blend_attachment_state;
 
 		VkPipelineRasterizationStateCreateInfo udPipelineRasterizationState = Renderer::GraphicsPipelineDefaults::rasterization_state;
 		udPipelineRasterizationState.cullMode = VK_CULL_MODE_BACK_BIT;
@@ -204,9 +206,9 @@ namespace pipelines {
 		VkGraphicsPipelineCreateInfo graphicsPipelineInfos[pipeline_count] = {
 			{
 				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-				.pNext = &pbrDrawPipelineRenderingInfo,
+				.pNext = &pbrDrawRenderingInfo,
 				.stageCount = 2,
-				.pStages = pbrDrawPipelineShaderStageInfos,
+				.pStages = pbrDrawShaderStageInfos,
 				.pVertexInputState = &Vertex::GetVertexInputState(),
 				.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
 				.pTessellationState = nullptr,
@@ -214,7 +216,7 @@ namespace pipelines {
 				.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
 				.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
 				.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
-				.pColorBlendState = &pbrDrawPipelineColorBlendState,
+				.pColorBlendState = &pbrDrawColorBlendState,
 				.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
 				.layout = m_DrawPipelineLayoutPBR,
 				.renderPass = VK_NULL_HANDLE,
@@ -224,10 +226,10 @@ namespace pipelines {
 			},
 			{
 				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-				.pNext = &udPipelineRenderingCreateInfo,
+				.pNext = &udRenderingCreateInfo,
 				.flags = 0,
 				.stageCount = 1,
-				.pStages = &udDrawPipelineShaderStageInfo,
+				.pStages = &udDrawShaderStageInfo,
 				.pVertexInputState = &Vertex::GetVertexInputState(),
 				.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
 				.pTessellationState = nullptr,
@@ -245,9 +247,9 @@ namespace pipelines {
 			},
 			{
 				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-				.pNext = &pbrRenderPipelineRenderingInfo,
+				.pNext = &pbrRenderRenderingInfo,
 				.stageCount = 2,
-				.pStages = pbrRenderPipelineShaderStageInfos,
+				.pStages = pbrRenderShaderStageInfos,
 				.pVertexInputState = &Vertex2D::GetVertexInputState(),
 				.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
 				.pTessellationState = nullptr,
@@ -255,7 +257,7 @@ namespace pipelines {
 				.pRasterizationState = &Renderer::GraphicsPipelineDefaults::rasterization_state,
 				.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
 				.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state_no_depth_tests,
-				.pColorBlendState = &pbrRenderPipelineColorBlendState,
+				.pColorBlendState = &pbrRenderColorBlendState,
 				.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
 				.layout = m_RenderPipelineLayoutPBR,
 				.renderPass = nullptr,
@@ -265,9 +267,9 @@ namespace pipelines {
 			},
 			{
 				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-				.pNext = &debugPipelineRenderingInfo,
+				.pNext = &debugRenderingInfo,
 				.stageCount = 2,
-				.pStages = debugPipelineShaderStageInfos,
+				.pStages = debugShaderStageInfos,
 				.pVertexInputState = &Vertex::GetVertexInputState(),
 				.pInputAssemblyState = &Renderer::GraphicsPipelineDefaults::input_assembly_state,
 				.pTessellationState = nullptr,
@@ -275,7 +277,7 @@ namespace pipelines {
 				.pRasterizationState = &wirePipelineRasterizationState,
 				.pMultisampleState = &Renderer::GraphicsPipelineDefaults::multisample_state,
 				.pDepthStencilState = &Renderer::GraphicsPipelineDefaults::depth_stencil_state,
-				.pColorBlendState = &debugPipelineColorBlendState,
+				.pColorBlendState = &debugColorBlendState,
 				.pDynamicState = &Renderer::GraphicsPipelineDefaults::dynamic_state,
 				.layout = m_DebugPipelineLayout,
 				.renderPass = VK_NULL_HANDLE,
