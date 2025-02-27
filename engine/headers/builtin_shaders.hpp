@@ -187,14 +187,22 @@ void main() {
 #version 450
 
 layout(location = 0) out vec4 outColor;
+//layout(location = 1) out uint outID;
 
 layout(push_constant) uniform PushConstant {
 	layout(offset = 64)
 	vec4 c_Color;
+	//int c_NoID;
+	//uint c_ID
 } pc;
 
 void main() {
 	outColor = pc.c_Color;
+	/*
+	if (pc.c_NoID != 0) {
+		outID = pc.c_ID;
+	}
+	*/
 }
 		)";
 	};
