@@ -534,7 +534,9 @@ namespace engine {
 		m_Renderer.UpdateDescriptorSets(1, &defaultAlbedoDescriptorWrite);
 	}
 
-	void World::SwapchainCreateCallback(VkExtent2D swapchainExtent, Vec2_T<uint32_t> renderResolution, float aspectRatio, uint32_t imageCount) {
+	void World::SwapchainCreateCallback(VkExtent2D swapchainExtent, Vec2_T<uint32_t> renderResolution, float aspectRatio, uint32_t framesInFlight) {
+
+		assert(framesInFlight <= 5);
 
 		m_RenderResolution = renderResolution;
 
@@ -612,44 +614,33 @@ namespace engine {
 			.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 			.descriptorCount = 1,
 		};
-		DynamicArray<VkDescriptorPoolSize> poolSizes(descriptor_count * imageCount);
-		for (VkDescriptorPoolSize& size : poolSizes) {
-			size = poolSize;
+		VkDescriptorPoolSize poolSizes[descriptor_count * 5];
+		uint32_t poolSizeCount = descriptor_count * framesInFlight;
+		for (uint32_t i = 0; i < poolSizeCount; i++) {
+			poolSizes[i] = poolSize;
 		}
-		m_RenderPBRImagesDescriptorPool = m_Renderer.CreateDescriptorPool(0, imageCount, poolSizes.Size(), poolSizes.Data());
+		m_RenderPBRImagesDescriptorPool = m_Renderer.CreateDescriptorPool(0, framesInFlight, poolSizeCount, poolSizes);
 
 		if (m_RenderPBRImagesDescriptorPool == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
 				"failed to create pbr render pipeline image descriptor pool (function Renderer::CreateDescriptorPool in function World::SwapchainCreateCallback)!");
 		}
 
-		m_RenderPBRImagesDescriptorSets.Resize(imageCount);
+		AllocateFramesInFlightData(framesInFlight);
 
-		DynamicArray<VkDescriptorSetLayout> setLayouts(imageCount);
+		VkDescriptorSetLayout setLayouts[5];
 
-		for (VkDescriptorSetLayout& set : setLayouts) {
-			set = m_Pipelines.m_RenderPBRImagesDescriptorSetLayout;
+		for (uint32_t i = 0; i < framesInFlight; i++) {
+			setLayouts[i] = m_Pipelines.m_RenderPBRImagesDescriptorSetLayout;
 		}
 
-		if (!m_Renderer.AllocateDescriptorSets(nullptr, m_RenderPBRImagesDescriptorPool, imageCount, 
-				setLayouts.Data(), m_RenderPBRImagesDescriptorSets.Data())) {
+		if (!m_Renderer.AllocateDescriptorSets(nullptr, m_RenderPBRImagesDescriptorPool, framesInFlight,
+				setLayouts, m_RenderPBRImagesDescriptorSets)) {
 			CriticalError(ErrorOrigin::Renderer, 
 				"failed to allocate pbr rendering pipeline image descriptor sets (function Renderer::AllocateDescriptorSets in function World::SwapchainCreateCallback)!");
 		}
 
 		DestroyImageResources();
-		m_DiffuseImageViews.Resize(imageCount);
-		m_PositionAndMetallicImageViews.Resize(imageCount);
-		m_NormalAndRougnessImageViews.Resize(imageCount);
-		m_DepthImageViews.Resize(imageCount);
-		m_DiffuseImages.Resize(imageCount);
-		m_PositionAndMetallicImages.Resize(imageCount);
-		m_NormalAndRougnessImages.Resize(imageCount);
-		m_DepthImages.Resize(imageCount);
-		m_DiffuseImagesMemory.Resize(imageCount);
-		m_PositionAndMetallicImagesMemory.Resize(imageCount);
-		m_NormalAndRougnessImagesMemory.Resize(imageCount);
-		m_DepthImagesMemory.Resize(imageCount);
 
 		LockGuard graphicsQueueLockGuard(m_Renderer.m_EarlyGraphicsCommandBufferQueueMutex);
 		Renderer::CommandBuffer<Renderer::Queue::Graphics>* commandBuffer
@@ -669,23 +660,28 @@ namespace engine {
 				"failed to begin command buffer (function Renderer::BeginCommandBuffer in function World::SwapchainCreateCallback)");
 		}
 
-		VkFormat depthFormat = m_Renderer.m_DepthOnlyFormat;
-		VkExtent3D imageExtent {
+		const VkFormat depthFormat = m_Renderer.m_DepthOnlyFormat;
+		const VkExtent3D pbrImageExtent {
 			.width = m_RenderResolution.x,
 			.height = m_RenderResolution.y,
 			.depth = 1,
 		};
-		uint32_t colorImageQueueFamilies[1] { m_Renderer.m_GraphicsQueueFamilyIndex, };
-		uint32_t colorImageQueueFamilyCount = 1;
-		VkImageUsageFlags colorImageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; 
-		VkSharingMode colorImageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		const VkExtent3D debugImageExtent {
+			.width = swapchainExtent.width,
+			.height = swapchainExtent.height,
+			.depth = 1,
+		};
+		const uint32_t colorImageQueueFamilies[1] { m_Renderer.m_GraphicsQueueFamilyIndex, };
+		const uint32_t colorImageQueueFamilyCount = 1;
+		const VkImageUsageFlags colorImageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; 
+		const VkSharingMode colorImageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-		for (uint32_t i = 0; i < imageCount; i++) {
+		for (uint32_t i = 0; i < framesInFlight; i++) {
 			{
 				VkImage& image = m_DiffuseImages[i];
 				VkDeviceMemory& imageMemory = m_DiffuseImagesMemory[i];
 				VkImageView& imageView = m_DiffuseImageViews[i];
-				image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
+				image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, pbrImageExtent, 1, 1, 
 					VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, colorImageUsage, 
 					colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
 				if (image == VK_NULL_HANDLE) {
@@ -707,7 +703,7 @@ namespace engine {
 				VkImage& image = m_PositionAndMetallicImages[i];
 				VkDeviceMemory& imageMemory = m_PositionAndMetallicImagesMemory[i];
 				VkImageView& imageView = m_PositionAndMetallicImageViews[i];
-				image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
+				image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, pbrImageExtent, 1, 1, 
 					VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, colorImageUsage, 
 					colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
 				if (image == VK_NULL_HANDLE) {
@@ -729,7 +725,7 @@ namespace engine {
 				VkImage& image = m_NormalAndRougnessImages[i];
 				VkDeviceMemory& imageMemory = m_NormalAndRougnessImagesMemory[i];
 				VkImageView& imageView = m_NormalAndRougnessImageViews[i];
-				image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, imageExtent, 1, 1, 
+				image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, m_ColorImageResourcesFormat, pbrImageExtent, 1, 1, 
 					VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, colorImageUsage, 
 					colorImageSharingMode, colorImageQueueFamilyCount, colorImageQueueFamilies);
 				if (image == VK_NULL_HANDLE) {
@@ -751,7 +747,7 @@ namespace engine {
 				VkImage& image = m_DepthImages[i];
 				VkDeviceMemory& imageMemory = m_DepthImagesMemory[i];
 				VkImageView& imageView = m_DepthImageViews[i];
-				image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, depthFormat, imageExtent, 1, 1, 
+				image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, depthFormat, pbrImageExtent, 1, 1, 
 					VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
 						VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_SHARING_MODE_EXCLUSIVE, 1, &m_Renderer.m_GraphicsQueueFamilyIndex);
 				if (image == VK_NULL_HANDLE) {
@@ -769,8 +765,30 @@ namespace engine {
 						"failed to create world depth image view (function Renderer::CreateImageView in function World::SwapchainCreateCallback)!");
 				}
 			}
+			{
+				VkImage& image = m_DebugDepthImages[i];
+				VkDeviceMemory& imageMemory = m_DebugDepthImagesMemory[i];
+				VkImageView& imageView = m_DebugDepthImageViews[i];
+				image = m_Renderer.CreateImage(VK_IMAGE_TYPE_2D, depthFormat, debugImageExtent, 1, 1, 
+					VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL, 
+						VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_SHARING_MODE_EXCLUSIVE, 1, &m_Renderer.m_GraphicsQueueFamilyIndex);
+				if (image == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create world debug depth image (function Renderer::CreateImage in function World::SwapchainCreateCallback)!");
+				}
+				imageMemory = m_Renderer.AllocateImageMemory(image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+				if (imageMemory == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to allocate world debug depth image memory (function Renderer::AllocateImageMemory in function World::SwapchainCreateCallback)!");
+				}
+				imageView = m_Renderer.CreateImageView(image, VK_IMAGE_VIEW_TYPE_2D, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+				if (imageView == VK_NULL_HANDLE) {
+					CriticalError(ErrorOrigin::Renderer, 
+						"failed to create world debug depth image view (function Renderer::CreateImageView in function World::SwapchainCreateCallback)!");
+				}
+			}
 
-			VkDescriptorImageInfo descriptorImageInfos[descriptor_count] {
+			const VkDescriptorImageInfo descriptorImageInfos[descriptor_count] {
 				{
 					.sampler = m_ColorResourceImageSampler,
 					.imageView = m_DiffuseImageViews[i],
@@ -790,24 +808,28 @@ namespace engine {
 
 			VkWriteDescriptorSet descriptorWrites[descriptor_count];
 			for (uint32_t j = 0; j < descriptor_count; j++) {
-				descriptorWrites[j] 
-					= Renderer::GetDescriptorWrite(nullptr, j, m_RenderPBRImagesDescriptorSets[i], 
+				descriptorWrites[j] = 
+					Renderer::GetDescriptorWrite(nullptr, j, m_RenderPBRImagesDescriptorSets[i], 
 						VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &descriptorImageInfos[j], nullptr);
 			}
 
 			m_Renderer.UpdateDescriptorSets(descriptor_count, descriptorWrites);
 
-			static constexpr uint32_t image_count = descriptor_count;
+			static constexpr uint32_t color_image_count = descriptor_count;
+			static constexpr uint32_t depth_image_count = 2;
+			static constexpr uint32_t memory_barrier_count = color_image_count + depth_image_count;
 
-			VkImage colorImages[image_count] {
+			const VkImage images[memory_barrier_count] {
 				m_DiffuseImages[i],
 				m_PositionAndMetallicImages[i],
-				m_NormalAndRougnessImages[i],	
-			};	
+				m_NormalAndRougnessImages[i],
+				m_DepthImages[i],
+				m_DebugDepthImages[i],
+			};
 
-			VkImageMemoryBarrier memoryBarriers[image_count];
+			VkImageMemoryBarrier memoryBarriers[memory_barrier_count];
 
-			for (size_t j = 0; j < image_count; j++) {
+			for (size_t j = 0; j < color_image_count; j++) {
 				memoryBarriers[j] = {
 					.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
 					.pNext = nullptr,
@@ -817,7 +839,7 @@ namespace engine {
 					.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 					.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
 					.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-					.image = colorImages[j],
+					.image = images[j],
 					.subresourceRange {
 						.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
 						.baseMipLevel = 0,
@@ -827,10 +849,32 @@ namespace engine {
 					},
 				};
 			}
+
+			for (size_t j = color_image_count; j < memory_barrier_count; j++) {
+				memoryBarriers[j] = {
+					.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+					.pNext = nullptr,
+					.srcAccessMask = 0,
+					.dstAccessMask = 0,
+					.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+					.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+					.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+					.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+					.image = images[j],
+					.subresourceRange {
+						.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+						.baseMipLevel = 0,
+						.levelCount = 1,
+						.baseArrayLayer = 0,
+						.layerCount = 1,
+					},
+				};
+			}
+
 			vkCmdPipelineBarrier(commandBuffer->m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, image_count, memoryBarriers);
+				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, memory_barrier_count, memoryBarriers);
 		}
-		m_DirectionalLight.SwapchainCreateCallback(imageCount, commandBuffer->m_CommandBuffer);
+		m_DirectionalLight.SwapchainCreateCallback(framesInFlight, commandBuffer->m_CommandBuffer);
 		VkResult vkRes = vkEndCommandBuffer(commandBuffer->m_CommandBuffer);
 		if (vkRes != VK_SUCCESS) {
 			CriticalError(ErrorOrigin::Vulkan, 
