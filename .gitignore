@@ -2,6 +2,6 @@
 *.vs
 *.cache
 *.vscode
-*.CMakeSettings.json
+*CMakeSettings.json
 \build
 \out
