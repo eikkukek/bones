@@ -550,8 +550,11 @@ namespace engine {
 			return Quaternion_T<T>::AxisRotation(axis, radians).AsMat4();
 		}
 
-		static constexpr inline Mat4_T Transform(const Vec3_T<T>& position, const Quaternion_T<T>& rotation) {
+		static constexpr inline Mat4_T Transform(const Vec3_T<T>& position, const Quaternion_T<T>& rotation, const Vec3_T<T>& scale = Vec3_T<T>::One()) {
 			Mat4_T result = rotation.AsMat4();
+			result[0] *= scale.x;
+			result[1] *= scale.y;
+			result[2] *= scale.z;
 			result[3] = Vec4_T<T>(position, 1.0f);
 			return result;
 		}
