@@ -6415,16 +6415,20 @@ void main() {
 
 		bool m_WasInEditorView{};
 		CameraMatricesBuffer* m_CameraMatricesMap = nullptr;
-		DynamicArray<VkImageView> m_DiffuseImageViews{};
-		DynamicArray<VkImageView> m_PositionAndMetallicImageViews{};
-		DynamicArray<VkImageView> m_NormalAndRougnessImageViews{};
-		DynamicArray<VkImageView> m_DepthImageViews{};
+		VkImage* m_DiffuseImages = nullptr;
+		VkImage* m_PositionAndMetallicImages = nullptr;
+		VkImage* m_NormalAndRougnessImages = nullptr;
+		VkImageView* m_DiffuseImageViews = nullptr;
+		VkImageView* m_PositionAndMetallicImageViews = nullptr;
+		VkImageView* m_NormalAndRougnessImageViews = nullptr;
+		VkImageView* m_DepthImageViews = nullptr;
 		pipelines::World m_Pipelines{};
 		CameraMatricesBuffer m_EditorCamera{};
 		CameraMatricesBuffer m_GameCamera{};
 		OrderedDictionary<RenderID, WorldRenderData> m_RenderDatas{};
 		VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
-		DynamicArray<VkDescriptorSet> m_RenderPBRImagesDescriptorSets{};
+		VkDescriptorSet* m_RenderPBRImagesDescriptorSets = nullptr;
+		VkImageView* m_DebugDepthImageViews = nullptr;
 		DynamicArray<DebugRenderData> m_DebugWireRenderDatas{};
 		DynamicArray<DebugRenderData> m_DebugSolidRenderDatas{};
 		UnidirectionalLight m_DirectionalLight;
@@ -6432,14 +6436,15 @@ void main() {
 
 		VkDescriptorSet m_DefaultAlbedoDescriptorSet{};
 		VkFormat m_ColorImageResourcesFormat{};
-		DynamicArray<VkImage> m_DiffuseImages{};
-		DynamicArray<VkImage> m_PositionAndMetallicImages{};
-		DynamicArray<VkImage> m_NormalAndRougnessImages{};
-		DynamicArray<VkImage> m_DepthImages{};
-		DynamicArray<VkDeviceMemory> m_DiffuseImagesMemory{};
-		DynamicArray<VkDeviceMemory> m_PositionAndMetallicImagesMemory{};
-		DynamicArray<VkDeviceMemory> m_NormalAndRougnessImagesMemory{};
-		DynamicArray<VkDeviceMemory> m_DepthImagesMemory{};
+		uint32_t m_FramesInFlight = 0;
+		uint8_t* m_FramesInFlightData = nullptr;
+		VkImage* m_DepthImages = nullptr;
+		VkImage* m_DebugDepthImages = nullptr;
+		VkDeviceMemory* m_DiffuseImagesMemory = nullptr;
+		VkDeviceMemory* m_PositionAndMetallicImagesMemory = nullptr;
+		VkDeviceMemory* m_NormalAndRougnessImagesMemory = nullptr;
+		VkDeviceMemory* m_DepthImagesMemory = nullptr;
+		VkDeviceMemory* m_DebugDepthImagesMemory = nullptr;
 		VkDescriptorPool m_CameraMatricesDescriptorPool = VK_NULL_HANDLE;
 		VkDescriptorPool m_RenderPBRImagesDescriptorPool = VK_NULL_HANDLE;
 		VkSampler m_ColorResourceImageSampler{};
@@ -6471,23 +6476,78 @@ void main() {
 			m_Renderer.DestroySampler(m_ColorResourceImageSampler);
 			m_Pipelines.Terminate(m_Renderer);
 			DestroyImageResources();
+			DeallocateFramesInFlightData();
 			m_DirectionalLight.Terminate();
 		}
 
+		void AllocateFramesInFlightData(uint32_t framesInFlight) {
+
+			static constexpr auto get_p = [](uint8_t* p, uint32_t& ioPos, uint32_t size, uint32_t count) -> void* {
+				void* r = p + ioPos;
+				const uint32_t advance = size * count;
+				memset(r, 0, advance);
+				ioPos += advance;
+				return r;
+			};
+
+			static constexpr uint32_t frame_image_count = 5;
+
+			if (framesInFlight != m_FramesInFlight) {
+
+				const uint32_t alloc_size =
+					sizeof(VkImage) * frame_image_count * framesInFlight +
+					sizeof(VkDeviceMemory) * frame_image_count * framesInFlight +
+					sizeof(VkImageView) * frame_image_count * framesInFlight +
+					sizeof(VkDescriptorSet) * framesInFlight;
+
+				free(m_FramesInFlightData);
+				m_FramesInFlightData = (uint8_t*)malloc(alloc_size);
+
+				uint8_t* p = m_FramesInFlightData;
+				uint32_t pos = 0;
+				m_DiffuseImages = (VkImage*)							get_p(p, pos, sizeof(VkImage), framesInFlight);
+				m_PositionAndMetallicImages = (VkImage*)				get_p(p, pos, sizeof(VkImage), framesInFlight);
+				m_NormalAndRougnessImages = (VkImage*)					get_p(p, pos, sizeof(VkImage), framesInFlight);
+				m_DiffuseImageViews = (VkImageView*)					get_p(p, pos, sizeof(VkImageView), framesInFlight);
+				m_PositionAndMetallicImageViews = (VkImageView*)		get_p(p, pos, sizeof(VkImageView), framesInFlight);
+				m_NormalAndRougnessImageViews = (VkImageView*)			get_p(p, pos, sizeof(VkImageView), framesInFlight);
+				m_DepthImageViews = (VkImageView*)						get_p(p, pos, sizeof(VkImageView), framesInFlight);
+				m_RenderPBRImagesDescriptorSets = (VkDescriptorSet*)	get_p(p, pos, sizeof(VkDescriptorSet), framesInFlight);
+				m_DebugDepthImageViews = (VkImageView*)					get_p(p, pos, sizeof(VkImageView), framesInFlight);
+				m_DepthImages = (VkImage*)								get_p(p, pos, sizeof(VkImage), framesInFlight);
+				m_DebugDepthImages = (VkImage*)							get_p(p, pos, sizeof(VkImage), framesInFlight);
+				m_DiffuseImagesMemory = (VkDeviceMemory*)				get_p(p, pos, sizeof(VkDeviceMemory), framesInFlight);
+				m_PositionAndMetallicImagesMemory = (VkDeviceMemory*)	get_p(p, pos, sizeof(VkDeviceMemory), framesInFlight);
+				m_NormalAndRougnessImagesMemory = (VkDeviceMemory*)		get_p(p, pos, sizeof(VkDeviceMemory), framesInFlight);
+				m_DepthImagesMemory = (VkDeviceMemory*)					get_p(p, pos, sizeof(VkDeviceMemory), framesInFlight);
+				m_DebugDepthImagesMemory = (VkDeviceMemory*)			get_p(p, pos, sizeof(VkDeviceMemory), framesInFlight);
+				m_FramesInFlight = framesInFlight;
+			}
+		}
+
+		void DeallocateFramesInFlightData() {
+			free(m_FramesInFlightData);
+			m_FramesInFlightData = nullptr;
+			m_FramesInFlight = 0;
+		}
+
 		void DestroyImageResources() {
-			for (size_t i = 0; i < m_DepthImages.Size(); i++) {
+			for (size_t i = 0; i < m_FramesInFlight; i++) {
 				m_Renderer.DestroyImageView(m_DepthImageViews[i]);
 				m_Renderer.DestroyImageView(m_DiffuseImageViews[i]);
 				m_Renderer.DestroyImageView(m_PositionAndMetallicImageViews[i]);
 				m_Renderer.DestroyImageView(m_NormalAndRougnessImageViews[i]);
+				m_Renderer.DestroyImageView(m_DebugDepthImageViews[i]);
 				m_Renderer.DestroyImage(m_DepthImages[i]);
-				m_Renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
 				m_Renderer.DestroyImage(m_DiffuseImages[i]);
-				m_Renderer.FreeVulkanDeviceMemory(m_DiffuseImagesMemory[i]);
 				m_Renderer.DestroyImage(m_PositionAndMetallicImages[i]);
-				m_Renderer.FreeVulkanDeviceMemory(m_PositionAndMetallicImagesMemory[i]);
 				m_Renderer.DestroyImage(m_NormalAndRougnessImages[i]);
+				m_Renderer.DestroyImage(m_DebugDepthImages[i]);
+				m_Renderer.FreeVulkanDeviceMemory(m_DepthImagesMemory[i]);
+				m_Renderer.FreeVulkanDeviceMemory(m_DiffuseImagesMemory[i]);
+				m_Renderer.FreeVulkanDeviceMemory(m_PositionAndMetallicImagesMemory[i]);
 				m_Renderer.FreeVulkanDeviceMemory(m_NormalAndRougnessImagesMemory[i]);
+				m_Renderer.FreeVulkanDeviceMemory(m_DebugDepthImagesMemory[i]);
 			}
 		}
 
@@ -6747,29 +6807,6 @@ void main() {
 
 				SetViewportToRenderResolution(drawData);
 
-				VkImageMemoryBarrier memoryBarrier {
-					.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-					.pNext = nullptr,
-					.srcAccessMask = 0,
-					.dstAccessMask = 0,
-					.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-					.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-					.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-					.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-					.image = m_DepthImages[drawData.m_CurrentFrame],
-					.subresourceRange {
-						.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-						.baseMipLevel = 0,
-						.levelCount = 1,
-						.baseArrayLayer = 0,
-						.layerCount = 1,
-					},
-				};
-
-				vkCmdPipelineBarrier(drawData.m_CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-					VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 
-					1, &memoryBarrier);
-
 				static constexpr uint32_t color_attachment_count = 3;
 
 				VkRenderingAttachmentInfo colorAttachments[color_attachment_count] {
@@ -6975,12 +7012,12 @@ void main() {
 				VkRenderingAttachmentInfo depthAttachment {
 					.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
 					.pNext = nullptr,
-					.imageView = VK_NULL_HANDLE,
+					.imageView = m_DebugDepthImageViews[drawData.m_CurrentFrame],
 					.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
 					.resolveMode = VK_RESOLVE_MODE_NONE,
-					.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+					.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
 					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-					.clearValue = { .color {.uint32 { 0, 0, 0, 0, }, }, },
+					.clearValue = { .depthStencil { .depth = 1.0f, .stencil = 0 }, },
 				};
 
 				VkRenderingInfo renderingInfo {
@@ -6992,7 +7029,7 @@ void main() {
 					.viewMask = 0,
 					.colorAttachmentCount = 1,
 					.pColorAttachments = &colorAttachment,
-					.pDepthAttachment = nullptr,
+					.pDepthAttachment = &depthAttachment,
 				};
 
 				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
@@ -7118,11 +7155,15 @@ void main() {
 			}
 		};
 
+	private:
+
+		static constexpr float gizmo_scale_reference = 5.0f;
+
+	public:
+
 		World& m_World;
 		PhysicsManager& m_PhysicsManager;
 		Renderer& m_Renderer;
-
-		Vec4 m_WireColor = { 45.0f / 255, 173.0f / 255, 137.0f / 255, 1.0f };
 
 	private:
 
@@ -7305,9 +7346,11 @@ void main() {
 
 		void ActivateRotators(const Vec3& position) {
 			Vec3 pos = Vec3(position.x, -position.y, position.z);
-			m_RotatorTransforms[0] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Forward(), pi / 2));
-			m_RotatorTransforms[1] = Mat4(1).Translate(Vec4(pos, 1.0f));
-			m_RotatorTransforms[2] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Right(), pi / 2));
+			float m = (pos - m_World.m_EditorCameraPosition).Magnitude();
+			float s = m / gizmo_scale_reference;
+			m_RotatorTransforms[0] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Forward(), pi / 2), Vec3::One(s));
+			m_RotatorTransforms[1] = Mat4::Transform(pos, Quaternion::Identity(), Vec3::One(s));
+			m_RotatorTransforms[2] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Right(), pi / 2), Vec3::One(s));
 			m_GizmoRenderState |= GizmoRenderState_Rotators;
 		}
 
