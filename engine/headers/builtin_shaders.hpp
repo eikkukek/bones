@@ -32,10 +32,11 @@ layout(push_constant) uniform PushConstant {
 void main() {
 
 	const vec3 modelPos = vec3(inPosition.x, -inPosition.y, inPosition.z);
+	const vec3 modelNorm = vec3(inNormal.x, -inNormal.y, inNormal.z);
 
 	outUV = inUV;
 
-	outNormal = normalize(vec3(vec4(inNormal, 0.0f) * pc.c_NormalMatrix));
+	outNormal = normalize((pc.c_NormalMatrix * vec4(modelNorm, 0.0f)).xyz);
 
 	outPosition = vec3(pc.c_Transform * vec4(modelPos, 1.0f));
 
@@ -60,7 +61,7 @@ layout(set = 1, binding = 0) uniform sampler2D diffuse_map;
 void main() {
 	outDiffuseColor = texture(diffuse_map, inUV);
 	outPositionAndMetallic = vec4(inPosition, 1.0f);
-	outNormalAndRougness = vec4(inNormal, 1.0f);
+	outNormalAndRougness = vec4(inNormal.x, -inNormal.y, inNormal.z, 1.0f);
 }
 		)";
 
@@ -156,6 +157,7 @@ void main() {
 	color = pow(color, vec3(1.0f / gamma));
 
 	outColor = vec4(color, 1.0f);
+	//outColor = vec4(normal, 1.0f);
 }
 		)";
 
