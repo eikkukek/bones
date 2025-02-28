@@ -236,7 +236,7 @@ int main() {
 
 	ObjectID obstacleID = area.AddBody(
 		"Obstacle",
-		Vec3(3.0f, 1.0f, 0.0f),
+		Vec3(0.0f, 0.0f, 0.0f),
 		Quaternion::Identity(),
 		PhysicsLayer::Moving,
 		{
