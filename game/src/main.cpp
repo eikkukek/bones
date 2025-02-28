@@ -236,7 +236,7 @@ int main() {
 
 	ObjectID obstacleID = area.AddBody(
 		"Obstacle",
-		Vec3(3.0f, 0.0f, 0.0f),
+		Vec3(3.0f, 1.0f, 0.0f),
 		Quaternion::Identity(),
 		PhysicsLayer::Moving,
 		{
@@ -253,7 +253,6 @@ int main() {
 	Body* obstacle = area.GetBody(obstacleID);
 
 	//obstacle->AddForce(Vec3(10000.0f, 0.0f, 0.0f));
-	obstacle->Move(Vec3(0.0f, 0.0f, 3.0f), Quaternion::Identity(), 5.0f);
 
 	RenderID obstacleRenderID = world.AddRenderData(WorldRenderDataFlag_NoSave, *obstacle, Mat4(1), sphereMesh.GetMeshData());
 	world.GetRenderData(obstacleRenderID)->m_AlbedoTextureDescriptorSet = textureMap.m_DescriptorSet;
@@ -303,7 +302,12 @@ int main() {
 
 	editor.SetInspectedArea(areaID);
 
-	while (engine.Loop()) {}
+	float rot = 0;
+
+	while (engine.Loop()) {
+		rot += pi / 2 * Time::DeltaTime();
+		obstacle->AddForce(Vec3(10.0f, 0.0f, 10.0f));
+	}
 
 	vkDeviceWaitIdle(renderer.m_VulkanDevice);	
 	sphereMesh.Terminate();
