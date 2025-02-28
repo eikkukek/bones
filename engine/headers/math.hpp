@@ -13,7 +13,23 @@ namespace engine {
 
 	constexpr auto pi = 3.14159265358979323846;
 	constexpr float float_max = std::numeric_limits<float>::max();
-	constexpr float float_min = - float_max;
+	constexpr float float_min = -float_max;
+	constexpr float float_epsilion = 0.00001f;
+
+	template<typename T>
+	struct Epsilion {
+		static constexpr T value = 0;
+	};
+
+	template<>
+	struct Epsilion<float> {
+		static constexpr float value = float_epsilion;
+	};
+
+	template<typename T>
+	constexpr bool Equal(const T& a, const T& b, const T& epsilion) {
+		return abs(a - b) >= epsilion;
+	}
 
 	constexpr inline float Lerp(float a, float b, float t) {
 		return a * (1 - t) + b * t;
@@ -774,6 +790,31 @@ namespace engine {
 	typedef Mat4_T<float> Mat4;
 
 	template<typename T>
+	static constexpr inline T Roll(const Quaternion_T<T>& q) noexcept {
+		const T y = Cast(2) * (q.x * q.y + q.z * q.w);
+		const T x = q.x * q.x - q.y * q.y - q.z * q.z + q.w * q.w;
+		if (Equal(x, Cast(0), Epsilion<T>::value) && Equal(y, Cast(0), Epsilion<T>::value)) {
+			return Cast(0);
+		}
+		return Cast(atan2(y, x));
+	}
+
+	template<typename T>
+	static constexpr inline T Pitch(const Quaternion_T<T> q) noexcept {
+		const T y = Cast(2) * (q.y * q.z + q.x * q.w);
+		const T x = - q.x * q.x - q.y * q.y + q.z * q.z + q.w * q.w;
+		if (Equal(x, Cast(0), Epsilion<T>::value) && Equal(y, Cast(0), Epsilion<T>::value)) {
+			return Cast(Cast(2) * atan2(q.x, q.w));
+		}
+		return Cast(atan2(y, x));
+	}
+
+	template<typename T>
+	static constexpr inline T Yaw(const Quaternion_T<T> q) noexcept {
+		return asin(Clamp(Cast(-2) * (q.x * q.z - q.y * q.w), Cast(-1), Cast(1)));
+	}
+
+	template<typename T>
 	struct Quaternion_T {
 
 		static constexpr inline Quaternion_T Identity() noexcept { 
@@ -790,6 +831,10 @@ namespace engine {
 
 		constexpr inline Quaternion_T(const JPH::Quat& other) noexcept 
 			: x(Cast(other.GetX())), y(Cast(other.GetY())), z(Cast(other.GetZ())), w(Cast(other.GetW())) {}
+
+		constexpr inline explicit operator Vec4_T<T>() const noexcept {
+			return Vec4_T<T>(x, y, z, w);
+		}
 
 		constexpr inline Quaternion_T& operator=(const JPH::Quat& other) noexcept {
 			x = other.GetX();
@@ -826,11 +871,26 @@ namespace engine {
 			return Quaternion_T(norm.x * sine, norm.y * sine, norm.z * sine, cos(radians)).Normalized();
 		}
 
+		static constexpr inline Quaternion_T EulerRotation(const Vec3_T<T>& eulerAngles) noexcept {
+			const T cosr = cos(eulerAngles.x / Cast(2));
+			const T sinr = sin(eulerAngles.x / Cast(2));
+			const T cosp = cos(eulerAngles.y / Cast(2));
+			const T sinp = sin(eulerAngles.y / Cast(2));
+			const T cosy = cos(eulerAngles.z / Cast(2));
+			const T siny = sin(eulerAngles.z / Cast(2));
+			return Quaternion_T(
+				sinr * cosp * cosy - cosr * sinp * siny,
+				cosr * sinp * cosy + sinr * cosp * siny,
+				cosr * cosp * siny - sinr * sinp * cosy,
+				cosr * cosp * cosy + sinr * sinp * siny 
+			).Normalized();
+		}
+
 		static constexpr inline Quaternion_T Multiply(const Quaternion_T& a, const Quaternion_T& b) noexcept {
 			return Quaternion_T(
 				a.x * b.w + a.w * b.x - a.y * b.z + a.z * b.y,
 				a.y * b.w - a.z * b.x + a.w * b.y + a.x * b.z,
-				a.z * b.w + a.y * b.x - a.x * b.y + a.w * b.x,
+				a.z * b.w + a.y * b.x - a.x * b.y + a.w * b.z,
 				a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
 			).Normalized();
 		}
@@ -855,6 +915,10 @@ namespace engine {
 			}
 			mag = sqrt(mag);
 			return { x / mag, y / mag, z / mag, w / mag };
+		}
+
+		constexpr inline Vec3_T<T> AsEulerAngles() noexcept {
+			return Vec3_T<T>(Roll(*this), Pitch(*this), Yaw(*this));
 		}
 
 		constexpr inline Mat3_T<T> AsMat3() const noexcept {
@@ -883,11 +947,7 @@ namespace engine {
 		Quaternion_T operator*(const Quaternion_T& other) const noexcept { return Multiply(*this, other); }
 		Quaternion_T operator+(const Quaternion_T& other) const noexcept { return Quaternion_T(x + other.x, y + other.y, z + other.z, w + other.w); }
 		Quaternion_T operator*(T scalar) const noexcept { return Quaternion_T(x * scalar, y * scalar, z * scalar, w * scalar); }
-		constexpr inline bool operator==(const Quaternion_T& other) const noexcept { return x == other.x && y == other.y && z == other.z && w == other.w; }
-		
-		constexpr inline explicit operator Vec4_T<T>() const noexcept {
-			return Vec4_T<T>(x, y, z, w);
-		}
+		constexpr inline bool operator==(const Quaternion_T& other) const noexcept { return x == other.x && y == other.y && z == other.z && w == other.w; }	
 	};
 
 	typedef Quaternion_T<float> Quaternion;
