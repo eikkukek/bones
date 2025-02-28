@@ -51,6 +51,7 @@ namespace engine {
 		EngineState_Release = 16,
 		EngineState_LogicAwake = 32,
 		EngineState_QueueLogicShutdown = 64,
+		EngineState_Pause = 128,
 	};
 
 	typedef uint32_t EngineState;
@@ -5740,7 +5741,12 @@ void main() {
 		//! @brief Adds force to body
 		void AddForce(const Vec3& force) {
 			assert(!m_BodyID.IsInvalid());
-			m_PhysicsManager.GetBodyInterface().AddForce(m_BodyID, force);
+			m_PhysicsManager.GetBodyInterface().AddForce(m_BodyID, { -force.x, force.y, -force.z });
+		}
+
+		void AddTorque(const Vec3& torque) {
+			assert(!m_BodyID.IsInvalid());
+			m_PhysicsManager.GetBodyInterface().AddTorque(m_BodyID, torque);
 		}
 
 		//! @brief Moves body to target position/rotation in delta time seconds
@@ -7242,6 +7248,7 @@ void main() {
 			RotatorX = 1,
 			RotatorY = 2,
 			RotatorZ = 3,
+			MaxEnum,
 		};
 
 		enum GizmoRenderStateBits {
@@ -7296,11 +7303,13 @@ void main() {
 			{ 0.0f, 0.0f, 1.0f, 0.7f },
 		};
 
-		static constexpr Vec4 active_rotator_colors[3] = {
+		static constexpr Vec4 hovered_rotator_colors[3] = {
 			{ 1.0f, 0.0f, 0.0f, 1.0f },
 			{ 0.0f, 0.7f, 0.0f, 1.0f },
 			{ 0.0f, 0.0f, 1.0f, 1.0f },
 		};
+
+		static constexpr Vec4 held_rotator_color = { 1.0f, 0.0f, 1.0f, 1.0f };
 
 	public:
 
@@ -7311,10 +7320,11 @@ void main() {
 	private:
 
 		GLFWwindow* const m_GLFWwindow;
-		ObjectID m_InspectedArea{};
-		uint32_t m_SelectedObjectIndex = UINT64_MAX;
+		ObjectID m_InspectedAreaID = Invalid_ID;
+		uint32_t m_SelectedObjectIndex = UINT32_MAX;
 
 		GizmoID m_HoveredGizmoID = GizmoID::None;
+		GizmoID m_HeldGizmoID = GizmoID::None;
 		GizmoRenderState m_GizmoRenderState = 0;
 
 		MeshData m_CubeMeshData{};
@@ -7485,7 +7495,7 @@ void main() {
 	public:
 
 		void SetInspectedArea(ObjectID ID) {
-			m_InspectedArea = ID;
+			m_InspectedAreaID = ID;
 		}
 
 	private:
@@ -7500,24 +7510,42 @@ void main() {
 			m_GizmoRenderState |= GizmoRenderState_Rotators;
 		}
 
-		void UpdateGizmos() {
+		void UpdateGizmoColors() {
 			for (uint32_t i = 0; i < 3; i++) {
 				m_RotatorColors[i] = inactive_rotator_colors[i];
 			}
-			switch (m_HoveredGizmoID) {
-				using ID = GizmoID;
-				case ID::None:
-					break;
-				case ID::RotatorX:
-					m_RotatorColors[0] = active_rotator_colors[0];
-					break;
-				case ID::RotatorY:
-					m_RotatorColors[1] = active_rotator_colors[1];
-					break;
-				case ID::RotatorZ:
-					m_RotatorColors[2] = active_rotator_colors[2];
-					break;
-			};
+			if (m_HeldGizmoID == GizmoID::None) {
+				switch (m_HoveredGizmoID) {
+					using ID = GizmoID;
+					case ID::None:
+						break;
+					case ID::RotatorX:
+						m_RotatorColors[0] = hovered_rotator_colors[0];
+						break;
+					case ID::RotatorY:
+						m_RotatorColors[1] = hovered_rotator_colors[1];
+						break;
+					case ID::RotatorZ:
+						m_RotatorColors[2] = hovered_rotator_colors[2];
+						break;
+				};
+			}
+			else {
+				switch (m_HeldGizmoID) {
+					using ID = GizmoID;
+					case ID::RotatorX:
+						m_RotatorColors[0] = held_rotator_color;
+						break;
+					case ID::RotatorY:
+						m_RotatorColors[1] = held_rotator_color;
+						break;
+					case ID::RotatorZ:
+						m_RotatorColors[2] = held_rotator_color;
+						break;
+					default:
+						assert(false);
+				}
+			}
 		}
 
 		void DeactivateRotators() {
@@ -7562,8 +7590,23 @@ void main() {
 						ioEngineState |= EngineState_Play;
 					}
 				}
-				else if (AlignedButton("Reset", 0.5f, {})) {
-					ioEngineState &= ~EngineState_Play;
+				else if (ioEngineState & EngineState_Pause) {
+					if (AlignedButton("Play", 0.5f, {})) {
+						ioEngineState &= ~EngineState_Pause;
+					}
+					if (AlignedButton("Reset", 0.5f, {})) {
+						ioEngineState &= ~EngineState_Play;
+						ioEngineState &= ~EngineState_Pause;
+					}
+				}
+				else {
+					if (AlignedButton("Pause", 0.5f, {})) {
+						ioEngineState |= EngineState_Pause;
+					}
+					if (AlignedButton("Reset", 0.5f, {})) {
+						ioEngineState &= ~EngineState_Play;
+						ioEngineState &= ~EngineState_Pause;
+					}
 				}
 				if (!(ioEngineState & EngineState_EditorView)) {
 					if (AlignedButton("Editor view", 0.5f, {})) {
@@ -7577,11 +7620,11 @@ void main() {
 			ImGui::End();
 
 			if (ImGui::Begin("Area")) {
-				if (m_InspectedArea == Invalid_ID) {
+				if (m_InspectedAreaID == Invalid_ID) {
 					AlignedText("No area selected", 0.5f, 0.5f);
 				}
 				else {
-					Area* pArea = m_World.GetArea(m_InspectedArea);
+					Area* pArea = m_World.GetArea(m_InspectedAreaID);
 					if (!pArea) {
 						AlignedText("Invalid area ID!", 0.5f, 0.5f);
 					}
@@ -7629,6 +7672,26 @@ void main() {
 										buttonActive = true;
 									}
 									//ImGui::PopStyleColor();
+
+									if (m_HeldGizmoID != GizmoID::None) {
+										static float rot;
+										Vec2 deltaCursorPos = Input::GetDeltaMousePosition();
+										rot += deltaCursorPos.x / 1000.0f;
+										switch (m_HeldGizmoID) {
+											case GizmoID::RotatorX:
+												body.SetRotation(Quaternion::AxisRotation(Vec3::Right(), rot));
+												break;
+											case GizmoID::RotatorY:
+												body.SetRotation(Quaternion::AxisRotation(Vec3::Up(), rot));
+												break;
+											case GizmoID::RotatorZ:
+												body.SetRotation(Quaternion::AxisRotation(Vec3::Forward(), rot));
+												break;
+											default:
+												assert(false);
+												break;
+										}
+									}
 								}
 								else if (ImGui::Button((body.GetName() + ", ID : " + IntToString(ID)).CString())) {
 									m_SelectedObjectIndex = index;
@@ -7652,7 +7715,19 @@ void main() {
 			ImGui::End();
 
 			m_HoveredGizmoID = (GizmoID)m_World.GetMouseHitID();
-			UpdateGizmos();
+			if ((uint32_t)m_HoveredGizmoID >= (uint32_t)GizmoID::MaxEnum) {
+				m_HoveredGizmoID = GizmoID::None;
+			}
+			if (Input::WasMouseButtonPressed(MouseButton::Left)) {
+				if (m_HoveredGizmoID != GizmoID::None) {
+					m_HeldGizmoID = m_HoveredGizmoID;
+				}	
+			}
+			else if (!Input::WasMouseButtonHeld(MouseButton::Left)) {
+				m_HeldGizmoID = GizmoID::None;
+			}
+
+			UpdateGizmoColors();
 
 			if (m_GizmoRenderState & GizmoRenderState_Rotators) {
 				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[0], m_RotatorColors[0], (uint32_t)GizmoID::RotatorX);
@@ -8076,7 +8151,7 @@ void main() {
 
 			glfwPollEvents();
 
-			if (m_State & EngineState_Play) {
+			if (m_State & EngineState_Play && !(m_State & EngineState_Pause)) {
 				if (m_State & EngineState_LogicAwake) {
 					m_WorldSaveState.Clear();
 					m_WorldSaveState.Initialize(m_World);
@@ -8089,7 +8164,7 @@ void main() {
 				m_State |= EngineState_QueueLogicShutdown;
 				m_State &= ~EngineState_LogicAwake;
 			}
-			else {
+			else if (!(m_State & EngineState_Pause)) {
 				m_State |= EngineState_LogicAwake;
 				if (m_State & EngineState_QueueLogicShutdown) {
 					m_World.LoadSaveState(m_WorldSaveState);
