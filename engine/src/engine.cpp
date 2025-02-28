@@ -419,8 +419,6 @@ namespace engine {
 
 		m_StaticQuadMeshDataPBR = quadMesh2D.GetMeshData();
 
-		m_Pipelines.Initialize(m_Renderer, m_ColorImageResourcesFormat);
-
 		if (!m_CameraMatricesBuffer.Create(sizeof(CameraMatricesBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
 				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
 			CriticalError(ErrorOrigin::Renderer, 
@@ -554,36 +552,11 @@ namespace engine {
 			}
 		}
 
-		static constexpr uint32_t descriptor_count = 3;
-
-		if (m_Pipelines.m_RenderPBRImagesDescriptorSetLayout == VK_NULL_HANDLE) {
-
-			VkDescriptorSetLayoutBinding imageSamplerDescriptorSetBinding {
-				.binding = 0,
-				.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-				.descriptorCount = 1,
-				.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-				.pImmutableSamplers = nullptr,
-			};
-
-			VkDescriptorSetLayoutBinding pbrRenderPipelineDescriptorSetBindings[descriptor_count] {
-				imageSamplerDescriptorSetBinding,
-				imageSamplerDescriptorSetBinding,
-				imageSamplerDescriptorSetBinding,
-			};
-
-			for (uint32_t i = 1; i < descriptor_count; i++) {
-				pbrRenderPipelineDescriptorSetBindings[i].binding = i;
-			}
-
-			m_Pipelines.m_RenderPBRImagesDescriptorSetLayout 
-				= m_Renderer.CreateDescriptorSetLayout(nullptr, descriptor_count, pbrRenderPipelineDescriptorSetBindings);
-
-			if (m_Pipelines.m_RenderPBRImagesDescriptorSetLayout == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to create pbr render pipeline samplers descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::SwapchainCreateCallback)!");
-			}
+		if (!m_Pipelines.Initialized()) {
+			m_Pipelines.Initialize(m_Renderer, m_ColorImageResourcesFormat);
 		}
+
+		static constexpr uint32_t pbr_render_descriptor_count = 3;
 
 		if (m_ColorResourceImageSampler == VK_NULL_HANDLE) {
 			m_ColorResourceImageSampler = m_Renderer.CreateSampler(m_Renderer.GetDefaultSamplerInfo());
@@ -593,29 +566,13 @@ namespace engine {
 			}
 		}
 
-		if (m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout == VK_NULL_HANDLE) {
-			
-			static constexpr VkDescriptorSetLayoutBinding dir_light_shadow_map_descriptor_set_layout_bindings[2] {
-				Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT),
-				Renderer::GetDescriptorSetLayoutBinding(1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT),
-			};
-
-			m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout 
-				= m_Renderer.CreateDescriptorSetLayout(nullptr, 2, dir_light_shadow_map_descriptor_set_layout_bindings);
-
-			if (m_Pipelines.m_DirectionalLightShadowMapDescriptorSetLayout == VK_NULL_HANDLE) {
-				CriticalError(ErrorOrigin::Renderer, 
-					"failed to create directional light descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Initialize)!");
-			}
-		}
-
 		m_Renderer.DestroyDescriptorPool(m_RenderPBRImagesDescriptorPool);
 		VkDescriptorPoolSize poolSize {
 			.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 			.descriptorCount = 1,
 		};
-		VkDescriptorPoolSize poolSizes[descriptor_count * 5];
-		uint32_t poolSizeCount = descriptor_count * framesInFlight;
+		VkDescriptorPoolSize poolSizes[pbr_render_descriptor_count * 5];
+		uint32_t poolSizeCount = pbr_render_descriptor_count * framesInFlight;
 		for (uint32_t i = 0; i < poolSizeCount; i++) {
 			poolSizes[i] = poolSize;
 		}
@@ -626,7 +583,11 @@ namespace engine {
 				"failed to create pbr render pipeline image descriptor pool (function Renderer::CreateDescriptorPool in function World::SwapchainCreateCallback)!");
 		}
 
-		AllocateFramesInFlightData(framesInFlight);
+		if (m_FramesInFlight != framesInFlight) {
+			DestroyDebugResources();
+			AllocateFramesInFlightData(framesInFlight);
+			CreateDebugResources();
+		}
 
 		VkDescriptorSetLayout setLayouts[5];
 
@@ -788,7 +749,7 @@ namespace engine {
 				}
 			}
 
-			const VkDescriptorImageInfo descriptorImageInfos[descriptor_count] {
+			const VkDescriptorImageInfo pbrRenderDescriptorImageInfos[pbr_render_descriptor_count] {
 				{
 					.sampler = m_ColorResourceImageSampler,
 					.imageView = m_DiffuseImageViews[i],
@@ -806,16 +767,16 @@ namespace engine {
 				},
 			};
 
-			VkWriteDescriptorSet descriptorWrites[descriptor_count];
-			for (uint32_t j = 0; j < descriptor_count; j++) {
-				descriptorWrites[j] = 
+			VkWriteDescriptorSet pbrRenderDescriptorWrites[pbr_render_descriptor_count];
+			for (uint32_t j = 0; j < pbr_render_descriptor_count; j++) {
+				pbrRenderDescriptorWrites[j] = 
 					Renderer::GetDescriptorWrite(nullptr, j, m_RenderPBRImagesDescriptorSets[i], 
-						VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &descriptorImageInfos[j], nullptr);
+						VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &pbrRenderDescriptorImageInfos[j], nullptr);
 			}
 
-			m_Renderer.UpdateDescriptorSets(descriptor_count, descriptorWrites);
+			m_Renderer.UpdateDescriptorSets(pbr_render_descriptor_count, pbrRenderDescriptorWrites);
 
-			static constexpr uint32_t color_image_count = descriptor_count;
+			static constexpr uint32_t color_image_count = pbr_render_descriptor_count;
 			static constexpr uint32_t depth_image_count = 2;
 			static constexpr uint32_t memory_barrier_count = color_image_count + depth_image_count;
 
