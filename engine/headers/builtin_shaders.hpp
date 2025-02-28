@@ -187,22 +187,29 @@ void main() {
 #version 450
 
 layout(location = 0) out vec4 outColor;
-//layout(location = 1) out uint outID;
 
 layout(push_constant) uniform PushConstant {
 	layout(offset = 64)
 	vec4 c_Color;
-	//int c_NoID;
-	//uint c_ID
+	vec2 c_CursorPos;
+	int c_NoID;
+	uint c_ID;
 } pc;
 
+layout(std140, set = 1, binding = 0) buffer MouseHitBuffer {
+	float m_Depth;
+	uint m_ID;
+} hitBuffer;
+
 void main() {
-	outColor = pc.c_Color;
-	/*
-	if (pc.c_NoID != 0) {
-		outID = pc.c_ID;
+	vec4 fCoord = gl_FragCoord;
+	if (int(fCoord.x) == pc.c_CursorPos.x && int(fCoord.y) == pc.c_CursorPos.y) {
+		if (pc.c_NoID != 0 && fCoord.z < hitBuffer.m_Depth) {
+			hitBuffer.m_Depth = fCoord.z;
+			hitBuffer.m_ID = pc.c_ID;
+		}
 	}
-	*/
+	outColor = pc.c_Color;
 }
 		)";
 	};
