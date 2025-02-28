@@ -7674,19 +7674,27 @@ void main() {
 									//ImGui::PopStyleColor();
 
 									if (m_HeldGizmoID != GizmoID::None) {
-										static float rot;
 										Vec2 deltaCursorPos = Input::GetDeltaMousePosition();
-										rot += deltaCursorPos.x / 1000.0f;
+										float crot = deltaCursorPos.x / 1000.0f;
 										switch (m_HeldGizmoID) {
-											case GizmoID::RotatorX:
-												body.SetRotation(Quaternion::AxisRotation(Vec3::Right(), rot));
+											case GizmoID::RotatorX: {
+												Quaternion rot = body.GetRotation();
+												Vec3 axis = Vec3::Right() * rot.AsMat3();
+												body.SetRotation(Quaternion::AxisRotation(axis, crot) * rot);
 												break;
-											case GizmoID::RotatorY:
-												body.SetRotation(Quaternion::AxisRotation(Vec3::Up(), rot));
+											}
+											case GizmoID::RotatorY: {
+												Quaternion rot = body.GetRotation();
+												Vec3 axis = Vec3::Up() * rot.AsMat3();
+												body.SetRotation(Quaternion::AxisRotation(axis, crot)* rot);
 												break;
-											case GizmoID::RotatorZ:
-												body.SetRotation(Quaternion::AxisRotation(Vec3::Forward(), rot));
+											}
+											case GizmoID::RotatorZ: {
+												Quaternion rot = body.GetRotation();
+												Vec3 axis = Vec3::Forward() * rot.AsMat3();
+												body.SetRotation(Quaternion::AxisRotation(axis, crot) * rot);
 												break;
+											}
 											default:
 												assert(false);
 												break;
