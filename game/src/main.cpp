@@ -159,6 +159,20 @@ int main() {
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
+	Obj arrow{};
+	FILE* arrowFs = fopen("resources\\meshes\\arrow.obj", "r");
+	if (!arrowFs) {
+		CriticalError(ErrorOrigin::Engine,
+			"failed to open arrow obj file!");
+	}
+	bool arrowLoaded = arrow.Load(arrowFs);
+	fclose(arrowFs);
+	if (!arrowLoaded) {
+		CriticalError(ErrorOrigin::Engine,
+			"failed to load arrow obj file!");
+	}
+	Engine::SetArrowGizmoObj(arrow);
+
 	Obj torus{};
 	FILE* torusFs = fopen("resources\\meshes\\torus.obj", "r");
 	if (!torusFs) {
@@ -171,7 +185,7 @@ int main() {
 		CriticalError(ErrorOrigin::Engine,
 			"failed to load torus obj file!");
 	}
-	Engine::SetRotatorTorusObj(torus);
+	Engine::SetTorusGizmoObj(torus);
 
 	GLFWwindow* pWindow = glfwCreateWindow(540, 540, "Test", nullptr, nullptr);
 	Engine engine(EngineState_Editor | EngineState_EditorView, "Test", pWindow, 1000);
