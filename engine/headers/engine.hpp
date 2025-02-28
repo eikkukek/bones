@@ -134,7 +134,7 @@ namespace engine {
 	}
 
 	template<typename T>
-	struct Optional {
+	class Optional {
 	private:
 
 		T m_Value;
@@ -145,11 +145,19 @@ namespace engine {
 		Optional() : m_HasValue(false) {}
 		Optional(const T& value) : m_Value(value), m_HasValue(true) {}
 
-		bool HasValue() {
+		bool HasValue() const {
 			return m_HasValue;
 		}
 
 		T& GetValue() {
+			if (!m_HasValue) {
+				PrintError(ErrorOrigin::Engine,
+					"attempting to get value from optional that doesn't have a value (in function Optional::GetValue)!");
+			}
+			return m_Value;
+		}
+
+		const T& GetValue() const {
 			if (!m_HasValue) {
 				PrintError(ErrorOrigin::Engine,
 					"attempting to get value from optional that doesn't have a value (in function Optional::GetValue)!");
@@ -6297,6 +6305,7 @@ void main() {
 			MeshData m_MeshData{};
 			Mat4 m_Transform{};
 			Vec4 m_Color{};
+			Optional<uint32_t> m_ID{};
 		};
 
 		struct TextureMap {
@@ -6387,6 +6396,15 @@ void main() {
 			}
 		};
 
+	private:
+
+		struct MouseHitBuffer {
+			float m_Depth;
+			uint32_t m_ID;
+		};
+
+	public:
+
 		static constexpr float default_camera_fov = pi / 4.0f;
 		static constexpr float default_camera_near = 0.1f;
 		static constexpr float default_camera_far = 100.0f;
@@ -6412,6 +6430,10 @@ void main() {
 		static constexpr float editor_max_camera_speed = 20.0f;
 		Vec3 m_EditorCameraPosition{};
 		Vec2 m_EditorCameraRotations{};
+		uint32_t m_InvalidMouseHitID = UINT32_MAX;
+		uint32_t m_DebugMouseHitID = m_InvalidMouseHitID;
+
+		MouseHitBuffer** m_DebugMouseHitBufferMaps = nullptr;
 
 		bool m_WasInEditorView{};
 		CameraMatricesBuffer* m_CameraMatricesMap = nullptr;
@@ -6429,6 +6451,7 @@ void main() {
 		VkDescriptorSet m_CameraMatricesDescriptorSet = VK_NULL_HANDLE;
 		VkDescriptorSet* m_RenderPBRImagesDescriptorSets = nullptr;
 		VkImageView* m_DebugDepthImageViews = nullptr;
+		VkDescriptorSet* m_DebugMouseHitDescriptorSets = nullptr;
 		DynamicArray<DebugRenderData> m_DebugWireRenderDatas{};
 		DynamicArray<DebugRenderData> m_DebugSolidRenderDatas{};
 		UnidirectionalLight m_DirectionalLight;
@@ -6447,8 +6470,10 @@ void main() {
 		VkDeviceMemory* m_DebugDepthImagesMemory = nullptr;
 		VkDescriptorPool m_CameraMatricesDescriptorPool = VK_NULL_HANDLE;
 		VkDescriptorPool m_RenderPBRImagesDescriptorPool = VK_NULL_HANDLE;
+		VkDescriptorPool m_DebugMouseHitDescriptorPool = VK_NULL_HANDLE;
 		VkSampler m_ColorResourceImageSampler{};
 		Renderer::Buffer m_CameraMatricesBuffer;
+		Renderer::Buffer* m_DebugMouseHitBuffers = nullptr;
 		VkDescriptorPool m_DefaultTextureDescriptorPool{};
 		StaticTexture m_DefaultAlbedoTexture;
 		VkImageView m_DefaultAlbedoImageView = VK_NULL_HANDLE;
@@ -6476,6 +6501,7 @@ void main() {
 			m_Renderer.DestroySampler(m_ColorResourceImageSampler);
 			m_Pipelines.Terminate(m_Renderer);
 			DestroyImageResources();
+			DestroyDebugResources();
 			DeallocateFramesInFlightData();
 			m_DirectionalLight.Terminate();
 		}
@@ -6498,7 +6524,9 @@ void main() {
 					sizeof(VkImage) * frame_image_count * framesInFlight +
 					sizeof(VkDeviceMemory) * frame_image_count * framesInFlight +
 					sizeof(VkImageView) * frame_image_count * framesInFlight +
-					sizeof(VkDescriptorSet) * framesInFlight;
+					sizeof(VkDescriptorSet) * framesInFlight * 2 +
+					sizeof(MouseHitBuffer*) * framesInFlight +
+					sizeof(Renderer::Buffer) * framesInFlight;
 
 				free(m_FramesInFlightData);
 				m_FramesInFlightData = (uint8_t*)malloc(alloc_size);
@@ -6514,6 +6542,7 @@ void main() {
 				m_DepthImageViews = (VkImageView*)						get_p(p, pos, sizeof(VkImageView), framesInFlight);
 				m_RenderPBRImagesDescriptorSets = (VkDescriptorSet*)	get_p(p, pos, sizeof(VkDescriptorSet), framesInFlight);
 				m_DebugDepthImageViews = (VkImageView*)					get_p(p, pos, sizeof(VkImageView), framesInFlight);
+				m_DebugMouseHitDescriptorSets = (VkDescriptorSet*)		get_p(p, pos, sizeof(VkDescriptorSet), framesInFlight);
 				m_DepthImages = (VkImage*)								get_p(p, pos, sizeof(VkImage), framesInFlight);
 				m_DebugDepthImages = (VkImage*)							get_p(p, pos, sizeof(VkImage), framesInFlight);
 				m_DiffuseImagesMemory = (VkDeviceMemory*)				get_p(p, pos, sizeof(VkDeviceMemory), framesInFlight);
@@ -6521,7 +6550,13 @@ void main() {
 				m_NormalAndRougnessImagesMemory = (VkDeviceMemory*)		get_p(p, pos, sizeof(VkDeviceMemory), framesInFlight);
 				m_DepthImagesMemory = (VkDeviceMemory*)					get_p(p, pos, sizeof(VkDeviceMemory), framesInFlight);
 				m_DebugDepthImagesMemory = (VkDeviceMemory*)			get_p(p, pos, sizeof(VkDeviceMemory), framesInFlight);
+				m_DebugMouseHitBufferMaps = (MouseHitBuffer**)			get_p(p, pos, sizeof(MouseHitBuffer*), framesInFlight);
+				m_DebugMouseHitBuffers = (Renderer::Buffer*)			get_p(p, pos, sizeof(Renderer::Buffer), framesInFlight);
 				m_FramesInFlight = framesInFlight;
+
+				for (uint32_t i = 0; i < m_FramesInFlight; i++) {
+					new(m_DebugMouseHitBuffers + i) Renderer::Buffer(m_Renderer);
+				}
 			}
 		}
 
@@ -6532,7 +6567,7 @@ void main() {
 		}
 
 		void DestroyImageResources() {
-			for (size_t i = 0; i < m_FramesInFlight; i++) {
+			for (uint32_t i = 0; i < m_FramesInFlight; i++) {
 				m_Renderer.DestroyImageView(m_DepthImageViews[i]);
 				m_Renderer.DestroyImageView(m_DiffuseImageViews[i]);
 				m_Renderer.DestroyImageView(m_PositionAndMetallicImageViews[i]);
@@ -6549,6 +6584,59 @@ void main() {
 				m_Renderer.FreeVulkanDeviceMemory(m_NormalAndRougnessImagesMemory[i]);
 				m_Renderer.FreeVulkanDeviceMemory(m_DebugDepthImagesMemory[i]);
 			}
+		}
+
+		void DestroyDebugResources() {
+			m_Renderer.DestroyDescriptorPool(m_DebugMouseHitDescriptorPool);
+			for (uint32_t i = 0; i < m_FramesInFlight; i++) {
+				m_DebugMouseHitBuffers[i].Terminate();
+			}
+		}
+
+		void CreateDebugResources() {
+			assert(m_FramesInFlight <= 5);
+			VkDescriptorPoolSize poolSizes[5];
+			for (uint32_t i = 0; i < m_FramesInFlight; i++) {
+				if (!m_DebugMouseHitBuffers[i].Create(sizeof(MouseHitBuffer), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to create debug mouse hit buffer (function Renderer::Buffer::Create in function World::CreateDebugResources)!");
+				}
+				if (!m_DebugMouseHitBuffers[i].MapMemory(0, sizeof(MouseHitBuffer), (void**)&m_DebugMouseHitBufferMaps[i])) {
+					CriticalError(ErrorOrigin::Renderer,
+						"failed to map debug mouse hit buffer (function Renderer::Buffer::Map in function World::CreateDebugResources)!");
+				}
+				poolSizes[i] = {
+					.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+					.descriptorCount = 1,
+				};
+			}
+			m_DebugMouseHitDescriptorPool = m_Renderer.CreateDescriptorPool(0, m_FramesInFlight, m_FramesInFlight, poolSizes);
+			if (m_DebugMouseHitDescriptorPool == VK_NULL_HANDLE) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to create debug mouse hit descriptor pool (function Renderer::CreateDescriptorPool in function World::CreateDebugResources)!");
+			}
+			VkDescriptorSetLayout setLayouts[5];
+			for (uint32_t i = 0; i < m_FramesInFlight; i++) {
+				setLayouts[i] = m_Pipelines.m_DebugMouseHitDescriptorSetLayout;
+			}
+			if (!m_Renderer.AllocateDescriptorSets(nullptr, m_DebugMouseHitDescriptorPool,
+					m_FramesInFlight, setLayouts, m_DebugMouseHitDescriptorSets)) {
+				CriticalError(ErrorOrigin::Renderer,
+					"failed to allocate debug mouse hit descriptor sets (function Renderer::CreateDescriptorPool in function World::CreateDebugResources)!");
+			}
+			VkWriteDescriptorSet writes[5];
+			VkDescriptorBufferInfo bufferInfos[5];
+			for (uint32_t i = 0; i < m_FramesInFlight; i++) {
+				bufferInfos[i] = {
+					.buffer = m_DebugMouseHitBuffers[i].m_Buffer,
+					.offset = 0,
+					.range = sizeof(MouseHitBuffer),
+				};
+				writes[i] = m_Renderer.GetDescriptorWrite(nullptr, 0, m_DebugMouseHitDescriptorSets[i],
+					VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &bufferInfos[i]);
+			}
+			m_Renderer.UpdateDescriptorSets(m_FramesInFlight, writes);
 		}
 
 	public:
@@ -6649,12 +6737,12 @@ void main() {
 			return m_RenderDatas.Find(ID);
 		}
 
-		void RenderDebugWireMesh(const MeshData& mesh, const Mat4& transform, const Vec4& color) {
-			m_DebugWireRenderDatas.EmplaceBack(mesh, transform, color);
+		void RenderDebugWireMesh(const MeshData& mesh, const Mat4& transform, const Vec4& color, Optional<uint32_t> ID = {}) {
+			m_DebugWireRenderDatas.EmplaceBack(mesh, transform, color, ID);
 		}
 
-		void RenderDebugSolidMesh(const MeshData& mesh, const Mat4& transform, const Vec4& color) {
-			m_DebugSolidRenderDatas.EmplaceBack(mesh, transform, color);
+		void RenderDebugSolidMesh(const MeshData& mesh, const Mat4& transform, const Vec4& color, Optional<uint32_t> ID = {}) {
+			m_DebugSolidRenderDatas.EmplaceBack(mesh, transform, color, ID);
 		}
 
 		void LoadSaveState(const SaveState& saveState) {
@@ -6669,7 +6757,15 @@ void main() {
 			}
 		}
 
+		uint32_t GetMouseHitID() const {
+			return m_DebugMouseHitID;
+		}	
+
 	private:
+
+		void DefineInvalidMouseHitID(uint32_t ID) {
+			m_InvalidMouseHitID = ID;
+		}
 
 		void LogicUpdate() {
 			for (Entity* entity : m_Entities) {
@@ -7032,23 +7128,58 @@ void main() {
 					.pDepthAttachment = &depthAttachment,
 				};
 
+				m_DebugMouseHitID = m_DebugMouseHitBufferMaps[drawData.m_CurrentFrame]->m_ID;
+
+				*m_DebugMouseHitBufferMaps[drawData.m_CurrentFrame] = {
+					.m_Depth = 1.0f,
+					.m_ID = m_InvalidMouseHitID,
+				};
+
+				struct FPC {
+					Vec4 c_Color;
+					Vec2 c_CursorPos;
+					int c_NoID;
+					uint32_t c_ID;
+				};
+
+				Vec2 cursorPos = Input::GetMousePosition();
+
+				VkDescriptorSet descriptorSets[2]{
+					m_CameraMatricesDescriptorSet,
+					m_DebugMouseHitDescriptorSets[drawData.m_CurrentFrame],
+				};
+
 				vkCmdBeginRendering(drawData.m_CommandBuffer, &renderingInfo);
 				vkCmdBindDescriptorSets(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugPipelineLayout, 0, 
-					1, &m_CameraMatricesDescriptorSet, 0, nullptr);
-				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugWirePipeline);
-				for (const DebugRenderData& renderData : m_DebugWireRenderDatas) {
-					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
-						VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &renderData.m_Transform);
-					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
-						VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16, &renderData.m_Color);
-					Renderer::DrawIndexed(drawData.m_CommandBuffer, renderData.m_MeshData);
-				}
+					2, descriptorSets, 0, nullptr);
 				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugSolidPipeline);
 				for (const DebugRenderData& renderData : m_DebugSolidRenderDatas) {
 					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
 						VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &renderData.m_Transform);
+					bool hasID = renderData.m_ID.HasValue();
+					FPC fpc {
+						.c_Color = renderData.m_Color,
+						.c_CursorPos = cursorPos,
+						.c_NoID = hasID,
+						.c_ID = hasID ? renderData.m_ID.GetValue() : m_InvalidMouseHitID,
+					};
 					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
-						VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16, &renderData.m_Color);
+						VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(FPC), &fpc);
+					Renderer::DrawIndexed(drawData.m_CommandBuffer, renderData.m_MeshData);
+				}
+				vkCmdBindPipeline(drawData.m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipelines.m_DebugWirePipeline);
+				for (const DebugRenderData& renderData : m_DebugWireRenderDatas) {
+					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
+						VK_SHADER_STAGE_VERTEX_BIT, 0, 64, &renderData.m_Transform);
+					bool hasID = renderData.m_ID.HasValue();
+					FPC fpc {
+						.c_Color = renderData.m_Color,
+						.c_CursorPos = cursorPos,
+						.c_NoID = hasID,
+						.c_ID = hasID ? renderData.m_ID.GetValue() : m_InvalidMouseHitID,
+					};
+					vkCmdPushConstants(drawData.m_CommandBuffer, m_Pipelines.m_DebugPipelineLayout, 
+						VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(FPC), &fpc);
 					Renderer::DrawIndexed(drawData.m_CommandBuffer, renderData.m_MeshData);
 				}
 				vkCmdEndRendering(drawData.m_CommandBuffer);
@@ -7106,7 +7237,7 @@ void main() {
 
 	public:
 
-		enum class HoveredGizmo {
+		enum class GizmoID {
 			None = 0,
 			RotatorX = 1,
 			RotatorY = 2,
@@ -7159,6 +7290,18 @@ void main() {
 
 		static constexpr float gizmo_scale_reference = 5.0f;
 
+		static constexpr Vec4 inactive_rotator_colors[3] = {
+			{ 1.0f, 0.0f, 0.0f, 0.7f },
+			{ 0.0f, 0.7f, 0.0f, 0.7f },
+			{ 0.0f, 0.0f, 1.0f, 0.7f },
+		};
+
+		static constexpr Vec4 active_rotator_colors[3] = {
+			{ 1.0f, 0.0f, 0.0f, 1.0f },
+			{ 0.0f, 0.7f, 0.0f, 1.0f },
+			{ 0.0f, 0.0f, 1.0f, 1.0f },
+		};
+
 	public:
 
 		World& m_World;
@@ -7171,7 +7314,7 @@ void main() {
 		ObjectID m_InspectedArea{};
 		uint32_t m_SelectedObjectIndex = UINT64_MAX;
 
-		HoveredGizmo m_HoveredGizmo = HoveredGizmo::None;
+		GizmoID m_HoveredGizmoID = GizmoID::None;
 		GizmoRenderState m_GizmoRenderState = 0;
 
 		MeshData m_CubeMeshData{};
@@ -7179,6 +7322,7 @@ void main() {
 		MeshData m_TorusMeshData{};
 
 		Mat4 m_RotatorTransforms[3]{};
+		Vec4 m_RotatorColors[3]{};
 
 		ImGuiContext* m_ImGuiContext = nullptr;
 		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
@@ -7323,6 +7467,8 @@ void main() {
 				CriticalError(ErrorOrigin::Editor,
 					"failed to initialize ImGui (function ImGui_ImplVulkan_CreateFontsTexture in function Editor::Initialize)!");
 			}
+
+			m_World.DefineInvalidMouseHitID(0);
 		}
 
 		void Terminate() {
@@ -7352,6 +7498,26 @@ void main() {
 			m_RotatorTransforms[1] = Mat4::Transform(pos, Quaternion::Identity(), Vec3::One(s));
 			m_RotatorTransforms[2] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Right(), pi / 2), Vec3::One(s));
 			m_GizmoRenderState |= GizmoRenderState_Rotators;
+		}
+
+		void UpdateGizmos() {
+			for (uint32_t i = 0; i < 3; i++) {
+				m_RotatorColors[i] = inactive_rotator_colors[i];
+			}
+			switch (m_HoveredGizmoID) {
+				using ID = GizmoID;
+				case ID::None:
+					break;
+				case ID::RotatorX:
+					m_RotatorColors[0] = active_rotator_colors[0];
+					break;
+				case ID::RotatorY:
+					m_RotatorColors[1] = active_rotator_colors[1];
+					break;
+				case ID::RotatorZ:
+					m_RotatorColors[2] = active_rotator_colors[2];
+					break;
+			};
 		}
 
 		void DeactivateRotators() {
@@ -7485,10 +7651,13 @@ void main() {
 			}
 			ImGui::End();
 
+			m_HoveredGizmoID = (GizmoID)m_World.GetMouseHitID();
+			UpdateGizmos();
+
 			if (m_GizmoRenderState & GizmoRenderState_Rotators) {
-				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[0], Vec4(1.0f, 0.0f, 0.0f, 0.7f));
-				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[1], Vec4(0.0f, 1.0f, 0.0f, 0.7f));
-				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[2], Vec4(0.0f, 0.0f, 1.0f, 0.7f));
+				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[0], m_RotatorColors[0], (uint32_t)GizmoID::RotatorX);
+				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[1], m_RotatorColors[1], (uint32_t)GizmoID::RotatorY);
+				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[2], m_RotatorColors[2], (uint32_t)GizmoID::RotatorZ);
 			}
 		}
 
