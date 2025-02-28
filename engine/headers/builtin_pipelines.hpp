@@ -28,6 +28,17 @@ namespace pipelines {
 		VkDescriptorSetLayout m_CameraDescriptorSetLayout = VK_NULL_HANDLE;
 		VkDescriptorSetLayout m_TextureDescriptorSetLayoutPBR = VK_NULL_HANDLE;
 		VkDescriptorSetLayout m_RenderPBRImagesDescriptorSetLayout = VK_NULL_HANDLE;
+		VkDescriptorSetLayout m_DebugMouseHitDescriptorSetLayout = VK_NULL_HANDLE;
+
+	private:
+
+		bool m_Initialized = false;
+
+	public:
+
+		bool Initialized() const {
+			return m_Initialized;
+		}
 
 		void Initialize(engine::Renderer& renderer, VkFormat colorImageResourceFormat);
 
@@ -58,6 +69,8 @@ namespace pipelines {
 			m_DirectionalLightShadowMapDescriptorSetLayout = VK_NULL_HANDLE;
 			renderer.DestroyDescriptorSetLayout(m_TextureDescriptorSetLayoutPBR);
 			m_TextureDescriptorSetLayoutPBR = VK_NULL_HANDLE;
+			renderer.DestroyDescriptorSetLayout(m_DebugMouseHitDescriptorSetLayout);
+			m_DebugMouseHitDescriptorSetLayout = VK_NULL_HANDLE;
 		}
 	};
 }
