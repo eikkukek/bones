@@ -7248,11 +7248,15 @@ void main() {
 			RotatorX = 1,
 			RotatorY = 2,
 			RotatorZ = 3,
+			ArrowX = 4,
+			ArrowY = 5,
+			ArrowZ = 6,
 			MaxEnum,
 		};
 
 		enum GizmoRenderStateBits {
 			GizmoRenderState_Rotators = 1,
+			GizmoRenderState_Arrows = 2,
 		};
 
 		typedef uint32_t GizmoRenderState;
@@ -7297,19 +7301,19 @@ void main() {
 
 		static constexpr float gizmo_scale_reference = 5.0f;
 
-		static constexpr Vec4 inactive_rotator_colors[3] = {
+		static constexpr Vec4 inactive_axis_colors[3] = {
 			{ 1.0f, 0.0f, 0.0f, 0.7f },
 			{ 0.0f, 0.7f, 0.0f, 0.7f },
 			{ 0.0f, 0.0f, 1.0f, 0.7f },
 		};
 
-		static constexpr Vec4 hovered_rotator_colors[3] = {
+		static constexpr Vec4 hovered_axis_colors[3] = {
 			{ 1.0f, 0.0f, 0.0f, 1.0f },
 			{ 0.0f, 0.7f, 0.0f, 1.0f },
 			{ 0.0f, 0.0f, 1.0f, 1.0f },
 		};
 
-		static constexpr Vec4 held_rotator_color = { 1.0f, 0.0f, 1.0f, 1.0f };
+		static constexpr Vec4 held_gizmo_color = { 1.0f, 0.0f, 1.0f, 1.0f };
 
 	public:
 
@@ -7329,10 +7333,13 @@ void main() {
 
 		MeshData m_CubeMeshData{};
 		MeshData m_QuadMeshData{};
+		MeshData m_ArrowMeshData{};
 		MeshData m_TorusMeshData{};
 
-		Mat4 m_RotatorTransforms[3]{};
-		Vec4 m_RotatorColors[3]{};
+		Mat4 m_ArrowTransforms[3];
+		Mat4 m_RotatorTransforms[3];
+		Vec4 m_ArrowColors[3];
+		Vec4 m_RotatorColors[3];
 
 		ImGuiContext* m_ImGuiContext = nullptr;
 		VkDescriptorPool m_ImGuiDescriptorPool = VK_NULL_HANDLE;
@@ -7410,10 +7417,11 @@ void main() {
 
 	private:
 
-		void Initialize(GLFWwindow* glfwWindow, const MeshData& cubeMeshData, const MeshData& quadMeshData, const MeshData& torusMeshData) {
+		void Initialize(GLFWwindow* glfwWindow, const MeshData& cubeMeshData, const MeshData& quadMeshData, const MeshData& arrowMeshData, const MeshData& torusMeshData) {
 
 			m_CubeMeshData = cubeMeshData;
 			m_QuadMeshData = quadMeshData;
+			m_ArrowMeshData = arrowMeshData;
 			m_TorusMeshData = torusMeshData;
 
 			IMGUI_CHECKVERSION();
@@ -7500,6 +7508,20 @@ void main() {
 
 	private:
 
+		void ActivateArrows(const Vec3& position) {
+			Vec3 pos = Vec3(position.x, -position.y, position.z);
+			float m = (pos - m_World.m_EditorCameraPosition).Magnitude();
+			float s = m / gizmo_scale_reference / 3.0f;
+			m_ArrowTransforms[0] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Up(), pi / 2), Vec3::One(s));
+			m_ArrowTransforms[1] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Right(), pi / 2), Vec3::One(s));
+			m_ArrowTransforms[2] = Mat4::Transform(pos, Quaternion::Identity(), Vec3::One(s));
+			m_GizmoRenderState |= GizmoRenderState_Arrows;
+		}
+
+		void DeactivateArrows() {
+			m_GizmoRenderState &= ~GizmoRenderState_Arrows;
+		}
+
 		void ActivateRotators(const Vec3& position) {
 			Vec3 pos = Vec3(position.x, -position.y, position.z);
 			float m = (pos - m_World.m_EditorCameraPosition).Magnitude();
@@ -7510,9 +7532,14 @@ void main() {
 			m_GizmoRenderState |= GizmoRenderState_Rotators;
 		}
 
+		void DeactivateRotators() {
+			m_GizmoRenderState &= ~GizmoRenderState_Rotators;
+		}
+
 		void UpdateGizmoColors() {
 			for (uint32_t i = 0; i < 3; i++) {
-				m_RotatorColors[i] = inactive_rotator_colors[i];
+				m_RotatorColors[i] = inactive_axis_colors[i];
+				m_ArrowColors[i] = inactive_axis_colors[i];
 			}
 			if (m_HeldGizmoID == GizmoID::None) {
 				switch (m_HoveredGizmoID) {
@@ -7520,13 +7547,13 @@ void main() {
 					case ID::None:
 						break;
 					case ID::RotatorX:
-						m_RotatorColors[0] = hovered_rotator_colors[0];
+						m_RotatorColors[0] = hovered_axis_colors[0];
 						break;
 					case ID::RotatorY:
-						m_RotatorColors[1] = hovered_rotator_colors[1];
+						m_RotatorColors[1] = hovered_axis_colors[1];
 						break;
 					case ID::RotatorZ:
-						m_RotatorColors[2] = hovered_rotator_colors[2];
+						m_RotatorColors[2] = hovered_axis_colors[2];
 						break;
 				};
 			}
@@ -7534,22 +7561,18 @@ void main() {
 				switch (m_HeldGizmoID) {
 					using ID = GizmoID;
 					case ID::RotatorX:
-						m_RotatorColors[0] = held_rotator_color;
+						m_RotatorColors[0] = held_gizmo_color;
 						break;
 					case ID::RotatorY:
-						m_RotatorColors[1] = held_rotator_color;
+						m_RotatorColors[1] = held_gizmo_color;
 						break;
 					case ID::RotatorZ:
-						m_RotatorColors[2] = held_rotator_color;
+						m_RotatorColors[2] = held_gizmo_color;
 						break;
 					default:
 						assert(false);
 				}
 			}
-		}
-
-		void DeactivateRotators() {
-			m_GizmoRenderState &= ~GizmoRenderState_Rotators;
 		}
 
 		void NewFrame() {
@@ -7646,6 +7669,7 @@ void main() {
 								ImGui::SetCursorPosX(style.ItemSpacing.x);
 								if (m_SelectedObjectIndex == index) {
 									m_PhysicsManager.GetBodyDrawFilter().AddBodyID(body.GetPhysicsID());
+									ActivateArrows(body.GetPosition());
 									ActivateRotators(body.GetPosition());
 									/*
 									Box<float> boundingBox = obstacle.GetBoundingBox();
@@ -7674,25 +7698,25 @@ void main() {
 									//ImGui::PopStyleColor();
 
 									if (m_HeldGizmoID != GizmoID::None) {
+										static constexpr float rot_div = 250.0f;
 										Vec2 deltaCursorPos = Input::GetDeltaMousePosition();
-										float crot = deltaCursorPos.x / 1000.0f;
 										switch (m_HeldGizmoID) {
 											case GizmoID::RotatorX: {
 												Quaternion rot = body.GetRotation();
 												Vec3 axis = Vec3::Right() * rot.AsMat3();
-												body.SetRotation(Quaternion::AxisRotation(axis, crot) * rot);
+												body.SetRotation(Quaternion::AxisRotation(axis, deltaCursorPos.y / rot_div) * rot);
 												break;
 											}
 											case GizmoID::RotatorY: {
 												Quaternion rot = body.GetRotation();
 												Vec3 axis = Vec3::Up() * rot.AsMat3();
-												body.SetRotation(Quaternion::AxisRotation(axis, crot)* rot);
+												body.SetRotation(Quaternion::AxisRotation(axis, -deltaCursorPos.x / rot_div)* rot);
 												break;
 											}
 											case GizmoID::RotatorZ: {
 												Quaternion rot = body.GetRotation();
 												Vec3 axis = Vec3::Forward() * rot.AsMat3();
-												body.SetRotation(Quaternion::AxisRotation(axis, crot) * rot);
+												body.SetRotation(Quaternion::AxisRotation(axis, deltaCursorPos.y / rot_div) * rot);
 												break;
 											}
 											default:
@@ -7703,6 +7727,7 @@ void main() {
 								}
 								else if (ImGui::Button((body.GetName() + ", ID : " + IntToString(ID)).CString())) {
 									m_SelectedObjectIndex = index;
+									ActivateArrows(body.GetPosition());
 									ActivateRotators(body.GetPosition());
 									m_PhysicsManager.GetBodyDrawFilter().RemoveAllBodyIDs();
 								}
@@ -7715,6 +7740,7 @@ void main() {
 						if (!buttonActive && ImGui::IsWindowHovered() && Input::WasMouseButtonPressed(MouseButton::Left)) {
 							m_SelectedObjectIndex = UINT32_MAX;
 							m_PhysicsManager.GetBodyDrawFilter().RemoveAllBodyIDs();
+							DeactivateArrows();
 							DeactivateRotators();
 						}
 					}	
@@ -7737,6 +7763,11 @@ void main() {
 
 			UpdateGizmoColors();
 
+			if (m_GizmoRenderState & GizmoRenderState_Arrows) {
+				m_World.RenderDebugSolidMesh(m_ArrowMeshData, m_ArrowTransforms[0], m_ArrowColors[0], (uint32_t)GizmoID::ArrowX);
+				m_World.RenderDebugSolidMesh(m_ArrowMeshData, m_ArrowTransforms[1], m_ArrowColors[1], (uint32_t)GizmoID::ArrowY);
+				m_World.RenderDebugSolidMesh(m_ArrowMeshData, m_ArrowTransforms[2], m_ArrowColors[2], (uint32_t)GizmoID::ArrowZ);
+			}
 			if (m_GizmoRenderState & GizmoRenderState_Rotators) {
 				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[0], m_RotatorColors[0], (uint32_t)GizmoID::RotatorX);
 				m_World.RenderDebugSolidMesh(m_TorusMeshData, m_RotatorTransforms[1], m_RotatorColors[1], (uint32_t)GizmoID::RotatorY);
@@ -7803,10 +7834,9 @@ void main() {
 
 		StaticMesh m_StaticQuadMesh;
 		StaticMesh m_StaticQuadMesh2D;
-
 		StaticMesh m_StaticBoxMesh;
-
-		StaticMesh m_StaticRotatorTorusMesh;
+		StaticMesh m_StaticArrowGizmoMesh;
+		StaticMesh m_StaticTorusGizmoMesh;
 
 		static constexpr uint32_t quad_vertex_count = 4;
 
@@ -7991,16 +8021,24 @@ void main() {
 			0, 2, 19, 3, 5, 20, 6, 8, 21, 9, 11, 22, 12, 14, 23, 15, 17,
 		};
 
-		static inline Obj s_rotator_torus_obj{};
+		static inline Obj s_arrow_gizmo_obj{};
+		static inline Obj s_torus_gizmo_obj{};
 
 	public:
 
-		static void SetRotatorTorusObj(const Obj& obj) {
+		static void SetArrowGizmoObj(const Obj& obj) {
 			if (!obj.IsValid()) {
-				CriticalError(ErrorOrigin::Engine, "invalid torus obj set (function Engine::SetTorusObj)!");
+				CriticalError(ErrorOrigin::Engine, "invalid arrow obj set (function Engine::SetArrowGizmoObj)!");
 			}
-			s_rotator_torus_obj = obj;
+			s_arrow_gizmo_obj = obj;
 		}
+
+		static void SetTorusGizmoObj(const Obj& obj) {
+			if (!obj.IsValid()) {
+				CriticalError(ErrorOrigin::Engine, "invalid torus obj set (function Engine::SetTorusGizmoObj)!");
+			}
+			s_torus_gizmo_obj = obj;
+		}	
 
 		Engine(EngineState state, const String& projectName, GLFWwindow* glfwWindow, size_t maxUIWindows) :
 				m_State(UpdateEngineInstance(this, state)),
@@ -8014,12 +8052,18 @@ void main() {
 				m_StaticQuadMesh(m_Renderer),
 				m_StaticQuadMesh2D(m_Renderer),
 				m_StaticBoxMesh(m_Renderer),
-				m_StaticRotatorTorusMesh(m_Renderer)
+				m_StaticArrowGizmoMesh(m_Renderer),
+				m_StaticTorusGizmoMesh(m_Renderer)
 		{
 
-			if (!s_rotator_torus_obj.IsValid()) {
+			if (!s_arrow_gizmo_obj.IsValid()) {
 				CriticalError(ErrorOrigin::Engine,
-					"attempting to construct engine when rotator torus obj is not set (in Engine constructor)!");
+					"attempting to construct engine when gizmo arrow obj is not set (in Engine constructor)!");
+			}
+
+			if (!s_torus_gizmo_obj.IsValid()) {
+				CriticalError(ErrorOrigin::Engine,
+					"attempting to construct engine when gizmo torus obj is not set (in Engine constructor)!");
 			}
 
 			Input input(glfwWindow);
@@ -8037,17 +8081,30 @@ void main() {
 					"failed to create static box mesh (function StaticMesh::CreateBuffers in Engine constructor)!");
 			}
 
+			DynamicArray<Vertex> arrowVertices{};
+			DynamicArray<uint32_t> arrowIndices{};
+
+			if (!s_arrow_gizmo_obj.GetMesh(Vertex::SetPosition, Vertex::SetUV, Vertex::SetNormal, arrowVertices, arrowIndices)) {
+				CriticalError(ErrorOrigin::Engine,
+					"failed to get arrow gizmo mesh from obj (function Obj::GetMesh in Engine constructor)!");
+			}
+
+			if (!m_StaticArrowGizmoMesh.CreateBuffers(arrowVertices.Size(), arrowVertices.Data(), arrowIndices.Size(), arrowIndices.Data())) {
+				CriticalError(ErrorOrigin::Engine,
+					"failed to create arrow gizmo mesh (function StaticMesh::CreateBuffers in Engine constructor)!");
+			}
+
 			DynamicArray<Vertex> torusVertices{};
 			DynamicArray<uint32_t> torusIndices{};
 
-			if (!s_rotator_torus_obj.GetMesh(Vertex::SetPosition, Vertex::SetUV, Vertex::SetNormal, torusVertices, torusIndices)) {
+			if (!s_torus_gizmo_obj.GetMesh(Vertex::SetPosition, Vertex::SetUV, Vertex::SetNormal, torusVertices, torusIndices)) {
 				CriticalError(ErrorOrigin::Engine,
-					"failed to get rotator torus mesh from obj (function Obj::GetMesh in Engine constructor)!");
+					"failed to get torus gizmo mesh from obj (function Obj::GetMesh in Engine constructor)!");
 			}
 
-			if (!m_StaticRotatorTorusMesh.CreateBuffers(torusVertices.Size(), torusVertices.Data(), torusIndices.Size(), torusIndices.Data())) {
+			if (!m_StaticTorusGizmoMesh.CreateBuffers(torusVertices.Size(), torusVertices.Data(), torusIndices.Size(), torusIndices.Data())) {
 				CriticalError(ErrorOrigin::Engine,
-					"failed to create rotator torus mesh (function StaticMesh::CreateBuffers in Engine constructor)!");
+					"failed to create torus gizmo mesh (function StaticMesh::CreateBuffers in Engine constructor)!");
 			}
 
 			const VkFormat fontAtlasFormatCandidates[1] { VK_FORMAT_R8_SRGB, };
@@ -8073,7 +8130,8 @@ void main() {
 			m_World.Initialize(m_StaticQuadMesh2D);
 			m_PhysicsManager.Initialize();
 			m_UI.Initialize(m_StaticQuadMesh2D);
-			m_Editor.Initialize(glfwWindow, m_StaticBoxMesh.GetMeshData(), m_StaticQuadMesh2D.GetMeshData(), m_StaticRotatorTorusMesh.GetMeshData());
+			m_Editor.Initialize(glfwWindow, m_StaticBoxMesh.GetMeshData(), m_StaticQuadMesh2D.GetMeshData(),
+				m_StaticArrowGizmoMesh.GetMeshData(), m_StaticTorusGizmoMesh.GetMeshData());
 		}
 
 		Engine(const Engine&) = delete;
@@ -8084,7 +8142,8 @@ void main() {
 			m_StaticQuadMesh.Terminate();
 			m_StaticQuadMesh2D.Terminate();
 			m_StaticBoxMesh.Terminate();
-			m_StaticRotatorTorusMesh.Terminate();
+			m_StaticArrowGizmoMesh.Terminate();
+			m_StaticTorusGizmoMesh.Terminate();
 			m_UI.Terminate();
 			m_Editor.Terminate();
 			m_PhysicsManager.Terminate();
