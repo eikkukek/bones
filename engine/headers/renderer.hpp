@@ -2091,7 +2091,7 @@ namespace engine {
 			return res;
 		};
 
-		VkSampler CreateSampler(const VkSamplerCreateInfo& createInfo) {
+		[[nodiscard]] VkSampler CreateSampler(const VkSamplerCreateInfo& createInfo) {
 			VkSampler res;
 			if (!VkCheck(vkCreateSampler(m_VulkanDevice, &createInfo, m_VulkanAllocationCallbacks, &res),
 					"failed to create sampler (function vkCreateSampler in function CreateSampler!)")) {
@@ -2118,7 +2118,7 @@ namespace engine {
 			};
 		}
 
-		VkDescriptorSetLayout CreateDescriptorSetLayout(const void* pNext, uint32_t bindingCount, const VkDescriptorSetLayoutBinding* pBindings) const {
+		[[nodiscard]] VkDescriptorSetLayout CreateDescriptorSetLayout(const void* pNext, uint32_t bindingCount, const VkDescriptorSetLayoutBinding* pBindings) const {
 			VkDescriptorSetLayoutCreateInfo createInfo {
 				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
 				.pNext = pNext,
@@ -2138,7 +2138,7 @@ namespace engine {
 			vkDestroyDescriptorSetLayout(m_VulkanDevice, layout, m_VulkanAllocationCallbacks);
 		}
 
-		VkDescriptorPool CreateDescriptorPool(VkDescriptorPoolCreateFlags flags, uint32_t maxSets, uint32_t poolSizeCount, const VkDescriptorPoolSize poolSizes[]) const {
+		[[nodiscard]] VkDescriptorPool CreateDescriptorPool(VkDescriptorPoolCreateFlags flags, uint32_t maxSets, uint32_t poolSizeCount, const VkDescriptorPoolSize poolSizes[]) const {
 			VkDescriptorPoolCreateInfo poolInfo {
 				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
 				.pNext = nullptr,
@@ -2159,7 +2159,7 @@ namespace engine {
 			vkDestroyDescriptorPool(m_VulkanDevice, pool, m_VulkanAllocationCallbacks);
 		}
 
-		bool AllocateDescriptorSets(const void* pNext, VkDescriptorPool descriptorPool, uint32_t setCount,
+		[[nodiscard]] bool AllocateDescriptorSets(const void* pNext, VkDescriptorPool descriptorPool, uint32_t setCount,
 				const VkDescriptorSetLayout* pLayouts, VkDescriptorSet outSets[]) const {
 			if (descriptorPool == VK_NULL_HANDLE) {
 				PrintError(ErrorOrigin::Vulkan, 
@@ -2186,7 +2186,7 @@ namespace engine {
 			return true;
 		}
 
-		bool FreeDescriptorSets(VkDescriptorPool descriptorPool, uint32_t setCount, const VkDescriptorSet sets[]) const {
+		[[nodiscard]] bool FreeDescriptorSets(VkDescriptorPool descriptorPool, uint32_t setCount, const VkDescriptorSet sets[]) const {
 			return VkCheck(vkFreeDescriptorSets(m_VulkanDevice, descriptorPool, setCount, sets),
 				"failed to free desriptor sets (function vkFreeDescriptorSets in function FreeDescriptorSets)!");
 		};
@@ -2210,7 +2210,7 @@ namespace engine {
 			vkUpdateDescriptorSets(m_VulkanDevice, writeCount, writes, 0, nullptr);
 		}
 
-		VkPipelineLayout CreatePipelineLayout(uint32_t setLayoutCount, const VkDescriptorSetLayout* pSetLayouts, 
+		[[nodiscard]] VkPipelineLayout CreatePipelineLayout(uint32_t setLayoutCount, const VkDescriptorSetLayout* pSetLayouts, 
 				uint32_t pushConstantRangeCount, const VkPushConstantRange* pPushConstantRanges) const {
 			VkPipelineLayoutCreateInfo createInfo {
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -2233,7 +2233,7 @@ namespace engine {
 			vkDestroyPipelineLayout(m_VulkanDevice, layout, m_VulkanAllocationCallbacks);
 		}
 
-		bool CreateGraphicsPipelines(uint32_t pipelineCount, const VkGraphicsPipelineCreateInfo* pipelineCreateInfos, VkPipeline outPipelines[]) const {
+		[[nodiscard]] bool CreateGraphicsPipelines(uint32_t pipelineCount, const VkGraphicsPipelineCreateInfo* pipelineCreateInfos, VkPipeline outPipelines[]) const {
 			if (!VkCheck(vkCreateGraphicsPipelines(m_VulkanDevice, VK_NULL_HANDLE, pipelineCount, pipelineCreateInfos,
 					m_VulkanAllocationCallbacks, outPipelines), 
 					"failed to create graphics pipelines (function vkCreateGraphicsPipelines in function CreateGraphicsPipelines)!")) {
@@ -2250,7 +2250,7 @@ namespace engine {
 			vkDestroyShaderModule(m_VulkanDevice, module, m_VulkanAllocationCallbacks);
 		}
 
-		bool FindMemoryTypeIndex(uint32_t typeFilter, VkMemoryPropertyFlags properties, uint32_t& outIndex) const {
+		[[nodiscard]] bool FindMemoryTypeIndex(uint32_t typeFilter, VkMemoryPropertyFlags properties, uint32_t& outIndex) const {
 			VkPhysicalDeviceMemoryProperties memProperties{};
 			vkGetPhysicalDeviceMemoryProperties(m_Gpu, &memProperties);
 			for (size_t i = 0; i < memProperties.memoryTypeCount; i++) {
