@@ -5,8 +5,9 @@
 namespace pipelines {
 
 	void World::Initialize(engine::Renderer& renderer, VkFormat colorImageResourceFormat) {
-
 		using namespace engine;
+
+		assert(!m_Initialized);
 
 		static constexpr VkDescriptorSetLayoutBinding camera_descriptor_set_layout_binding
 			= Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT);
@@ -60,6 +61,39 @@ namespace pipelines {
 				"failed to create unidirectional light pipeline layout (function Renderer::CreateDescriptorSetLayout in function pipelines::World::Initialize)!");
 		}
 
+		VkDescriptorSetLayoutBinding pbrRenderPipelineDescriptorSetBindings[3];
+
+		for (uint32_t i = 0; i < 3; i++) {
+			pbrRenderPipelineDescriptorSetBindings[i] = {
+				.binding = i,
+				.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				.descriptorCount = 1,
+				.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+				.pImmutableSamplers = nullptr,
+			};
+		}
+
+		m_RenderPBRImagesDescriptorSetLayout 
+			= renderer.CreateDescriptorSetLayout(nullptr, 3, pbrRenderPipelineDescriptorSetBindings);
+
+		if (m_RenderPBRImagesDescriptorSetLayout == VK_NULL_HANDLE) {
+			CriticalError(ErrorOrigin::Renderer, 
+				"failed to create pbr render pipeline images descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
+		}
+
+		static constexpr VkDescriptorSetLayoutBinding ud_light_shadow_map_descriptor_set_layout_bindings[2] {
+			Renderer::GetDescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT),
+			Renderer::GetDescriptorSetLayoutBinding(1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT),
+		};
+
+		m_DirectionalLightShadowMapDescriptorSetLayout 
+			= renderer.CreateDescriptorSetLayout(nullptr, 2, ud_light_shadow_map_descriptor_set_layout_bindings);
+
+		if (m_DirectionalLightShadowMapDescriptorSetLayout == VK_NULL_HANDLE) {
+			CriticalError(ErrorOrigin::Renderer, 
+				"failed to create unidirectional light descriptor set layout for world (function Renderer::CreateDescriptorSetLayout in function World::Pipelines::Initialize)!");
+		}
+
 		const VkDescriptorSetLayout pbrRenderDescriptorSetLayouts[2]{
 			m_RenderPBRImagesDescriptorSetLayout,
 			m_DirectionalLightShadowMapDescriptorSetLayout,
@@ -70,15 +104,36 @@ namespace pipelines {
 
 		if (m_RenderPipelineLayoutPBR == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
-				"faileld to create pbr render pipeline layout for world (function Renderer::CreatePipelineLayout in function pipelines::World::Initialize)!");
+				"failed to create pbr render pipeline layout for world (function Renderer::CreatePipelineLayout in function pipelines::World::Initialize)!");
 		}
+
+		const VkDescriptorSetLayoutBinding debugMouseHitDescriptorSetLayoutBinding {
+			.binding = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+			.pImmutableSamplers = nullptr,
+		};
+
+		m_DebugMouseHitDescriptorSetLayout
+			= renderer.CreateDescriptorSetLayout(nullptr, 1, &debugMouseHitDescriptorSetLayoutBinding);
+
+		if (m_DebugMouseHitDescriptorSetLayout == VK_NULL_HANDLE) {
+			CriticalError(ErrorOrigin::Renderer,
+				"failed to create debug mouse hit descriptor set layout for world (function Renderer::CreatePipelineLayout in function pipelines::World::Initialize)!");
+		}
+
+		const VkDescriptorSetLayout debugDescriptorSetLayouts[2] {
+			m_CameraDescriptorSetLayout,
+			m_DebugMouseHitDescriptorSetLayout,
+		};
 
 		const VkPushConstantRange debugPushConstantRanges[2]{
 			Renderer::GetPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, 0, 64),
-			Renderer::GetPushConstantRange(VK_SHADER_STAGE_FRAGMENT_BIT, 64, 16),
+			Renderer::GetPushConstantRange(VK_SHADER_STAGE_FRAGMENT_BIT, 64, 32),
 		};
 
-		m_DebugPipelineLayout = renderer.CreatePipelineLayout(1, &m_CameraDescriptorSetLayout, 2, debugPushConstantRanges);
+		m_DebugPipelineLayout = renderer.CreatePipelineLayout(2, debugDescriptorSetLayouts, 2, debugPushConstantRanges);
 
 		if (m_DebugPipelineLayout == VK_NULL_HANDLE) {
 			CriticalError(ErrorOrigin::Renderer,
@@ -142,12 +197,12 @@ namespace pipelines {
 
 		if (!debugShaders[0].Compile(shaders::World::debug_pipeline_vertex_shader)) {
 			CriticalError(ErrorOrigin::Renderer,
-				"failed to compile vertex shader code (function Renderer::Shader::Compile in function pipelines::World::Initialize)!");
+				"failed to compile debug vertex shader code (function Renderer::Shader::Compile in function pipelines::World::Initialize)!");
 		}
 
 		if (!debugShaders[1].Compile(shaders::World::debug_pipeline_fragment_shader)) {
 			CriticalError(ErrorOrigin::Renderer,
-				"failed to compile fragment shader code (function Renderer::Shader::Compile in function pipelines::World::Initialize)!");
+				"failed to compile debug fragment shader code (function Renderer::Shader::Compile in function pipelines::World::Initialize)!");
 		}
 
 		const VkPipelineShaderStageCreateInfo debugShaderStageInfos[2]{
@@ -302,5 +357,7 @@ namespace pipelines {
 		m_RenderPipelinePBR = pipelines[2];
 		m_DebugWirePipeline = pipelines[3];
 		m_DebugSolidPipeline = pipelines[4];
+
+		m_Initialized = true;
 	}
 }
