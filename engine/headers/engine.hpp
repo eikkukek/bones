@@ -7261,6 +7261,12 @@ void main() {
 
 		typedef uint32_t GizmoRenderState;
 
+		enum class BodyControlState {
+			None = 0,
+			Position = 1,
+			Rotation = 2,
+		};
+
 		struct SerializedObject {
 
 			ObjectID m_ObjectID;
@@ -7330,6 +7336,7 @@ void main() {
 		GizmoID m_HoveredGizmoID = GizmoID::None;
 		GizmoID m_HeldGizmoID = GizmoID::None;
 		GizmoRenderState m_GizmoRenderState = 0;
+		BodyControlState m_BodyControlState = BodyControlState::Position;
 
 		MeshData m_CubeMeshData{};
 		MeshData m_QuadMeshData{};
@@ -7424,7 +7431,11 @@ void main() {
 			m_ArrowMeshData = arrowMeshData;
 			m_TorusMeshData = torusMeshData;
 
-			IMGUI_CHECKVERSION();
+			IMGUI_CHECKVERSION();		enum class BodyControlState {
+			None = 0,
+			Position = 1,
+			Rotation = 2,
+		};
 
 			m_ImGuiContext = ImGui::CreateContext();
 
@@ -7518,10 +7529,6 @@ void main() {
 			m_GizmoRenderState |= GizmoRenderState_Arrows;
 		}
 
-		void DeactivateArrows() {
-			m_GizmoRenderState &= ~GizmoRenderState_Arrows;
-		}
-
 		void ActivateRotators(const Vec3& position) {
 			Vec3 pos = Vec3(position.x, -position.y, position.z);
 			float m = (pos - m_World.m_EditorCameraPosition).Magnitude();
@@ -7532,8 +7539,23 @@ void main() {
 			m_GizmoRenderState |= GizmoRenderState_Rotators;
 		}
 
-		void DeactivateRotators() {
-			m_GizmoRenderState &= ~GizmoRenderState_Rotators;
+		void ActivateBodyControls(const Vec3& position) {
+			m_GizmoRenderState &= ~(GizmoRenderState_Arrows | GizmoRenderState_Rotators);
+			switch (m_BodyControlState) {
+				using S = BodyControlState;
+				case S::None:
+					break;
+				case S::Position:
+					ActivateArrows(position);
+					break;
+				case S::Rotation:
+					ActivateRotators(position);
+					break;
+			}
+		}
+
+		void DeactivateBodyControls() {
+			m_GizmoRenderState &= ~(GizmoRenderState_Arrows | GizmoRenderState_Rotators);
 		}
 
 		void UpdateGizmoColors() {
@@ -7555,6 +7577,17 @@ void main() {
 					case ID::RotatorZ:
 						m_RotatorColors[2] = hovered_axis_colors[2];
 						break;
+					case ID::ArrowX:
+						m_ArrowColors[0] = hovered_axis_colors[0];
+						break;
+					case ID::ArrowY:
+						m_ArrowColors[1] = hovered_axis_colors[1];
+						break;
+					case ID::ArrowZ:
+						m_ArrowColors[2] = hovered_axis_colors[2];
+						break;
+					default:
+						assert(false);
 				};
 			}
 			else {
@@ -7568,6 +7601,15 @@ void main() {
 						break;
 					case ID::RotatorZ:
 						m_RotatorColors[2] = held_gizmo_color;
+						break;
+					case ID::ArrowX:
+						m_ArrowColors[0] = held_gizmo_color;
+						break;
+					case ID::ArrowY:
+						m_ArrowColors[1] = held_gizmo_color;
+						break;
+					case ID::ArrowZ:
+						m_ArrowColors[2] = held_gizmo_color;
 						break;
 					default:
 						assert(false);
@@ -7669,8 +7711,7 @@ void main() {
 								ImGui::SetCursorPosX(style.ItemSpacing.x);
 								if (m_SelectedObjectIndex == index) {
 									m_PhysicsManager.GetBodyDrawFilter().AddBodyID(body.GetPhysicsID());
-									ActivateArrows(body.GetPosition());
-									ActivateRotators(body.GetPosition());
+									ActivateBodyControls(body.GetPosition());
 									/*
 									Box<float> boundingBox = obstacle.GetBoundingBox();
 									Vec3 dimensions = boundingBox.Dimensions();
@@ -7699,26 +7740,54 @@ void main() {
 
 									if (m_HeldGizmoID != GizmoID::None) {
 										static constexpr float rot_div = 250.0f;
+										static constexpr float pos_div = 250.0f;
 										Vec2 deltaCursorPos = Input::GetDeltaMousePosition();
 										switch (m_HeldGizmoID) {
-											case GizmoID::RotatorX: {
+											using ID = GizmoID;
+											case ID::RotatorX: {
 												Quaternion rot = body.GetRotation();
 												Vec3 axis = Vec3::Right() * rot.AsMat3();
 												body.SetRotation(Quaternion::AxisRotation(axis, deltaCursorPos.y / rot_div) * rot);
 												break;
 											}
-											case GizmoID::RotatorY: {
+											case ID::RotatorY: {
 												Quaternion rot = body.GetRotation();
 												Vec3 axis = Vec3::Up() * rot.AsMat3();
 												body.SetRotation(Quaternion::AxisRotation(axis, -deltaCursorPos.x / rot_div)* rot);
 												break;
 											}
-											case GizmoID::RotatorZ: {
+											case ID::RotatorZ: {
 												Quaternion rot = body.GetRotation();
 												Vec3 axis = Vec3::Forward() * rot.AsMat3();
 												body.SetRotation(Quaternion::AxisRotation(axis, deltaCursorPos.y / rot_div) * rot);
 												break;
 											}
+											case ID::ArrowX: {
+												Vec3 bodyPos = body.GetPosition();
+												Vec2 screenPos1 = m_World.m_EditorCamera.m_Projection * m_World.m_EditorCamera.m_View * Vec4(bodyPos, 1.0f);
+												Vec2 screenPos2 = m_World.m_EditorCamera.m_Projection * m_World.m_EditorCamera.m_View * Vec4(bodyPos + Vec3::Right(), 1.0f);
+												Vec2 screenArrowDirection = (screenPos2 - screenPos1).Normalized();
+												float change = 0;
+												if (screenArrowDirection.y == 0.0f) {
+													change = deltaCursorPos.x / pos_div;
+												}
+												else if (screenArrowDirection.x == 0.0f) {
+													change = deltaCursorPos.y / pos_div;
+												}
+												else {
+													float frac1 = screenArrowDirection.x / screenArrowDirection.y;
+													float frac2 = screenArrowDirection.y / screenArrowDirection.x;
+													change = deltaCursorPos.x * frac1 / pos_div + deltaCursorPos.y * frac2 / pos_div;
+												}
+												body.SetPosition(bodyPos + Vec3::Right(change));
+												break;
+											}
+											case ID::ArrowY:
+												body.SetPosition(body.GetPosition() + Vec3::Up(-deltaCursorPos.y / pos_div));
+												break;
+											case ID::ArrowZ:
+												body.SetPosition(body.GetPosition() + Vec3::Forward(deltaCursorPos.x / pos_div));
+												break;
 											default:
 												assert(false);
 												break;
@@ -7728,7 +7797,6 @@ void main() {
 								else if (ImGui::Button((body.GetName() + ", ID : " + IntToString(ID)).CString())) {
 									m_SelectedObjectIndex = index;
 									ActivateArrows(body.GetPosition());
-									ActivateRotators(body.GetPosition());
 									m_PhysicsManager.GetBodyDrawFilter().RemoveAllBodyIDs();
 								}
 								else if (ImGui::IsItemActive()) {
@@ -7740,8 +7808,7 @@ void main() {
 						if (!buttonActive && ImGui::IsWindowHovered() && Input::WasMouseButtonPressed(MouseButton::Left)) {
 							m_SelectedObjectIndex = UINT32_MAX;
 							m_PhysicsManager.GetBodyDrawFilter().RemoveAllBodyIDs();
-							DeactivateArrows();
-							DeactivateRotators();
+							DeactivateBodyControls();
 						}
 					}	
 				}
