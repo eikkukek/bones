@@ -3367,7 +3367,7 @@ namespace engine {
 
 		static void CursorPositionCallback(GLFWwindow* window, double xPos, double yPos) {
 			Vec2_T<double> pos = { xPos, yPos };
-			s_DeltaCursorPosition = pos - s_CursorPosition;
+			s_DeltaCursorPosition = Vec2_T<double>(pos.x - s_CursorPosition.x, (pos.y - s_CursorPosition.y) * -1);
 			s_CursorPosition = pos;
 			for (auto function : s_CursorPositionCallbacks) {
 				function(window, xPos, yPos);
@@ -6411,7 +6411,7 @@ void main() {
 
 	public:
 
-		static constexpr float default_camera_fov = pi / 4.0f;
+		static constexpr float default_camera_fov = Math::pi / 4.0f;
 		static constexpr float default_camera_near = 0.1f;
 		static constexpr float default_camera_far = 100.0f;
 
@@ -6430,7 +6430,7 @@ void main() {
 		OrderedDictionary<ObjectID, Area> m_Areas{};
 		Vec3 m_GameCameraPosition{};
 		Quaternion m_GameCameraRotation{};
-		float m_EditorCameraSensitivity = pi / 2;
+		float m_EditorCameraSensitivity = Math::pi / 2;
 		float m_EditorCameraSpeed = 5.0f;
 		static constexpr float editor_min_camera_speed = 1.0f;
 		static constexpr float editor_max_camera_speed = 20.0f;
@@ -6861,9 +6861,9 @@ void main() {
 			if (mouseHeld || moved) {
 				if (mouseHeld) {
 					Vec2_T<double> deltaCursorPos = Input::GetDeltaMousePosition();
-					m_EditorCameraRotations += Vec2(-deltaCursorPos.y, deltaCursorPos.x) * (m_EditorCameraSensitivity * Time::DeltaTime());
-					m_EditorCameraRotations.x = fmod(m_EditorCameraRotations.x, 2 * pi);
-					m_EditorCameraRotations.y = fmod(m_EditorCameraRotations.y, 2 * pi);
+					m_EditorCameraRotations += Vec2(deltaCursorPos.y, deltaCursorPos.x) * (m_EditorCameraSensitivity * Time::DeltaTime());
+					m_EditorCameraRotations.x = fmod(m_EditorCameraRotations.x, 2 * Math::pi);
+					m_EditorCameraRotations.y = fmod(m_EditorCameraRotations.y, 2 * Math::pi);
 				}
 				Quaternion rightRot = Quaternion::AxisRotation(Vec3::Right(), m_EditorCameraRotations.x);
 				Quaternion upRot = Quaternion::AxisRotation(Vec3::Up(), m_EditorCameraRotations.y);
@@ -7520,22 +7520,20 @@ void main() {
 	private:
 
 		void ActivateArrows(const Vec3& position) {
-			Vec3 pos = Vec3(position.x, -position.y, position.z);
-			float m = (pos - m_World.m_EditorCameraPosition).Magnitude();
+			float m = (position - m_World.m_EditorCameraPosition).Magnitude();
 			float s = m / gizmo_scale_reference / 3.0f;
-			m_ArrowTransforms[0] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Up(), pi / 2), Vec3::One(s));
-			m_ArrowTransforms[1] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Right(), pi / 2), Vec3::One(s));
-			m_ArrowTransforms[2] = Mat4::Transform(pos, Quaternion::Identity(), Vec3::One(s));
+			m_ArrowTransforms[0] = Mat4::Transform(position, Quaternion::AxisRotation(Vec3::Up(), Math::pi / 2), Vec3::One(s));
+			m_ArrowTransforms[1] = Mat4::Transform(position, Quaternion::AxisRotation(Vec3::Right(), Math::pi / 2), Vec3::One(s));
+			m_ArrowTransforms[2] = Mat4::Transform(position, Quaternion::Identity(), Vec3::One(s));
 			m_GizmoRenderState |= GizmoRenderState_Arrows;
 		}
 
 		void ActivateRotators(const Vec3& position) {
-			Vec3 pos = Vec3(position.x, -position.y, position.z);
-			float m = (pos - m_World.m_EditorCameraPosition).Magnitude();
+			float m = (position - m_World.m_EditorCameraPosition).Magnitude();
 			float s = m / gizmo_scale_reference;
-			m_RotatorTransforms[0] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Forward(), pi / 2), Vec3::One(s));
-			m_RotatorTransforms[1] = Mat4::Transform(pos, Quaternion::Identity(), Vec3::One(s));
-			m_RotatorTransforms[2] = Mat4::Transform(pos, Quaternion::AxisRotation(Vec3::Right(), pi / 2), Vec3::One(s));
+			m_RotatorTransforms[0] = Mat4::Transform(position, Quaternion::AxisRotation(Vec3::Forward(), Math::pi / 2), Vec3::One(s));
+			m_RotatorTransforms[1] = Mat4::Transform(position, Quaternion::Identity(), Vec3::One(s));
+			m_RotatorTransforms[2] = Mat4::Transform(position, Quaternion::AxisRotation(Vec3::Right(), Math::pi / 2), Vec3::One(s));
 			m_GizmoRenderState |= GizmoRenderState_Rotators;
 		}
 
@@ -7730,7 +7728,7 @@ void main() {
 										Vec3 offset = Vec3(0.0f, 5.0f, -5.0f);
 										m_World.m_EditorCameraPosition = pos + offset;
 										Vec3 forward = pos - m_World.m_EditorCameraPosition;
-										m_World.m_EditorCameraRotations = Vec2(-AngleBetween(Vec3::Forward(), forward), 0.0f);
+										m_World.m_EditorCameraRotations = Vec2(-Angle(Vec3::Forward(), forward), 0.0f);
 										m_World.UpdateEditorCamera();
 									}
 									else if (ImGui::IsItemActive()) {
@@ -7741,6 +7739,7 @@ void main() {
 									if (m_HeldGizmoID != GizmoID::None) {
 										static constexpr float rot_div = 250.0f;
 										static constexpr float pos_div = 250.0f;
+										static constexpr float pi_half = Math::pi / 2.0;
 										Vec2 deltaCursorPos = Input::GetDeltaMousePosition();
 										switch (m_HeldGizmoID) {
 											using ID = GizmoID;
@@ -7766,28 +7765,37 @@ void main() {
 												Vec3 bodyPos = body.GetPosition();
 												Vec2 screenPos1 = m_World.m_EditorCamera.m_Projection * m_World.m_EditorCamera.m_View * Vec4(bodyPos, 1.0f);
 												Vec2 screenPos2 = m_World.m_EditorCamera.m_Projection * m_World.m_EditorCamera.m_View * Vec4(bodyPos + Vec3::Right(), 1.0f);
-												Vec2 screenArrowDirection = (screenPos2 - screenPos1).Normalized();
-												float change = 0;
-												if (screenArrowDirection.y == 0.0f) {
-													change = deltaCursorPos.x / pos_div;
-												}
-												else if (screenArrowDirection.x == 0.0f) {
-													change = deltaCursorPos.y / pos_div;
-												}
-												else {
-													float frac1 = screenArrowDirection.x / screenArrowDirection.y;
-													float frac2 = screenArrowDirection.y / screenArrowDirection.x;
-													change = deltaCursorPos.x * frac1 / pos_div + deltaCursorPos.y * frac2 / pos_div;
-												}
-												body.SetPosition(bodyPos + Vec3::Right(change));
+												Vec2 screenArrowDirection = screenPos2 - screenPos1;
+												screenArrowDirection.y *= -1.0f;
+												float angle = Angle(screenArrowDirection, deltaCursorPos);
+												body.SetPosition(bodyPos +
+													Vec3::Right(deltaCursorPos.Magnitude() * (1.0f - angle / pi_half) / pos_div));
 												break;
 											}
-											case ID::ArrowY:
-												body.SetPosition(body.GetPosition() + Vec3::Up(-deltaCursorPos.y / pos_div));
+											case ID::ArrowY: {
+												if (Input::WasKeyHeld(Input::Key::Space) && deltaCursorPos.x < 0.0f) {
+													int x = 0;
+												}
+												Vec3 bodyPos = body.GetPosition();
+												Vec2 screenPos1 = m_World.m_EditorCamera.m_Projection * m_World.m_EditorCamera.m_View * Vec4(bodyPos, 1.0f);
+												Vec2 screenPos2 = m_World.m_EditorCamera.m_Projection * m_World.m_EditorCamera.m_View * Vec4(bodyPos + Vec3::Up(), 1.0f);
+												Vec2 screenArrowDirection = screenPos2 - screenPos1;
+												float angle = Angle(screenArrowDirection, deltaCursorPos);
+												body.SetPosition(bodyPos +
+													Vec3::Up(deltaCursorPos.Magnitude() * (1.0f - angle / pi_half) / pos_div));
 												break;
-											case ID::ArrowZ:
-												body.SetPosition(body.GetPosition() + Vec3::Forward(deltaCursorPos.x / pos_div));
+											}
+											case ID::ArrowZ: {
+												Vec3 bodyPos = body.GetPosition();
+												Vec2 screenPos1 = m_World.m_EditorCamera.m_Projection * m_World.m_EditorCamera.m_View * Vec4(bodyPos, 1.0f);
+												Vec2 screenPos2 = m_World.m_EditorCamera.m_Projection * m_World.m_EditorCamera.m_View * Vec4(bodyPos + Vec3::Forward(), 1.0f);
+												Vec2 screenArrowDirection = screenPos2 - screenPos1;
+												screenArrowDirection.y *= -1.0f;
+												float angle = Angle(screenArrowDirection, deltaCursorPos);
+												body.SetPosition(bodyPos +
+													Vec3::Forward(deltaCursorPos.Magnitude() * (1.0f - angle / pi_half) / pos_div));
 												break;
+											}
 											default:
 												assert(false);
 												break;
