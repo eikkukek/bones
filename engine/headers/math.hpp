@@ -11,14 +11,18 @@ namespace engine {
 
 #define Cast(x) static_cast<T>(x)
 
-	constexpr auto pi = 3.14159265358979323846;
+	struct Math {
+		static constexpr double pi = 3.14159265358979323846;
+		static constexpr double tau = pi * 2.0;
+	};
+
 	constexpr float float_max = std::numeric_limits<float>::max();
 	constexpr float float_min = -float_max;
 	constexpr float float_epsilion = 0.00001f;
 
 	template<typename T>
 	struct Epsilion {
-		static constexpr T value = 0;
+		static constexpr T value = Cast(0);
 	};
 
 	template<>
@@ -27,8 +31,13 @@ namespace engine {
 	};
 
 	template<typename T>
-	constexpr bool Equal(const T& a, const T& b, const T& epsilion) {
-		return abs(a - b) >= epsilion;
+	constexpr bool Equal(const T& a, const T& b, const T& epsilion = Epsilion<T>::value) {
+		return abs(a - b) <= epsilion;
+	}
+
+	template<typename T>
+	constexpr bool IsZero(const T& value, const T& epsilion = Epsilion<T>::value) {
+		return abs(value) <= epsilion;
 	}
 
 	constexpr inline float Lerp(float a, float b, float t) {
@@ -127,7 +136,21 @@ namespace engine {
 	};
 
 	template<typename T>
-	constexpr inline T Dot(Vec2_T<T> a, Vec2_T<T> b) noexcept { return a.x * b.x + a.y * b.y; }
+	constexpr inline T Dot(const Vec2_T<T>& a, const Vec2_T<T>& b) noexcept { 
+		return a.x * b.x + a.y * b.y;
+	}
+
+	template<typename T>
+	constexpr inline float Angle(const Vec2_T<T>& a, const Vec2_T<T>& b) noexcept {
+		T aMag = a.Magnitude();
+		T bMag = b.Magnitude();
+		return IsZero(aMag) || IsZero(bMag) ? 0.0f : acos(Dot(a, b) / (aMag * bMag));
+	}
+
+	template<typename T>
+	constexpr inline float SignedAngle(const Vec2_T<T>& a, const Vec2_T<T>& b) noexcept {
+		return IsZero(a.SqrMagnitude()) || IsZero(b.SqrMagnitude()) ? 0.0f : atan2(b.y, b.x) - atan2(a.y, a.x);
+	}
 
 	template<typename T>
 	Vec2_T<T> Min(Vec2_T<T> a, Vec2_T<T> b) {
@@ -151,31 +174,31 @@ namespace engine {
 
 		static constexpr inline size_t size = 3;
 
-		static constexpr Vec3_T Right(T num = Cast(1)) {
+		static constexpr Vec3_T Right(T num = Cast(1)) noexcept {
 			return Vec3_T(num, Cast(0), Cast(0));
 		}
 
-		static constexpr Vec3_T Left(T num = Cast(1)) {
+		static constexpr Vec3_T Left(T num = Cast(1)) noexcept {
 			return Vec3_T(-num, Cast(0), Cast(0));
 		}
 
-		static constexpr Vec3_T Up(T num = Cast(1)) {
+		static constexpr Vec3_T Up(T num = Cast(1)) noexcept {
 			return Vec3_T(Cast(0), num, Cast(0));
 		}
 
-		static constexpr Vec3_T Down(T num = Cast(1)) {
+		static constexpr Vec3_T Down(T num = Cast(1)) noexcept {
 			return Vec3_T(Cast(0), -num, Cast(0));
 		}
 
-		static constexpr Vec3_T Forward(T num = Cast(1)) {
+		static constexpr Vec3_T Forward(T num = Cast(1)) noexcept {
 			return Vec3_T(Cast(0), Cast(0), num);
 		}
 
-		static constexpr Vec3_T Backward(T num = Cast(1)) {
+		static constexpr Vec3_T Backward(T num = Cast(1)) noexcept {
 			return Vec3_T(Cast(0), Cast(0), -num);
 		}
 
-		static constexpr Vec3_T One(T num = Cast(1)) {
+		static constexpr Vec3_T One(T num = Cast(1)) noexcept {
 			return Vec3_T(num, num, num);
 		}
 
@@ -192,21 +215,21 @@ namespace engine {
 		constexpr inline operator JPH::Vec3() const { return { x, y, z }; }
 
 		template<typename U>
-		Vec3_T& RotateX(U radians) {
+		Vec3_T& RotateX(U radians) noexcept {
 			y = y * cos(radians) - z * sin(radians);
 			z = y * sin(radians) + z * cos(radians);
 			return *this;
 		}
 
 		template<typename U>
-		Vec3_T& RotateY(U radians) {
+		Vec3_T& RotateY(U radians) noexcept {
 			x = x * cos(radians) + z * sin(radians);
 			z = -x * sin(radians) + z * cos(radians);
 			return *this;
 		}
 
 		template<typename U>
-		Vec3_T& RotateZ(U radians) {
+		Vec3_T& RotateZ(U radians) noexcept {
 			x = x * cos(radians) - y * sin(radians);
 			y = x * sin(radians) + y * cos(radians);
 			return *this;
@@ -270,8 +293,10 @@ namespace engine {
 	}
 
 	template<typename T>
-	constexpr inline float AngleBetween(const Vec3_T<T> a, const Vec3_T<T> b) {
-		return acos(Dot(a, b) / (a.Magnitude() * b.Magnitude()));
+	constexpr inline float Angle(const Vec3_T<T>& a, const Vec3_T<T>& b) noexcept {
+		T aMag = a.Magnitude();
+		T bMag = b.Magnitude();
+		return IsZero(aMag) || IsZero(bMag) ? 0.0f : acos(Dot(a, b) / (aMag * bMag));
 	}
 
 	typedef Vec3_T<float> Vec3;
@@ -571,7 +596,7 @@ namespace engine {
 			result[0] *= scale.x;
 			result[1] *= scale.y;
 			result[2] *= scale.z;
-			result[3] = Vec4_T<T>(position, 1.0f);
+			result[3] = Vec4_T<T>(position.x, -position.y, position.z, 1.0f);
 			return result;
 		}
 
@@ -793,7 +818,7 @@ namespace engine {
 	static constexpr inline T Roll(const Quaternion_T<T>& q) noexcept {
 		const T y = Cast(2) * (q.x * q.y + q.z * q.w);
 		const T x = q.x * q.x - q.y * q.y - q.z * q.z + q.w * q.w;
-		if (Equal(x, Cast(0), Epsilion<T>::value) && Equal(y, Cast(0), Epsilion<T>::value)) {
+		if (IsZero(x) && IsZero(y)) {
 			return Cast(0);
 		}
 		return Cast(atan2(y, x));
@@ -803,7 +828,7 @@ namespace engine {
 	static constexpr inline T Pitch(const Quaternion_T<T> q) noexcept {
 		const T y = Cast(2) * (q.y * q.z + q.x * q.w);
 		const T x = - q.x * q.x - q.y * q.y + q.z * q.z + q.w * q.w;
-		if (Equal(x, Cast(0), Epsilion<T>::value) && Equal(y, Cast(0), Epsilion<T>::value)) {
+		if (IsZero(x) && IsZero(y)) {
 			return Cast(Cast(2) * atan2(q.x, q.w));
 		}
 		return Cast(atan2(y, x));
@@ -848,7 +873,7 @@ namespace engine {
 
 		static constexpr inline T Dot(const Quaternion_T& a, const Quaternion_T& b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 
-		static constexpr inline T AngleBetween(const Quaternion_T& a, const Quaternion_T& b) noexcept {
+		static constexpr inline T Angle(const Quaternion_T& a, const Quaternion_T& b) noexcept {
 			return acos(fmin(fabs(Quaternion_T::Dot(a, b)), Cast(1))) * Cast(2);
 		}
 
@@ -857,7 +882,7 @@ namespace engine {
 		}
 
 		static constexpr inline Quaternion_T RotateTowards(const Quaternion_T& from, const Quaternion_T& to, T maxRadians) noexcept {
-			T angle = AngleBetween(from, to);
+			T angle = Angle(from, to);
 			if (abs(angle) < Cast(0.00001)) {
 				return to;
 			}
