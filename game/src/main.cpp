@@ -57,7 +57,7 @@ public:
 
 	engine::Vec2 m_Position;
 	float rotation = 0.0f;
-	float rotationSpeed = engine::pi / 2;
+	float rotationSpeed = engine::Math::pi / 2;
 	float yOffset = 0.0f;
 	float targetYOffset = 40.0f;
 	int addSign = 1;
@@ -83,7 +83,7 @@ public:
 		m_Text.m_Position = m_Position + (Vec2::Up() * yOffset).Rotated(rotation);
 		UI.AddRenderData(m_Text);
 		rotation += rotationSpeed * Time::DeltaTime();
-		float rand = RandomFloat(0.0f, pi / 8);
+		float rand = RandomFloat(0.0f, Math::pi / 8);
 		if (timer > 2.0f) {
 			timer = 0.0f;
 			addSign *= -1;
@@ -130,9 +130,9 @@ public:
 
 	void UILoop(engine::UI& UI) {
 		using namespace engine;
-		sinNum = fmod(sinNum + 10.0f * Time::DeltaTime(), 2 * pi);
+		sinNum = fmod(sinNum + 10.0f * Time::DeltaTime(), 2 * Math::pi);
 		for (DynamicText::Character& character : m_DynText) {
-			character.m_Offset = IntVec2(0, 10 * (sin((float)character.GetLocalPositionX() / 10 + sinNum - pi / 2) + 1));
+			character.m_Offset = IntVec2(0, 10 * (sin((float)character.GetLocalPositionX() / 10 + sinNum - Math::pi / 2) + 1));
 		}
 		/*
 		for (unsigned int c : Input::GetTextInput()) {
@@ -290,7 +290,7 @@ int main() {
 
 	Body* ground = area.GetBody(groundID);
 
-	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), -pi / 2).AsMat4();
+	Mat4 groundTransform = Quaternion::AxisRotation(Vec3(1.0f, 0.0f, 0.0f), - Math::pi / 2).AsMat4();
 
 	groundTransform[0] *= 50;
 	groundTransform[1] *= 50;
@@ -316,10 +316,7 @@ int main() {
 
 	editor.SetInspectedArea(areaID);
 
-	float rot = 0;
-
 	while (engine.Loop()) {
-		rot += pi / 2 * Time::DeltaTime();
 		obstacle->AddForce(Vec3(10.0f, 0.0f, 10.0f));
 	}
 
