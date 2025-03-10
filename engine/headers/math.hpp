@@ -87,7 +87,7 @@ namespace engine {
 		constexpr inline Vec2_T Normalized() const noexcept {
 			T mag = SqrMagnitude();
 			if (mag <= Cast(0.00001)) {
-				return Vec2(Cast(0), Cast(0));
+				return Vec2_T(Cast(0), Cast(0));
 			}
 			mag = sqrt(mag);
 			return Vec2_T(x / mag, y / mag);
